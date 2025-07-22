@@ -2,8 +2,11 @@
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
 [project]
-name = "arth"
+name = "arth-afs"
 version = "0.1.0"
 description = "An internal, agentic personal-finance system that automatically ingests data and surfaces insights"
 authors = [
@@ -81,7 +84,7 @@ dev = [
 ]
 
 [project.scripts]
-arth = "arth.cli.main:main"
+arth = "src.cli.main:main"
 
 [tool.ruff]
 target-version = "py312"
@@ -192,6 +195,6 @@ exclude_lines = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-username/arth"
-Repository = "https://github.com/your-username/arth"
-"Bug Tracker" = "https://github.com/your-username/arth/issues" 
+Homepage = "https://github.com/kupsas/Arth-AFS"
+Repository = "https://github.com/kupsas/Arth-AFS"
+"Bug Tracker" = "https://github.com/kupsas/Arth-AFS/issues" 
