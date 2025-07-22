@@ -53,7 +53,7 @@ dependencies = [
     
     # Security
     "cryptography>=41.0.0",
-    "python-jose[cryptography]>=3.3.0",
+    "PyJWT[crypto]>=2.8.0",  # More secure alternative to python-jose
     "passlib[bcrypt]>=1.7.4",
     
     # Utilities
@@ -61,6 +61,9 @@ dependencies = [
     "pytz>=2023.3",
     "click>=8.1.0",
     "rich>=13.7.0",
+    
+    # Security constraints
+    # Using PyJWT instead of python-jose to avoid ecdsa vulnerabilities
 ]
 
 [project.optional-dependencies]
