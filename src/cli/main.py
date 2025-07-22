@@ -19,11 +19,11 @@ def status():
     """Show system status."""
     console.print("🏦 [bold green]Arth Personal Finance System[/bold green]")
     console.print()
-    
+
     table = Table(title="System Status")
     table.add_column("Component", style="cyan")
     table.add_column("Status", style="green")
-    
+
     table.add_row("CLI", "✅ Available")
     table.add_row("Database Models", "✅ Defined")
     table.add_row("API Server", "✅ Available")
@@ -31,7 +31,7 @@ def status():
     table.add_row("CI Pipeline", "✅ Configured")
     table.add_row("ETL Pipeline", "⏳ Not implemented")
     table.add_row("Gmail Integration", "⏳ Not implemented")
-    
+
     console.print(table)
 
 
@@ -46,17 +46,21 @@ def edit():
 @click.option("--date", required=True, help="Transaction date (YYYY-MM-DD)")
 @click.option("--amount", required=True, type=float, help="Transaction amount")
 @click.option("--type", "txn_type", required=True, help="Transaction type")
-@click.option("--dry-run", is_flag=True, help="Show what would be done without executing")
+@click.option(
+    "--dry-run", is_flag=True, help="Show what would be done without executing"
+)
 def add_transaction(account, date, amount, txn_type, dry_run):
     """Add a transaction manually."""
     if dry_run:
-        console.print(f"[yellow]DRY RUN:[/yellow] Would add transaction:")
+        console.print("[yellow]DRY RUN:[/yellow] Would add transaction:")
         console.print(f"  Account: {account}")
         console.print(f"  Date: {date}")
         console.print(f"  Amount: {amount}")
         console.print(f"  Type: {txn_type}")
     else:
-        console.print("[red]Error:[/red] Manual transaction addition not yet implemented")
+        console.print(
+            "[red]Error:[/red] Manual transaction addition not yet implemented"
+        )
         console.print("This will be available in M-3")
 
 
@@ -80,4 +84,4 @@ def reprice_asset(symbol, price, date):
 
 
 if __name__ == "__main__":
-    main() 
+    main()

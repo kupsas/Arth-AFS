@@ -1,16 +1,16 @@
 # Database models for Arth
 
 from .base import AccountType, AssetCategory, BaseModel, TransactionType
-from .schema import Account, Asset, Transaction, Holding, Metric
+from .schema import Account, Asset, Holding, Metric, Transaction
 
 __all__ = [
     "AccountType",
-    "AssetCategory", 
+    "AssetCategory",
     "BaseModel",
     "TransactionType",
     "Account",
-    "Asset", 
+    "Asset",
     "Transaction",
     "Holding",
     "Metric",
-] 
+]

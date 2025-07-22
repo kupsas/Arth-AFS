@@ -1,10 +1,9 @@
 """Tests for Arth database models."""
 
-import pytest
 from datetime import date, datetime
 from decimal import Decimal
 
-from src.models import Account, Asset, Transaction, Holding, Metric
+from src.models import Account, Asset, Holding, Metric, Transaction
 from src.models.base import AccountType, AssetCategory, TransactionType
 
 
@@ -18,9 +17,9 @@ class TestAccount:
             name="HDFC Bank",
             identifier="HDFC001",
             currency="INR",
-            opened_on=date(2020, 1, 1)
+            opened_on=date(2020, 1, 1),
         )
-        
+
         assert account.type == AccountType.BANK
         assert account.name == "HDFC Bank"
         assert account.identifier == "HDFC001"
@@ -30,11 +29,9 @@ class TestAccount:
     def test_account_defaults(self):
         """Test account with default values."""
         account = Account(
-            type=AccountType.BROKER,
-            name="Zerodha",
-            identifier="ZERODHA001"
+            type=AccountType.BROKER, name="Zerodha", identifier="ZERODHA001"
         )
-        
+
         assert account.currency == "INR"
         assert account.opened_on is None
 
@@ -49,9 +46,9 @@ class TestAsset:
             isin="INE002A01018",
             category=AssetCategory.EQUITY,
             sub_category="Large Cap",
-            currency="INR"
+            currency="INR",
         )
-        
+
         assert asset.symbol == "RELIANCE"
         assert asset.isin == "INE002A01018"
         assert asset.category == AssetCategory.EQUITY
@@ -60,11 +57,8 @@ class TestAsset:
 
     def test_asset_defaults(self):
         """Test asset with default values."""
-        asset = Asset(
-            symbol="INFY",
-            category=AssetCategory.EQUITY
-        )
-        
+        asset = Asset(symbol="INFY", category=AssetCategory.EQUITY)
+
         assert asset.isin is None
         assert asset.sub_category is None
         assert asset.currency == "INR"
@@ -82,9 +76,9 @@ class TestTransaction:
             amount=Decimal("1000.50"),
             currency="INR",
             txn_type=TransactionType.CREDIT,
-            raw_source_id="email_123"
+            raw_source_id="email_123",
         )
-        
+
         assert transaction.account_id == 1
         assert transaction.asset_id == 1
         assert transaction.amount == Decimal("1000.50")
@@ -97,9 +91,9 @@ class TestTransaction:
             account_id=1,
             posted_at=datetime.now(),
             amount=Decimal("500.00"),
-            txn_type=TransactionType.DEBIT
+            txn_type=TransactionType.DEBIT,
         )
-        
+
         assert transaction.asset_id is None
         assert transaction.currency == "INR"
         assert transaction.raw_source_id is None
@@ -115,9 +109,9 @@ class TestHolding:
             qty=Decimal("100.000000"),
             cost_basis=Decimal("1500.00"),
             mkt_value=Decimal("1600.00"),
-            as_of=date(2024, 1, 15)
+            as_of=date(2024, 1, 15),
         )
-        
+
         assert holding.asset_id == 1
         assert holding.qty == Decimal("100.000000")
         assert holding.cost_basis == Decimal("1500.00")
@@ -134,9 +128,9 @@ class TestMetric:
             calc_id="net_worth",
             period="day",
             value=Decimal("50000.00"),
-            as_of=date(2024, 1, 15)
+            as_of=date(2024, 1, 15),
         )
-        
+
         assert metric.calc_id == "net_worth"
         assert metric.period == "day"
         assert metric.value == Decimal("50000.00")
@@ -168,4 +162,4 @@ class TestEnums:
         assert TransactionType.DIVIDEND == "dividend"
         assert TransactionType.FEE == "fee"
         assert TransactionType.EMI == "emi"
-        assert TransactionType.INTEREST == "interest" 
+        assert TransactionType.INTEREST == "interest"

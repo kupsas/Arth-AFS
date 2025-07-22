@@ -1,8 +1,9 @@
 from logging.config import fileConfig
-from sqlalchemy import engine_from_config
-from sqlalchemy import pool
-from alembic import context
+
+from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
+
+from alembic import context
 
 # Import your models here to ensure they are registered with SQLModel
 # This is important for Alembic to detect schema changes
@@ -31,6 +32,7 @@ def get_url():
     """Get database URL from environment or config."""
     # You can override the database URL via environment variable
     import os
+
     return os.getenv("DATABASE_URL", config.get_main_option("sqlalchemy.url"))
 
 
@@ -74,9 +76,7 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
+        context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():
             context.run_migrations()
@@ -85,4 +85,4 @@ def run_migrations_online() -> None:
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    run_migrations_online() 
+    run_migrations_online()

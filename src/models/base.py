@@ -2,13 +2,13 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
 
 from sqlmodel import Field, SQLModel
 
 
 class AccountType(str, Enum):
     """Account types supported by Arth."""
+
     BANK = "bank"
     BROKER = "broker"
     CARD = "card"
@@ -17,6 +17,7 @@ class AccountType(str, Enum):
 
 class AssetCategory(str, Enum):
     """Asset categories for classification."""
+
     EQUITY = "equity"
     MUTUAL_FUND = "mf"
     BOND = "bond"
@@ -26,6 +27,7 @@ class AssetCategory(str, Enum):
 
 class TransactionType(str, Enum):
     """Transaction types for classification."""
+
     DEBIT = "debit"
     CREDIT = "credit"
     DIVIDEND = "dividend"
@@ -36,7 +38,7 @@ class TransactionType(str, Enum):
 
 class BaseModel(SQLModel):
     """Base model with common fields."""
-    
-    id: Optional[int] = Field(default=None, primary_key=True)
+
+    id: int | None = Field(default=None, primary_key=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow) 
+    updated_at: datetime = Field(default_factory=datetime.utcnow)

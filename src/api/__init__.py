@@ -1,1 +1,1 @@
-# FastAPI application for Arth 
+# FastAPI application for Arth

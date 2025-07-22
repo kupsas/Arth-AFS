@@ -1,1 +1,1 @@
-# CLI tools for Arth 
+# CLI tools for Arth

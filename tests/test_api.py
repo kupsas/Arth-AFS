@@ -1,6 +1,5 @@
 """Tests for Arth API endpoints."""
 
-import pytest
 from fastapi.testclient import TestClient
 
 from src.api.main import app
@@ -15,10 +14,7 @@ class TestHealthCheck:
         """Test health check endpoint returns 200."""
         response = client.get("/v1/healthz")
         assert response.status_code == 200
-        assert response.json() == {
-            "status": "healthy",
-            "service": "arth"
-        }
+        assert response.json() == {"status": "healthy", "service": "arth"}
 
 
 class TestRootEndpoint:
@@ -44,4 +40,4 @@ class TestAPIDocumentation:
     def test_redoc_endpoint(self):
         """Test that redoc endpoint exists."""
         response = client.get("/redoc")
-        assert response.status_code == 200 
+        assert response.status_code == 200
