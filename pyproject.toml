@@ -45,7 +45,8 @@ dependencies = [
     
     # Email & HTTP
     "httpx>=0.25.0",
-    "sendgrid>=6.10.0",
+    "aiosmtplib>=3.0.0",  # Secure async SMTP library
+    "email-validator>=2.0.0",  # Email validation
     
     # Data Analysis
     "pandas>=2.1.0",
