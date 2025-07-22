@@ -49,7 +49,9 @@ def edit() -> None:
 @click.option(
     "--dry-run", is_flag=True, help="Show what would be done without executing"
 )
-def add_transaction(account: str, date: str, amount: float, txn_type: str, dry_run: bool) -> None:
+def add_transaction(
+    account: str, date: str, amount: float, txn_type: str, dry_run: bool
+) -> None:
     """Add a transaction manually."""
     if dry_run:
         console.print("[yellow]DRY RUN:[/yellow] Would add transaction:")
