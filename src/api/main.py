@@ -13,7 +13,7 @@ app = FastAPI(
 
 
 @app.get("/", response_class=HTMLResponse)
-async def root():
+async def root() -> str:
     """Root endpoint with basic HTML response."""
     return """
     <!DOCTYPE html>
@@ -59,7 +59,7 @@ async def root():
 
 
 @app.get("/v1/healthz")
-async def health_check():
+async def health_check() -> dict[str, str]:
     """Health check endpoint for monitoring."""
     return {"status": "healthy", "service": "arth"}
 

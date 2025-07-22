@@ -9,13 +9,13 @@ console = Console()
 
 @click.group()
 @click.version_option(version="0.1.0")
-def main():
+def main() -> None:
     """Arth - Personal Finance System CLI."""
     pass
 
 
 @main.command()
-def status():
+def status() -> None:
     """Show system status."""
     console.print("🏦 [bold green]Arth Personal Finance System[/bold green]")
     console.print()
@@ -36,7 +36,7 @@ def status():
 
 
 @main.group()
-def edit():
+def edit() -> None:
     """Edit data manually."""
     pass
 
@@ -49,7 +49,7 @@ def edit():
 @click.option(
     "--dry-run", is_flag=True, help="Show what would be done without executing"
 )
-def add_transaction(account, date, amount, txn_type, dry_run):
+def add_transaction(account: str, date: str, amount: float, txn_type: str, dry_run: bool) -> None:
     """Add a transaction manually."""
     if dry_run:
         console.print("[yellow]DRY RUN:[/yellow] Would add transaction:")
@@ -67,7 +67,7 @@ def add_transaction(account, date, amount, txn_type, dry_run):
 @edit.command("update-holding")
 @click.option("--id", "holding_id", required=True, help="Holding ID")
 @click.option("--qty", required=True, type=float, help="New quantity")
-def update_holding(holding_id, qty):
+def update_holding(holding_id: str, qty: float) -> None:
     """Update a holding quantity."""
     console.print("[red]Error:[/red] Holding updates not yet implemented")
     console.print("This will be available in M-3")
@@ -77,7 +77,7 @@ def update_holding(holding_id, qty):
 @click.option("--symbol", required=True, help="Asset symbol")
 @click.option("--price", required=True, type=float, help="New price")
 @click.option("--date", required=True, help="Price date (YYYY-MM-DD)")
-def reprice_asset(symbol, price, date):
+def reprice_asset(symbol: str, price: float, date: str) -> None:
     """Update asset price."""
     console.print("[red]Error:[/red] Asset repricing not yet implemented")
     console.print("This will be available in M-3")
