@@ -1,6 +1,5 @@
 """Tests for Arth CLI module."""
 
-import pytest
 from click.testing import CliRunner
 from rich.console import Console
 
@@ -142,8 +141,9 @@ class TestCLIFunctions:
     def test_console_initialization(self):
         """Test that console is properly initialized."""
         from src.cli.main import console
+
         assert isinstance(console, Console)
 
     def test_main_function_exists(self):
         """Test that main function exists and is callable."""
-        assert callable(main) 
+        assert callable(main)
