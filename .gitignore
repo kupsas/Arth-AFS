@@ -20,7 +20,6 @@ parts/
 sdist/
 var/
 wheels/
-share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
@@ -46,10 +45,8 @@ htmlcov/
 nosetests.xml
 coverage.xml
 *.cover
-*.py,cover
 .hypothesis/
 .pytest_cache/
-cover/
 
 # Translations
 *.mo
@@ -59,7 +56,6 @@ cover/
 *.log
 local_settings.py
 db.sqlite3
-db.sqlite3-journal
 
 # Flask stuff:
 instance/
@@ -84,19 +80,8 @@ ipython_config.py
 # pyenv
 .python-version
 
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-# Pipfile.lock
-
-# PEP 582; used by e.g. pdm
-__pypackages__/
-
-# Celery stuff
+# celery beat schedule file
 celerybeat-schedule
-celerybeat.pid
 
 # SageMath parsed files
 *.sage.py
@@ -112,7 +97,7 @@ venv.bak/
 
 # Spyder project settings
 .spyderproject
-.spyderworkspace
+.spyproject
 
 # Rope project settings
 .ropeproject
@@ -128,14 +113,66 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-# pytype static analyzer
-.pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# VSCode
+# IDE files
 .vscode/
+.idea/
+*.swp
+*.swo
+*~
 
-# Cursor
-.cursor/ 
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Docker
+.dockerignore
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+
+# Email data and credentials
+emails/
+credentials/
+tokens/
+*.json
+!alembic.ini
+
+# Environment variables
+.env
+.env.local
+.env.production
+.env.development
+
+# Redis dump
+dump.rdb
+
+# Alembic
+alembic/versions/__pycache__/
+
+# Coverage reports
+htmlcov/
+.coverage
+coverage.xml
+
+# Security
+secrets.yaml
+private_key.pem
+*.pem
+*.key 
