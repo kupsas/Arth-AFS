@@ -28,3 +28,6 @@ htmlcov/
 .idea/
 .vscode/
 
+# Personal financial data (do NOT commit)
+docs/personal-data/
+
