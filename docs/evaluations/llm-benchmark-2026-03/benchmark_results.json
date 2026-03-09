@@ -1,0 +1,2386 @@
+[
+  {
+    "model": "gemini-3-flash",
+    "strategy": "single",
+    "total_fields": 0,
+    "correct_fields": 0,
+    "field_scores": {},
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cost_usd": 0.0,
+    "elapsed_s": 120.00937128067017,
+    "per_txn": [],
+    "errors": [
+      "Run exceeded 120s timeout"
+    ]
+  },
+  {
+    "model": "gemini-3-flash",
+    "strategy": "two-pass",
+    "total_fields": 0,
+    "correct_fields": 0,
+    "field_scores": {},
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cost_usd": 0.0,
+    "elapsed_s": 120.00708603858948,
+    "per_txn": [],
+    "errors": [
+      "Run exceeded 120s timeout"
+    ]
+  },
+  {
+    "model": "gemini-2.5-flash-lite",
+    "strategy": "single",
+    "total_fields": 74,
+    "correct_fields": 57,
+    "field_scores": {
+      "txn_type": {
+        "correct": 18,
+        "total": 20
+      },
+      "upi_type": {
+        "correct": 11,
+        "total": 14
+      },
+      "counterparty": {
+        "correct": 13,
+        "total": 20
+      },
+      "counterparty_category": {
+        "correct": 15,
+        "total": 20
+      }
+    },
+    "input_tokens": 3873,
+    "output_tokens": 1045,
+    "cost_usd": 0.0008053000000000001,
+    "elapsed_s": 2.4725751876831055,
+    "per_txn": [
+      {
+        "id": "T_99000000",
+        "desc": "UPI-SPOTIFY INDIA-SPOTIFY.BDSI@ICICI-ICIC0DC0099-50069355349"
+      },
+      {
+        "id": "T_99000001",
+        "desc": "UPI-AMAZON INDIA-AMAZON@RAPL-RATN000RAPL-503322666760-YOU AR"
+      },
+      {
+        "id": "T_99000002",
+        "desc": "UPI-SWIGGY LIMITED-SWIGGYINSTAMART1ONLINE.GPAY@OKPAYAXIS-UTI"
+      },
+      {
+        "id": "T_99000003",
+        "desc": "NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN520250",
+        "counterparty_got": "Tide Platform",
+        "counterparty_expected": "Sashank Sai Kuppa"
+      },
+      {
+        "id": "T_99000004",
+        "desc": "UPI-APOLLO PHARMACY-APOLLOPHARMACYOFFLINE@YBL-YESB0YBLUPI-50"
+      },
+      {
+        "id": "T_99000005",
+        "desc": "UPI-THIRD WAVE COFFEE-THIRDWAVECOFFEE.42605934@HDFCBANK-HDFC"
+      },
+      {
+        "id": "T_99000006",
+        "desc": "UPI-NIMISH GUPTA-NIMIGUP@ICICI-ICIC0001601-500143178869-UPI",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000007",
+        "desc": "RDA FIR INW-R25601497544-VENKATA VINOD KRISHNA KUPPA",
+        "upi_type_got": "NA",
+        "upi_type_expected": "P2P"
+      },
+      {
+        "id": "T_99000008",
+        "desc": "UPI-RELIANCE JIO INFOCOM-JIO@CITIBANK-CITI0RTGSMI-5016472773"
+      },
+      {
+        "id": "T_99000009",
+        "desc": "05721610043813   NET BANKING SI -STERLING 5042 RENT"
+      },
+      {
+        "id": "T_99000010",
+        "desc": "ACH D- IDFC FIRST BANK-1667588167"
+      },
+      {
+        "id": "T_99000011",
+        "desc": "NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SAS",
+        "txn_type_got": "SELF_TRANSFER",
+        "txn_type_expected": "INCOME_OTHER",
+        "counterparty_got": "Sai Sashank Kuppa",
+        "counterparty_expected": "ITD Tax Refund",
+        "counterparty_category_got": "Self Transfer",
+        "counterparty_category_expected": "Fees, Charges & Interest"
+      },
+      {
+        "id": "T_99000012",
+        "desc": "UPI-ARYAN KUKREJA-ARYAN.KUKREJA256@OKICICI-ICIC0002526-53681",
+        "upi_type_got": "INFLOW",
+        "upi_type_expected": "P2P"
+      },
+      {
+        "id": "T_99000013",
+        "desc": "UPI-CHANDRASHEKAR G C-CHANDUSAVI53366-2@OKSBI-CNRB0000033-50"
+      },
+      {
+        "id": "T_99000014",
+        "desc": "UPI-K R LOKESHA-LOKESHKUMAR6340@YBL-CNRB0000033-501838188843",
+        "counterparty_got": "K R Lokesha",
+        "counterparty_expected": "Uber",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Transport & Fuel"
+      },
+      {
+        "id": "T_99000015",
+        "desc": "UPI-RAMJATAN YADAV-PAYTMQR60XXZ7@PTYS-YESB0PTMUPI-5036532051",
+        "counterparty_got": "Paytm",
+        "counterparty_expected": "RAMJATAN YADAV",
+        "counterparty_category_got": "Shopping & E-commerce",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000016",
+        "desc": "UPI-RATHLAVATH RAMESH-BHARATPE.90059105732@FBPE-FDRL0001382-",
+        "counterparty_got": "BharatPe",
+        "counterparty_expected": "Rathlavath Ramesh",
+        "counterparty_category_got": "Shopping & E-commerce",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000017",
+        "desc": "UPI-SHAH AAHAN USHIR-AHAANSHAH2409@OKHDFCBANK-HDFC0003962-50",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "INFLOW",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Shah Aahan Ushir",
+        "counterparty_expected": "ED SHEERAN CONCERT"
+      },
+      {
+        "id": "T_99000018",
+        "desc": "05721610043813-TPT-STERLING 5042 RENT-ASHLESHA NAOKARKAR"
+      },
+      {
+        "id": "T_99000019",
+        "desc": "NEFT DR-ICIC0001390-MEICICI-NETBANK,MUM-HDFCN520250124214516",
+        "counterparty_got": "Meicici",
+        "counterparty_expected": "VINOD"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "model": "gemini-2.5-flash-lite",
+    "strategy": "two-pass",
+    "total_fields": 74,
+    "correct_fields": 57,
+    "field_scores": {
+      "txn_type": {
+        "correct": 17,
+        "total": 20
+      },
+      "upi_type": {
+        "correct": 11,
+        "total": 14
+      },
+      "counterparty": {
+        "correct": 16,
+        "total": 20
+      },
+      "counterparty_category": {
+        "correct": 13,
+        "total": 20
+      }
+    },
+    "input_tokens": 5037,
+    "output_tokens": 1612,
+    "cost_usd": 0.0011485000000000002,
+    "elapsed_s": 5.283834934234619,
+    "per_txn": [
+      {
+        "id": "T_99000000",
+        "desc": "UPI-SPOTIFY INDIA-SPOTIFY.BDSI@ICICI-ICIC0DC0099-50069355349"
+      },
+      {
+        "id": "T_99000001",
+        "desc": "UPI-AMAZON INDIA-AMAZON@RAPL-RATN000RAPL-503322666760-YOU AR"
+      },
+      {
+        "id": "T_99000002",
+        "desc": "UPI-SWIGGY LIMITED-SWIGGYINSTAMART1ONLINE.GPAY@OKPAYAXIS-UTI"
+      },
+      {
+        "id": "T_99000003",
+        "desc": "NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN520250"
+      },
+      {
+        "id": "T_99000004",
+        "desc": "UPI-APOLLO PHARMACY-APOLLOPHARMACYOFFLINE@YBL-YESB0YBLUPI-50"
+      },
+      {
+        "id": "T_99000005",
+        "desc": "UPI-THIRD WAVE COFFEE-THIRDWAVECOFFEE.42605934@HDFCBANK-HDFC"
+      },
+      {
+        "id": "T_99000006",
+        "desc": "UPI-NIMISH GUPTA-NIMIGUP@ICICI-ICIC0001601-500143178869-UPI",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000007",
+        "desc": "RDA FIR INW-R25601497544-VENKATA VINOD KRISHNA KUPPA",
+        "upi_type_got": "NA",
+        "upi_type_expected": "P2P",
+        "counterparty_category_got": "Salary & Income",
+        "counterparty_category_expected": "Friends and Family"
+      },
+      {
+        "id": "T_99000008",
+        "desc": "UPI-RELIANCE JIO INFOCOM-JIO@CITIBANK-CITI0RTGSMI-5016472773"
+      },
+      {
+        "id": "T_99000009",
+        "desc": "05721610043813   NET BANKING SI -STERLING 5042 RENT"
+      },
+      {
+        "id": "T_99000010",
+        "desc": "ACH D- IDFC FIRST BANK-1667588167"
+      },
+      {
+        "id": "T_99000011",
+        "desc": "NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SAS",
+        "txn_type_got": "SELF_TRANSFER",
+        "txn_type_expected": "INCOME_OTHER",
+        "counterparty_got": "Sai Sashank Kuppa",
+        "counterparty_expected": "ITD Tax Refund",
+        "counterparty_category_got": "Self Transfer",
+        "counterparty_category_expected": "Fees, Charges & Interest"
+      },
+      {
+        "id": "T_99000012",
+        "desc": "UPI-ARYAN KUKREJA-ARYAN.KUKREJA256@OKICICI-ICIC0002526-53681"
+      },
+      {
+        "id": "T_99000013",
+        "desc": "UPI-CHANDRASHEKAR G C-CHANDUSAVI53366-2@OKSBI-CNRB0000033-50"
+      },
+      {
+        "id": "T_99000014",
+        "desc": "UPI-K R LOKESHA-LOKESHKUMAR6340@YBL-CNRB0000033-501838188843",
+        "counterparty_got": "K R Lokesha",
+        "counterparty_expected": "Uber",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Transport & Fuel"
+      },
+      {
+        "id": "T_99000015",
+        "desc": "UPI-RAMJATAN YADAV-PAYTMQR60XXZ7@PTYS-YESB0PTMUPI-5036532051",
+        "counterparty_got": "Ramnatan Yadav",
+        "counterparty_expected": "RAMJATAN YADAV"
+      },
+      {
+        "id": "T_99000016",
+        "desc": "UPI-RATHLAVATH RAMESH-BHARATPE.90059105732@FBPE-FDRL0001382-",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000017",
+        "desc": "UPI-SHAH AAHAN USHIR-AHAANSHAH2409@OKHDFCBANK-HDFC0003962-50",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Shah Aahan Ushir",
+        "counterparty_expected": "ED SHEERAN CONCERT",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000018",
+        "desc": "05721610043813-TPT-STERLING 5042 RENT-ASHLESHA NAOKARKAR",
+        "counterparty_category_got": "Miscellaneous",
+        "counterparty_category_expected": "Rent & Housing"
+      },
+      {
+        "id": "T_99000019",
+        "desc": "NEFT DR-ICIC0001390-MEICICI-NETBANK,MUM-HDFCN520250124214516"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "model": "gemini-3.1-flash-lite",
+    "strategy": "single",
+    "total_fields": 74,
+    "correct_fields": 60,
+    "field_scores": {
+      "txn_type": {
+        "correct": 18,
+        "total": 20
+      },
+      "upi_type": {
+        "correct": 12,
+        "total": 14
+      },
+      "counterparty": {
+        "correct": 13,
+        "total": 20
+      },
+      "counterparty_category": {
+        "correct": 17,
+        "total": 20
+      }
+    },
+    "input_tokens": 3873,
+    "output_tokens": 1017,
+    "cost_usd": 0.00249375,
+    "elapsed_s": 5.603394031524658,
+    "per_txn": [
+      {
+        "id": "T_99000000",
+        "desc": "UPI-SPOTIFY INDIA-SPOTIFY.BDSI@ICICI-ICIC0DC0099-50069355349"
+      },
+      {
+        "id": "T_99000001",
+        "desc": "UPI-AMAZON INDIA-AMAZON@RAPL-RATN000RAPL-503322666760-YOU AR"
+      },
+      {
+        "id": "T_99000002",
+        "desc": "UPI-SWIGGY LIMITED-SWIGGYINSTAMART1ONLINE.GPAY@OKPAYAXIS-UTI"
+      },
+      {
+        "id": "T_99000003",
+        "desc": "NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN520250",
+        "counterparty_got": "Tide Platform",
+        "counterparty_expected": "Sashank Sai Kuppa"
+      },
+      {
+        "id": "T_99000004",
+        "desc": "UPI-APOLLO PHARMACY-APOLLOPHARMACYOFFLINE@YBL-YESB0YBLUPI-50"
+      },
+      {
+        "id": "T_99000005",
+        "desc": "UPI-THIRD WAVE COFFEE-THIRDWAVECOFFEE.42605934@HDFCBANK-HDFC"
+      },
+      {
+        "id": "T_99000006",
+        "desc": "UPI-NIMISH GUPTA-NIMIGUP@ICICI-ICIC0001601-500143178869-UPI",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000007",
+        "desc": "RDA FIR INW-R25601497544-VENKATA VINOD KRISHNA KUPPA",
+        "upi_type_got": "NA",
+        "upi_type_expected": "P2P"
+      },
+      {
+        "id": "T_99000008",
+        "desc": "UPI-RELIANCE JIO INFOCOM-JIO@CITIBANK-CITI0RTGSMI-5016472773"
+      },
+      {
+        "id": "T_99000009",
+        "desc": "05721610043813   NET BANKING SI -STERLING 5042 RENT",
+        "counterparty_got": "Sterling 5042",
+        "counterparty_expected": "Sterling Rent"
+      },
+      {
+        "id": "T_99000010",
+        "desc": "ACH D- IDFC FIRST BANK-1667588167"
+      },
+      {
+        "id": "T_99000011",
+        "desc": "NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SAS",
+        "txn_type_got": "SELF_TRANSFER",
+        "txn_type_expected": "INCOME_OTHER",
+        "counterparty_got": "IT Department",
+        "counterparty_expected": "ITD Tax Refund",
+        "counterparty_category_got": "Salary & Income",
+        "counterparty_category_expected": "Fees, Charges & Interest"
+      },
+      {
+        "id": "T_99000012",
+        "desc": "UPI-ARYAN KUKREJA-ARYAN.KUKREJA256@OKICICI-ICIC0002526-53681"
+      },
+      {
+        "id": "T_99000013",
+        "desc": "UPI-CHANDRASHEKAR G C-CHANDUSAVI53366-2@OKSBI-CNRB0000033-50"
+      },
+      {
+        "id": "T_99000014",
+        "desc": "UPI-K R LOKESHA-LOKESHKUMAR6340@YBL-CNRB0000033-501838188843",
+        "counterparty_got": "K R Lokesha",
+        "counterparty_expected": "Uber",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Transport & Fuel"
+      },
+      {
+        "id": "T_99000015",
+        "desc": "UPI-RAMJATAN YADAV-PAYTMQR60XXZ7@PTYS-YESB0PTMUPI-5036532051"
+      },
+      {
+        "id": "T_99000016",
+        "desc": "UPI-RATHLAVATH RAMESH-BHARATPE.90059105732@FBPE-FDRL0001382-",
+        "counterparty_got": "BharatPe",
+        "counterparty_expected": "Rathlavath Ramesh"
+      },
+      {
+        "id": "T_99000017",
+        "desc": "UPI-SHAH AAHAN USHIR-AHAANSHAH2409@OKHDFCBANK-HDFC0003962-50",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Aahan Shah",
+        "counterparty_expected": "ED SHEERAN CONCERT"
+      },
+      {
+        "id": "T_99000018",
+        "desc": "05721610043813-TPT-STERLING 5042 RENT-ASHLESHA NAOKARKAR"
+      },
+      {
+        "id": "T_99000019",
+        "desc": "NEFT DR-ICIC0001390-MEICICI-NETBANK,MUM-HDFCN520250124214516",
+        "counterparty_got": "Self Account",
+        "counterparty_expected": "VINOD"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "model": "gemini-3.1-flash-lite",
+    "strategy": "two-pass",
+    "total_fields": 74,
+    "correct_fields": 58,
+    "field_scores": {
+      "txn_type": {
+        "correct": 18,
+        "total": 20
+      },
+      "upi_type": {
+        "correct": 12,
+        "total": 14
+      },
+      "counterparty": {
+        "correct": 14,
+        "total": 20
+      },
+      "counterparty_category": {
+        "correct": 14,
+        "total": 20
+      }
+    },
+    "input_tokens": 5025,
+    "output_tokens": 1362,
+    "cost_usd": 0.00329925,
+    "elapsed_s": 6.020736932754517,
+    "per_txn": [
+      {
+        "id": "T_99000000",
+        "desc": "UPI-SPOTIFY INDIA-SPOTIFY.BDSI@ICICI-ICIC0DC0099-50069355349"
+      },
+      {
+        "id": "T_99000001",
+        "desc": "UPI-AMAZON INDIA-AMAZON@RAPL-RATN000RAPL-503322666760-YOU AR"
+      },
+      {
+        "id": "T_99000002",
+        "desc": "UPI-SWIGGY LIMITED-SWIGGYINSTAMART1ONLINE.GPAY@OKPAYAXIS-UTI"
+      },
+      {
+        "id": "T_99000003",
+        "desc": "NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN520250",
+        "counterparty_got": "Tide Platform",
+        "counterparty_expected": "Sashank Sai Kuppa"
+      },
+      {
+        "id": "T_99000004",
+        "desc": "UPI-APOLLO PHARMACY-APOLLOPHARMACYOFFLINE@YBL-YESB0YBLUPI-50"
+      },
+      {
+        "id": "T_99000005",
+        "desc": "UPI-THIRD WAVE COFFEE-THIRDWAVECOFFEE.42605934@HDFCBANK-HDFC"
+      },
+      {
+        "id": "T_99000006",
+        "desc": "UPI-NIMISH GUPTA-NIMIGUP@ICICI-ICIC0001601-500143178869-UPI",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000007",
+        "desc": "RDA FIR INW-R25601497544-VENKATA VINOD KRISHNA KUPPA",
+        "upi_type_got": "NA",
+        "upi_type_expected": "P2P"
+      },
+      {
+        "id": "T_99000008",
+        "desc": "UPI-RELIANCE JIO INFOCOM-JIO@CITIBANK-CITI0RTGSMI-5016472773"
+      },
+      {
+        "id": "T_99000009",
+        "desc": "05721610043813   NET BANKING SI -STERLING 5042 RENT",
+        "counterparty_got": "Sterling 5042",
+        "counterparty_expected": "Sterling Rent"
+      },
+      {
+        "id": "T_99000010",
+        "desc": "ACH D- IDFC FIRST BANK-1667588167"
+      },
+      {
+        "id": "T_99000011",
+        "desc": "NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SAS",
+        "txn_type_got": "SELF_TRANSFER",
+        "txn_type_expected": "INCOME_OTHER",
+        "counterparty_got": "IT Department",
+        "counterparty_expected": "ITD Tax Refund",
+        "counterparty_category_got": "Salary & Income",
+        "counterparty_category_expected": "Fees, Charges & Interest"
+      },
+      {
+        "id": "T_99000012",
+        "desc": "UPI-ARYAN KUKREJA-ARYAN.KUKREJA256@OKICICI-ICIC0002526-53681"
+      },
+      {
+        "id": "T_99000013",
+        "desc": "UPI-CHANDRASHEKAR G C-CHANDUSAVI53366-2@OKSBI-CNRB0000033-50"
+      },
+      {
+        "id": "T_99000014",
+        "desc": "UPI-K R LOKESHA-LOKESHKUMAR6340@YBL-CNRB0000033-501838188843",
+        "counterparty_got": "K R Lokesha",
+        "counterparty_expected": "Uber",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Transport & Fuel"
+      },
+      {
+        "id": "T_99000015",
+        "desc": "UPI-RAMJATAN YADAV-PAYTMQR60XXZ7@PTYS-YESB0PTMUPI-5036532051",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000016",
+        "desc": "UPI-RATHLAVATH RAMESH-BHARATPE.90059105732@FBPE-FDRL0001382-",
+        "counterparty_got": "BharatPe",
+        "counterparty_expected": "Rathlavath Ramesh"
+      },
+      {
+        "id": "T_99000017",
+        "desc": "UPI-SHAH AAHAN USHIR-AHAANSHAH2409@OKHDFCBANK-HDFC0003962-50",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Shah Aahan",
+        "counterparty_expected": "ED SHEERAN CONCERT",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000018",
+        "desc": "05721610043813-TPT-STERLING 5042 RENT-ASHLESHA NAOKARKAR",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Rent & Housing"
+      },
+      {
+        "id": "T_99000019",
+        "desc": "NEFT DR-ICIC0001390-MEICICI-NETBANK,MUM-HDFCN520250124214516"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "model": "gpt-5-nano",
+    "strategy": "two-pass",
+    "total_fields": 74,
+    "correct_fields": 53,
+    "field_scores": {
+      "txn_type": {
+        "correct": 17,
+        "total": 20
+      },
+      "upi_type": {
+        "correct": 11,
+        "total": 14
+      },
+      "counterparty": {
+        "correct": 13,
+        "total": 20
+      },
+      "counterparty_category": {
+        "correct": 12,
+        "total": 20
+      }
+    },
+    "input_tokens": 4118,
+    "output_tokens": 8622,
+    "cost_usd": 0.0036547000000000003,
+    "elapsed_s": 46.831751108169556,
+    "per_txn": [
+      {
+        "id": "T_99000000",
+        "desc": "UPI-SPOTIFY INDIA-SPOTIFY.BDSI@ICICI-ICIC0DC0099-50069355349"
+      },
+      {
+        "id": "T_99000001",
+        "desc": "UPI-AMAZON INDIA-AMAZON@RAPL-RATN000RAPL-503322666760-YOU AR"
+      },
+      {
+        "id": "T_99000002",
+        "desc": "UPI-SWIGGY LIMITED-SWIGGYINSTAMART1ONLINE.GPAY@OKPAYAXIS-UTI"
+      },
+      {
+        "id": "T_99000003",
+        "desc": "NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN520250"
+      },
+      {
+        "id": "T_99000004",
+        "desc": "UPI-APOLLO PHARMACY-APOLLOPHARMACYOFFLINE@YBL-YESB0YBLUPI-50"
+      },
+      {
+        "id": "T_99000005",
+        "desc": "UPI-THIRD WAVE COFFEE-THIRDWAVECOFFEE.42605934@HDFCBANK-HDFC"
+      },
+      {
+        "id": "T_99000006",
+        "desc": "UPI-NIMISH GUPTA-NIMIGUP@ICICI-ICIC0001601-500143178869-UPI",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000007",
+        "desc": "RDA FIR INW-R25601497544-VENKATA VINOD KRISHNA KUPPA",
+        "upi_type_got": "NA",
+        "upi_type_expected": "P2P",
+        "counterparty_category_got": "Salary & Income",
+        "counterparty_category_expected": "Friends and Family"
+      },
+      {
+        "id": "T_99000008",
+        "desc": "UPI-RELIANCE JIO INFOCOM-JIO@CITIBANK-CITI0RTGSMI-5016472773"
+      },
+      {
+        "id": "T_99000009",
+        "desc": "05721610043813   NET BANKING SI -STERLING 5042 RENT"
+      },
+      {
+        "id": "T_99000010",
+        "desc": "ACH D- IDFC FIRST BANK-1667588167"
+      },
+      {
+        "id": "T_99000011",
+        "desc": "NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SAS",
+        "txn_type_got": "SELF_TRANSFER",
+        "txn_type_expected": "INCOME_OTHER",
+        "counterparty_got": "IT Department Tax Refund",
+        "counterparty_expected": "ITD Tax Refund",
+        "counterparty_category_got": "Self Transfer",
+        "counterparty_category_expected": "Fees, Charges & Interest"
+      },
+      {
+        "id": "T_99000012",
+        "desc": "UPI-ARYAN KUKREJA-ARYAN.KUKREJA256@OKICICI-ICIC0002526-53681"
+      },
+      {
+        "id": "T_99000013",
+        "desc": "UPI-CHANDRASHEKAR G C-CHANDUSAVI53366-2@OKSBI-CNRB0000033-50",
+        "counterparty_got": "Chandrashekar G C",
+        "counterparty_expected": "Uber",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Transport & Fuel"
+      },
+      {
+        "id": "T_99000014",
+        "desc": "UPI-K R LOKESHA-LOKESHKUMAR6340@YBL-CNRB0000033-501838188843",
+        "counterparty_got": "Lokesh Kumar",
+        "counterparty_expected": "Uber",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Transport & Fuel"
+      },
+      {
+        "id": "T_99000015",
+        "desc": "UPI-RAMJATAN YADAV-PAYTMQR60XXZ7@PTYS-YESB0PTMUPI-5036532051",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000016",
+        "desc": "UPI-RATHLAVATH RAMESH-BHARATPE.90059105732@FBPE-FDRL0001382-",
+        "counterparty_got": "BharatPe",
+        "counterparty_expected": "Rathlavath Ramesh",
+        "counterparty_category_got": "Shopping & E-commerce",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000017",
+        "desc": "UPI-SHAH AAHAN USHIR-AHAANSHAH2409@OKHDFCBANK-HDFC0003962-50",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Shah Aahan Ushir",
+        "counterparty_expected": "ED SHEERAN CONCERT",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000018",
+        "desc": "05721610043813-TPT-STERLING 5042 RENT-ASHLESHA NAOKARKAR",
+        "counterparty_got": "Sterling",
+        "counterparty_expected": "Ashlesha Naokarkar"
+      },
+      {
+        "id": "T_99000019",
+        "desc": "NEFT DR-ICIC0001390-MEICICI-NETBANK,MUM-HDFCN520250124214516",
+        "counterparty_got": "Own account",
+        "counterparty_expected": "VINOD"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "model": "gemini-2.5-flash",
+    "strategy": "single",
+    "total_fields": 74,
+    "correct_fields": 59,
+    "field_scores": {
+      "txn_type": {
+        "correct": 18,
+        "total": 20
+      },
+      "upi_type": {
+        "correct": 12,
+        "total": 14
+      },
+      "counterparty": {
+        "correct": 14,
+        "total": 20
+      },
+      "counterparty_category": {
+        "correct": 15,
+        "total": 20
+      }
+    },
+    "input_tokens": 3873,
+    "output_tokens": 1277,
+    "cost_usd": 0.0043544,
+    "elapsed_s": 20.6768000125885,
+    "per_txn": [
+      {
+        "id": "T_99000000",
+        "desc": "UPI-SPOTIFY INDIA-SPOTIFY.BDSI@ICICI-ICIC0DC0099-50069355349"
+      },
+      {
+        "id": "T_99000001",
+        "desc": "UPI-AMAZON INDIA-AMAZON@RAPL-RATN000RAPL-503322666760-YOU AR"
+      },
+      {
+        "id": "T_99000002",
+        "desc": "UPI-SWIGGY LIMITED-SWIGGYINSTAMART1ONLINE.GPAY@OKPAYAXIS-UTI"
+      },
+      {
+        "id": "T_99000003",
+        "desc": "NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN520250",
+        "counterparty_got": "Tide Platform",
+        "counterparty_expected": "Sashank Sai Kuppa"
+      },
+      {
+        "id": "T_99000004",
+        "desc": "UPI-APOLLO PHARMACY-APOLLOPHARMACYOFFLINE@YBL-YESB0YBLUPI-50"
+      },
+      {
+        "id": "T_99000005",
+        "desc": "UPI-THIRD WAVE COFFEE-THIRDWAVECOFFEE.42605934@HDFCBANK-HDFC"
+      },
+      {
+        "id": "T_99000006",
+        "desc": "UPI-NIMISH GUPTA-NIMIGUP@ICICI-ICIC0001601-500143178869-UPI",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000007",
+        "desc": "RDA FIR INW-R25601497544-VENKATA VINOD KRISHNA KUPPA",
+        "upi_type_got": "NA",
+        "upi_type_expected": "P2P"
+      },
+      {
+        "id": "T_99000008",
+        "desc": "UPI-RELIANCE JIO INFOCOM-JIO@CITIBANK-CITI0RTGSMI-5016472773",
+        "counterparty_category_got": "Mobile, OTT & Subscriptions",
+        "counterparty_category_expected": "Utilities & Internet"
+      },
+      {
+        "id": "T_99000009",
+        "desc": "05721610043813   NET BANKING SI -STERLING 5042 RENT",
+        "counterparty_got": "Sterling 5042 Rent",
+        "counterparty_expected": "Sterling Rent"
+      },
+      {
+        "id": "T_99000010",
+        "desc": "ACH D- IDFC FIRST BANK-1667588167"
+      },
+      {
+        "id": "T_99000011",
+        "desc": "NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SAS",
+        "txn_type_got": "SELF_TRANSFER",
+        "txn_type_expected": "INCOME_OTHER",
+        "counterparty_got": "Self",
+        "counterparty_expected": "ITD Tax Refund",
+        "counterparty_category_got": "Self Transfer",
+        "counterparty_category_expected": "Fees, Charges & Interest"
+      },
+      {
+        "id": "T_99000012",
+        "desc": "UPI-ARYAN KUKREJA-ARYAN.KUKREJA256@OKICICI-ICIC0002526-53681"
+      },
+      {
+        "id": "T_99000013",
+        "desc": "UPI-CHANDRASHEKAR G C-CHANDUSAVI53366-2@OKSBI-CNRB0000033-50"
+      },
+      {
+        "id": "T_99000014",
+        "desc": "UPI-K R LOKESHA-LOKESHKUMAR6340@YBL-CNRB0000033-501838188843",
+        "counterparty_got": "K R Lokesha",
+        "counterparty_expected": "Uber",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Transport & Fuel"
+      },
+      {
+        "id": "T_99000015",
+        "desc": "UPI-RAMJATAN YADAV-PAYTMQR60XXZ7@PTYS-YESB0PTMUPI-5036532051"
+      },
+      {
+        "id": "T_99000016",
+        "desc": "UPI-RATHLAVATH RAMESH-BHARATPE.90059105732@FBPE-FDRL0001382-"
+      },
+      {
+        "id": "T_99000017",
+        "desc": "UPI-SHAH AAHAN USHIR-AHAANSHAH2409@OKHDFCBANK-HDFC0003962-50",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Shah Aahan Ushir",
+        "counterparty_expected": "ED SHEERAN CONCERT",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000018",
+        "desc": "05721610043813-TPT-STERLING 5042 RENT-ASHLESHA NAOKARKAR"
+      },
+      {
+        "id": "T_99000019",
+        "desc": "NEFT DR-ICIC0001390-MEICICI-NETBANK,MUM-HDFCN520250124214516",
+        "counterparty_got": "Self",
+        "counterparty_expected": "VINOD"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "model": "gpt-5-nano",
+    "strategy": "single",
+    "total_fields": 74,
+    "correct_fields": 54,
+    "field_scores": {
+      "txn_type": {
+        "correct": 17,
+        "total": 20
+      },
+      "upi_type": {
+        "correct": 11,
+        "total": 14
+      },
+      "counterparty": {
+        "correct": 14,
+        "total": 20
+      },
+      "counterparty_category": {
+        "correct": 12,
+        "total": 20
+      }
+    },
+    "input_tokens": 3146,
+    "output_tokens": 11077,
+    "cost_usd": 0.0045881,
+    "elapsed_s": 61.99873614311218,
+    "per_txn": [
+      {
+        "id": "T_99000000",
+        "desc": "UPI-SPOTIFY INDIA-SPOTIFY.BDSI@ICICI-ICIC0DC0099-50069355349"
+      },
+      {
+        "id": "T_99000001",
+        "desc": "UPI-AMAZON INDIA-AMAZON@RAPL-RATN000RAPL-503322666760-YOU AR"
+      },
+      {
+        "id": "T_99000002",
+        "desc": "UPI-SWIGGY LIMITED-SWIGGYINSTAMART1ONLINE.GPAY@OKPAYAXIS-UTI"
+      },
+      {
+        "id": "T_99000003",
+        "desc": "NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN520250"
+      },
+      {
+        "id": "T_99000004",
+        "desc": "UPI-APOLLO PHARMACY-APOLLOPHARMACYOFFLINE@YBL-YESB0YBLUPI-50"
+      },
+      {
+        "id": "T_99000005",
+        "desc": "UPI-THIRD WAVE COFFEE-THIRDWAVECOFFEE.42605934@HDFCBANK-HDFC"
+      },
+      {
+        "id": "T_99000006",
+        "desc": "UPI-NIMISH GUPTA-NIMIGUP@ICICI-ICIC0001601-500143178869-UPI",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000007",
+        "desc": "RDA FIR INW-R25601497544-VENKATA VINOD KRISHNA KUPPA",
+        "upi_type_got": "NA",
+        "upi_type_expected": "P2P"
+      },
+      {
+        "id": "T_99000008",
+        "desc": "UPI-RELIANCE JIO INFOCOM-JIO@CITIBANK-CITI0RTGSMI-5016472773",
+        "counterparty_category_got": "Mobile, OTT & Subscriptions",
+        "counterparty_category_expected": "Utilities & Internet"
+      },
+      {
+        "id": "T_99000009",
+        "desc": "05721610043813   NET BANKING SI -STERLING 5042 RENT"
+      },
+      {
+        "id": "T_99000010",
+        "desc": "ACH D- IDFC FIRST BANK-1667588167"
+      },
+      {
+        "id": "T_99000011",
+        "desc": "NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SAS",
+        "txn_type_got": "SELF_TRANSFER",
+        "txn_type_expected": "INCOME_OTHER",
+        "counterparty_got": "IT Department Tax Refund",
+        "counterparty_expected": "ITD Tax Refund",
+        "counterparty_category_got": "Salary & Income",
+        "counterparty_category_expected": "Fees, Charges & Interest"
+      },
+      {
+        "id": "T_99000012",
+        "desc": "UPI-ARYAN KUKREJA-ARYAN.KUKREJA256@OKICICI-ICIC0002526-53681"
+      },
+      {
+        "id": "T_99000013",
+        "desc": "UPI-CHANDRASHEKAR G C-CHANDUSAVI53366-2@OKSBI-CNRB0000033-50",
+        "counterparty_got": "Chandrashekar G C",
+        "counterparty_expected": "Uber",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Transport & Fuel"
+      },
+      {
+        "id": "T_99000014",
+        "desc": "UPI-K R LOKESHA-LOKESHKUMAR6340@YBL-CNRB0000033-501838188843",
+        "counterparty_got": "Lokesh Kumar",
+        "counterparty_expected": "Uber",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Transport & Fuel"
+      },
+      {
+        "id": "T_99000015",
+        "desc": "UPI-RAMJATAN YADAV-PAYTMQR60XXZ7@PTYS-YESB0PTMUPI-5036532051",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000016",
+        "desc": "UPI-RATHLAVATH RAMESH-BHARATPE.90059105732@FBPE-FDRL0001382-",
+        "counterparty_got": "BharatPe",
+        "counterparty_expected": "Rathlavath Ramesh",
+        "counterparty_category_got": "Financial Services, Insurance & Banking",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000017",
+        "desc": "UPI-SHAH AAHAN USHIR-AHAANSHAH2409@OKHDFCBANK-HDFC0003962-50",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Shah Aahan Ushir",
+        "counterparty_expected": "ED SHEERAN CONCERT",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000018",
+        "desc": "05721610043813-TPT-STERLING 5042 RENT-ASHLESHA NAOKARKAR",
+        "counterparty_got": "Sterling",
+        "counterparty_expected": "Ashlesha Naokarkar"
+      },
+      {
+        "id": "T_99000019",
+        "desc": "NEFT DR-ICIC0001390-MEICICI-NETBANK,MUM-HDFCN520250124214516"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "model": "gemini-2.5-flash",
+    "strategy": "two-pass",
+    "total_fields": 74,
+    "correct_fields": 56,
+    "field_scores": {
+      "txn_type": {
+        "correct": 16,
+        "total": 20
+      },
+      "upi_type": {
+        "correct": 10,
+        "total": 14
+      },
+      "counterparty": {
+        "correct": 14,
+        "total": 20
+      },
+      "counterparty_category": {
+        "correct": 16,
+        "total": 20
+      }
+    },
+    "input_tokens": 5035,
+    "output_tokens": 1590,
+    "cost_usd": 0.0054855,
+    "elapsed_s": 35.194786071777344,
+    "per_txn": [
+      {
+        "id": "T_99000000",
+        "desc": "UPI-SPOTIFY INDIA-SPOTIFY.BDSI@ICICI-ICIC0DC0099-50069355349"
+      },
+      {
+        "id": "T_99000001",
+        "desc": "UPI-AMAZON INDIA-AMAZON@RAPL-RATN000RAPL-503322666760-YOU AR"
+      },
+      {
+        "id": "T_99000002",
+        "desc": "UPI-SWIGGY LIMITED-SWIGGYINSTAMART1ONLINE.GPAY@OKPAYAXIS-UTI"
+      },
+      {
+        "id": "T_99000003",
+        "desc": "NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN520250",
+        "counterparty_got": "Tide Platform",
+        "counterparty_expected": "Sashank Sai Kuppa"
+      },
+      {
+        "id": "T_99000004",
+        "desc": "UPI-APOLLO PHARMACY-APOLLOPHARMACYOFFLINE@YBL-YESB0YBLUPI-50"
+      },
+      {
+        "id": "T_99000005",
+        "desc": "UPI-THIRD WAVE COFFEE-THIRDWAVECOFFEE.42605934@HDFCBANK-HDFC"
+      },
+      {
+        "id": "T_99000006",
+        "desc": "UPI-NIMISH GUPTA-NIMIGUP@ICICI-ICIC0001601-500143178869-UPI",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000007",
+        "desc": "RDA FIR INW-R25601497544-VENKATA VINOD KRISHNA KUPPA",
+        "upi_type_got": "NA",
+        "upi_type_expected": "P2P"
+      },
+      {
+        "id": "T_99000008",
+        "desc": "UPI-RELIANCE JIO INFOCOM-JIO@CITIBANK-CITI0RTGSMI-5016472773",
+        "counterparty_category_got": "Mobile, OTT & Subscriptions",
+        "counterparty_category_expected": "Utilities & Internet"
+      },
+      {
+        "id": "T_99000009",
+        "desc": "05721610043813   NET BANKING SI -STERLING 5042 RENT",
+        "counterparty_got": "Sterling 5042 Rent",
+        "counterparty_expected": "Sterling Rent"
+      },
+      {
+        "id": "T_99000010",
+        "desc": "ACH D- IDFC FIRST BANK-1667588167"
+      },
+      {
+        "id": "T_99000011",
+        "desc": "NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SAS",
+        "txn_type_got": "SELF_TRANSFER",
+        "txn_type_expected": "INCOME_OTHER",
+        "counterparty_got": "IT Department Tax Refund",
+        "counterparty_expected": "ITD Tax Refund",
+        "counterparty_category_got": "Self Transfer",
+        "counterparty_category_expected": "Fees, Charges & Interest"
+      },
+      {
+        "id": "T_99000012",
+        "desc": "UPI-ARYAN KUKREJA-ARYAN.KUKREJA256@OKICICI-ICIC0002526-53681"
+      },
+      {
+        "id": "T_99000013",
+        "desc": "UPI-CHANDRASHEKAR G C-CHANDUSAVI53366-2@OKSBI-CNRB0000033-50",
+        "txn_type_got": "UPI_EXPENSE",
+        "txn_type_expected": "UPI_TRANSFER",
+        "upi_type_got": "P2M",
+        "upi_type_expected": "P2P"
+      },
+      {
+        "id": "T_99000014",
+        "desc": "UPI-K R LOKESHA-LOKESHKUMAR6340@YBL-CNRB0000033-501838188843",
+        "txn_type_got": "UPI_EXPENSE",
+        "txn_type_expected": "UPI_TRANSFER",
+        "upi_type_got": "P2M",
+        "upi_type_expected": "P2P"
+      },
+      {
+        "id": "T_99000015",
+        "desc": "UPI-RAMJATAN YADAV-PAYTMQR60XXZ7@PTYS-YESB0PTMUPI-5036532051"
+      },
+      {
+        "id": "T_99000016",
+        "desc": "UPI-RATHLAVATH RAMESH-BHARATPE.90059105732@FBPE-FDRL0001382-"
+      },
+      {
+        "id": "T_99000017",
+        "desc": "UPI-SHAH AAHAN USHIR-AHAANSHAH2409@OKHDFCBANK-HDFC0003962-50",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Shah Aahan Ushir",
+        "counterparty_expected": "ED SHEERAN CONCERT",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000018",
+        "desc": "05721610043813-TPT-STERLING 5042 RENT-ASHLESHA NAOKARKAR",
+        "counterparty_got": "Sterling 5042 Rent",
+        "counterparty_expected": "Ashlesha Naokarkar"
+      },
+      {
+        "id": "T_99000019",
+        "desc": "NEFT DR-ICIC0001390-MEICICI-NETBANK,MUM-HDFCN520250124214516",
+        "counterparty_got": "ICICI Bank",
+        "counterparty_expected": "VINOD"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "model": "gpt-5-mini",
+    "strategy": "single",
+    "total_fields": 74,
+    "correct_fields": 56,
+    "field_scores": {
+      "txn_type": {
+        "correct": 18,
+        "total": 20
+      },
+      "upi_type": {
+        "correct": 12,
+        "total": 14
+      },
+      "counterparty": {
+        "correct": 12,
+        "total": 20
+      },
+      "counterparty_category": {
+        "correct": 14,
+        "total": 20
+      }
+    },
+    "input_tokens": 3146,
+    "output_tokens": 3698,
+    "cost_usd": 0.0081825,
+    "elapsed_s": 61.86690092086792,
+    "per_txn": [
+      {
+        "id": "T_99000000",
+        "desc": "UPI-SPOTIFY INDIA-SPOTIFY.BDSI@ICICI-ICIC0DC0099-50069355349"
+      },
+      {
+        "id": "T_99000001",
+        "desc": "UPI-AMAZON INDIA-AMAZON@RAPL-RATN000RAPL-503322666760-YOU AR"
+      },
+      {
+        "id": "T_99000002",
+        "desc": "UPI-SWIGGY LIMITED-SWIGGYINSTAMART1ONLINE.GPAY@OKPAYAXIS-UTI"
+      },
+      {
+        "id": "T_99000003",
+        "desc": "NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN520250",
+        "counterparty_got": "Tide Platform",
+        "counterparty_expected": "Sashank Sai Kuppa"
+      },
+      {
+        "id": "T_99000004",
+        "desc": "UPI-APOLLO PHARMACY-APOLLOPHARMACYOFFLINE@YBL-YESB0YBLUPI-50"
+      },
+      {
+        "id": "T_99000005",
+        "desc": "UPI-THIRD WAVE COFFEE-THIRDWAVECOFFEE.42605934@HDFCBANK-HDFC"
+      },
+      {
+        "id": "T_99000006",
+        "desc": "UPI-NIMISH GUPTA-NIMIGUP@ICICI-ICIC0001601-500143178869-UPI",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000007",
+        "desc": "RDA FIR INW-R25601497544-VENKATA VINOD KRISHNA KUPPA",
+        "upi_type_got": "NA",
+        "upi_type_expected": "P2P"
+      },
+      {
+        "id": "T_99000008",
+        "desc": "UPI-RELIANCE JIO INFOCOM-JIO@CITIBANK-CITI0RTGSMI-5016472773",
+        "counterparty_category_got": "Mobile, OTT & Subscriptions",
+        "counterparty_category_expected": "Utilities & Internet"
+      },
+      {
+        "id": "T_99000009",
+        "desc": "05721610043813   NET BANKING SI -STERLING 5042 RENT"
+      },
+      {
+        "id": "T_99000010",
+        "desc": "ACH D- IDFC FIRST BANK-1667588167"
+      },
+      {
+        "id": "T_99000011",
+        "desc": "NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SAS",
+        "txn_type_got": "SELF_TRANSFER",
+        "txn_type_expected": "INCOME_OTHER",
+        "counterparty_got": "IT Department Tax Refund",
+        "counterparty_expected": "ITD Tax Refund",
+        "counterparty_category_got": "Self Transfer",
+        "counterparty_category_expected": "Fees, Charges & Interest"
+      },
+      {
+        "id": "T_99000012",
+        "desc": "UPI-ARYAN KUKREJA-ARYAN.KUKREJA256@OKICICI-ICIC0002526-53681"
+      },
+      {
+        "id": "T_99000013",
+        "desc": "UPI-CHANDRASHEKAR G C-CHANDUSAVI53366-2@OKSBI-CNRB0000033-50"
+      },
+      {
+        "id": "T_99000014",
+        "desc": "UPI-K R LOKESHA-LOKESHKUMAR6340@YBL-CNRB0000033-501838188843",
+        "counterparty_got": "K R Lokesha",
+        "counterparty_expected": "Uber",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Transport & Fuel"
+      },
+      {
+        "id": "T_99000015",
+        "desc": "UPI-RAMJATAN YADAV-PAYTMQR60XXZ7@PTYS-YESB0PTMUPI-5036532051",
+        "counterparty_got": "Paytm",
+        "counterparty_expected": "RAMJATAN YADAV"
+      },
+      {
+        "id": "T_99000016",
+        "desc": "UPI-RATHLAVATH RAMESH-BHARATPE.90059105732@FBPE-FDRL0001382-",
+        "counterparty_got": "BharatPe",
+        "counterparty_expected": "Rathlavath Ramesh",
+        "counterparty_category_got": "Shopping & E-commerce",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000017",
+        "desc": "UPI-SHAH AAHAN USHIR-AHAANSHAH2409@OKHDFCBANK-HDFC0003962-50",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Aahan Shah",
+        "counterparty_expected": "ED SHEERAN CONCERT",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000018",
+        "desc": "05721610043813-TPT-STERLING 5042 RENT-ASHLESHA NAOKARKAR",
+        "counterparty_got": "Sterling",
+        "counterparty_expected": "Ashlesha Naokarkar"
+      },
+      {
+        "id": "T_99000019",
+        "desc": "NEFT DR-ICIC0001390-MEICICI-NETBANK,MUM-HDFCN520250124214516",
+        "counterparty_got": "ICICI Bank",
+        "counterparty_expected": "VINOD"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "model": "gpt-5-mini",
+    "strategy": "two-pass",
+    "total_fields": 74,
+    "correct_fields": 55,
+    "field_scores": {
+      "txn_type": {
+        "correct": 17,
+        "total": 20
+      },
+      "upi_type": {
+        "correct": 11,
+        "total": 14
+      },
+      "counterparty": {
+        "correct": 14,
+        "total": 20
+      },
+      "counterparty_category": {
+        "correct": 13,
+        "total": 20
+      }
+    },
+    "input_tokens": 4122,
+    "output_tokens": 3903,
+    "cost_usd": 0.008836499999999999,
+    "elapsed_s": 65.67869210243225,
+    "per_txn": [
+      {
+        "id": "T_99000000",
+        "desc": "UPI-SPOTIFY INDIA-SPOTIFY.BDSI@ICICI-ICIC0DC0099-50069355349"
+      },
+      {
+        "id": "T_99000001",
+        "desc": "UPI-AMAZON INDIA-AMAZON@RAPL-RATN000RAPL-503322666760-YOU AR"
+      },
+      {
+        "id": "T_99000002",
+        "desc": "UPI-SWIGGY LIMITED-SWIGGYINSTAMART1ONLINE.GPAY@OKPAYAXIS-UTI"
+      },
+      {
+        "id": "T_99000003",
+        "desc": "NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN520250",
+        "counterparty_got": "Tide Platform",
+        "counterparty_expected": "Sashank Sai Kuppa"
+      },
+      {
+        "id": "T_99000004",
+        "desc": "UPI-APOLLO PHARMACY-APOLLOPHARMACYOFFLINE@YBL-YESB0YBLUPI-50"
+      },
+      {
+        "id": "T_99000005",
+        "desc": "UPI-THIRD WAVE COFFEE-THIRDWAVECOFFEE.42605934@HDFCBANK-HDFC"
+      },
+      {
+        "id": "T_99000006",
+        "desc": "UPI-NIMISH GUPTA-NIMIGUP@ICICI-ICIC0001601-500143178869-UPI",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000007",
+        "desc": "RDA FIR INW-R25601497544-VENKATA VINOD KRISHNA KUPPA",
+        "upi_type_got": "NA",
+        "upi_type_expected": "P2P"
+      },
+      {
+        "id": "T_99000008",
+        "desc": "UPI-RELIANCE JIO INFOCOM-JIO@CITIBANK-CITI0RTGSMI-5016472773"
+      },
+      {
+        "id": "T_99000009",
+        "desc": "05721610043813   NET BANKING SI -STERLING 5042 RENT"
+      },
+      {
+        "id": "T_99000010",
+        "desc": "ACH D- IDFC FIRST BANK-1667588167"
+      },
+      {
+        "id": "T_99000011",
+        "desc": "NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SAS",
+        "txn_type_got": "SELF_TRANSFER",
+        "txn_type_expected": "INCOME_OTHER",
+        "counterparty_got": "Sai Sashank Kuppa",
+        "counterparty_expected": "ITD Tax Refund",
+        "counterparty_category_got": "Self Transfer",
+        "counterparty_category_expected": "Fees, Charges & Interest"
+      },
+      {
+        "id": "T_99000012",
+        "desc": "UPI-ARYAN KUKREJA-ARYAN.KUKREJA256@OKICICI-ICIC0002526-53681"
+      },
+      {
+        "id": "T_99000013",
+        "desc": "UPI-CHANDRASHEKAR G C-CHANDUSAVI53366-2@OKSBI-CNRB0000033-50"
+      },
+      {
+        "id": "T_99000014",
+        "desc": "UPI-K R LOKESHA-LOKESHKUMAR6340@YBL-CNRB0000033-501838188843",
+        "counterparty_got": "K R Lokesha",
+        "counterparty_expected": "Uber",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Transport & Fuel"
+      },
+      {
+        "id": "T_99000015",
+        "desc": "UPI-RAMJATAN YADAV-PAYTMQR60XXZ7@PTYS-YESB0PTMUPI-5036532051",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000016",
+        "desc": "UPI-RATHLAVATH RAMESH-BHARATPE.90059105732@FBPE-FDRL0001382-",
+        "counterparty_got": "BharatPe",
+        "counterparty_expected": "Rathlavath Ramesh",
+        "counterparty_category_got": "Shopping & E-commerce",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000017",
+        "desc": "UPI-SHAH AAHAN USHIR-AHAANSHAH2409@OKHDFCBANK-HDFC0003962-50",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Shah Aahan Ushir",
+        "counterparty_expected": "ED SHEERAN CONCERT",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000018",
+        "desc": "05721610043813-TPT-STERLING 5042 RENT-ASHLESHA NAOKARKAR",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Rent & Housing"
+      },
+      {
+        "id": "T_99000019",
+        "desc": "NEFT DR-ICIC0001390-MEICICI-NETBANK,MUM-HDFCN520250124214516",
+        "counterparty_got": "ICICI Bank",
+        "counterparty_expected": "VINOD"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "model": "claude-haiku-4-5",
+    "strategy": "single",
+    "total_fields": 74,
+    "correct_fields": 56,
+    "field_scores": {
+      "txn_type": {
+        "correct": 17,
+        "total": 20
+      },
+      "upi_type": {
+        "correct": 11,
+        "total": 14
+      },
+      "counterparty": {
+        "correct": 13,
+        "total": 20
+      },
+      "counterparty_category": {
+        "correct": 15,
+        "total": 20
+      }
+    },
+    "input_tokens": 3782,
+    "output_tokens": 1309,
+    "cost_usd": 0.010327,
+    "elapsed_s": 7.083631992340088,
+    "per_txn": [
+      {
+        "id": "T_99000000",
+        "desc": "UPI-SPOTIFY INDIA-SPOTIFY.BDSI@ICICI-ICIC0DC0099-50069355349"
+      },
+      {
+        "id": "T_99000001",
+        "desc": "UPI-AMAZON INDIA-AMAZON@RAPL-RATN000RAPL-503322666760-YOU AR"
+      },
+      {
+        "id": "T_99000002",
+        "desc": "UPI-SWIGGY LIMITED-SWIGGYINSTAMART1ONLINE.GPAY@OKPAYAXIS-UTI"
+      },
+      {
+        "id": "T_99000003",
+        "desc": "NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN520250",
+        "counterparty_got": "Tide Platform",
+        "counterparty_expected": "Sashank Sai Kuppa"
+      },
+      {
+        "id": "T_99000004",
+        "desc": "UPI-APOLLO PHARMACY-APOLLOPHARMACYOFFLINE@YBL-YESB0YBLUPI-50"
+      },
+      {
+        "id": "T_99000005",
+        "desc": "UPI-THIRD WAVE COFFEE-THIRDWAVECOFFEE.42605934@HDFCBANK-HDFC"
+      },
+      {
+        "id": "T_99000006",
+        "desc": "UPI-NIMISH GUPTA-NIMIGUP@ICICI-ICIC0001601-500143178869-UPI",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000007",
+        "desc": "RDA FIR INW-R25601497544-VENKATA VINOD KRISHNA KUPPA",
+        "upi_type_got": "NA",
+        "upi_type_expected": "P2P"
+      },
+      {
+        "id": "T_99000008",
+        "desc": "UPI-RELIANCE JIO INFOCOM-JIO@CITIBANK-CITI0RTGSMI-5016472773"
+      },
+      {
+        "id": "T_99000009",
+        "desc": "05721610043813   NET BANKING SI -STERLING 5042 RENT"
+      },
+      {
+        "id": "T_99000010",
+        "desc": "ACH D- IDFC FIRST BANK-1667588167"
+      },
+      {
+        "id": "T_99000011",
+        "desc": "NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SAS",
+        "txn_type_got": "SELF_TRANSFER",
+        "txn_type_expected": "INCOME_OTHER",
+        "counterparty_got": "IT Department Tax Refund",
+        "counterparty_expected": "ITD Tax Refund",
+        "counterparty_category_got": "Salary & Income",
+        "counterparty_category_expected": "Fees, Charges & Interest"
+      },
+      {
+        "id": "T_99000012",
+        "desc": "UPI-ARYAN KUKREJA-ARYAN.KUKREJA256@OKICICI-ICIC0002526-53681"
+      },
+      {
+        "id": "T_99000013",
+        "desc": "UPI-CHANDRASHEKAR G C-CHANDUSAVI53366-2@OKSBI-CNRB0000033-50"
+      },
+      {
+        "id": "T_99000014",
+        "desc": "UPI-K R LOKESHA-LOKESHKUMAR6340@YBL-CNRB0000033-501838188843",
+        "counterparty_got": "K R Lokesha",
+        "counterparty_expected": "Uber",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Transport & Fuel"
+      },
+      {
+        "id": "T_99000015",
+        "desc": "UPI-RAMJATAN YADAV-PAYTMQR60XXZ7@PTYS-YESB0PTMUPI-5036532051",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Uber",
+        "counterparty_expected": "RAMJATAN YADAV",
+        "counterparty_category_got": "Transport & Fuel",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000016",
+        "desc": "UPI-RATHLAVATH RAMESH-BHARATPE.90059105732@FBPE-FDRL0001382-",
+        "counterparty_got": "BharatPe",
+        "counterparty_expected": "Rathlavath Ramesh"
+      },
+      {
+        "id": "T_99000017",
+        "desc": "UPI-SHAH AAHAN USHIR-AHAANSHAH2409@OKHDFCBANK-HDFC0003962-50",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Shah Aahan Ushir",
+        "counterparty_expected": "ED SHEERAN CONCERT",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000018",
+        "desc": "05721610043813-TPT-STERLING 5042 RENT-ASHLESHA NAOKARKAR"
+      },
+      {
+        "id": "T_99000019",
+        "desc": "NEFT DR-ICIC0001390-MEICICI-NETBANK,MUM-HDFCN520250124214516",
+        "counterparty_got": "Self Transfer",
+        "counterparty_expected": "VINOD"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "model": "claude-haiku-4-5",
+    "strategy": "two-pass",
+    "total_fields": 74,
+    "correct_fields": 52,
+    "field_scores": {
+      "txn_type": {
+        "correct": 16,
+        "total": 20
+      },
+      "upi_type": {
+        "correct": 10,
+        "total": 14
+      },
+      "counterparty": {
+        "correct": 13,
+        "total": 20
+      },
+      "counterparty_category": {
+        "correct": 13,
+        "total": 20
+      }
+    },
+    "input_tokens": 4943,
+    "output_tokens": 1307,
+    "cost_usd": 0.011478,
+    "elapsed_s": 7.8083178997039795,
+    "per_txn": [
+      {
+        "id": "T_99000000",
+        "desc": "UPI-SPOTIFY INDIA-SPOTIFY.BDSI@ICICI-ICIC0DC0099-50069355349"
+      },
+      {
+        "id": "T_99000001",
+        "desc": "UPI-AMAZON INDIA-AMAZON@RAPL-RATN000RAPL-503322666760-YOU AR"
+      },
+      {
+        "id": "T_99000002",
+        "desc": "UPI-SWIGGY LIMITED-SWIGGYINSTAMART1ONLINE.GPAY@OKPAYAXIS-UTI"
+      },
+      {
+        "id": "T_99000003",
+        "desc": "NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN520250",
+        "counterparty_got": "Tide Platform",
+        "counterparty_expected": "Sashank Sai Kuppa"
+      },
+      {
+        "id": "T_99000004",
+        "desc": "UPI-APOLLO PHARMACY-APOLLOPHARMACYOFFLINE@YBL-YESB0YBLUPI-50"
+      },
+      {
+        "id": "T_99000005",
+        "desc": "UPI-THIRD WAVE COFFEE-THIRDWAVECOFFEE.42605934@HDFCBANK-HDFC"
+      },
+      {
+        "id": "T_99000006",
+        "desc": "UPI-NIMISH GUPTA-NIMIGUP@ICICI-ICIC0001601-500143178869-UPI",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000007",
+        "desc": "RDA FIR INW-R25601497544-VENKATA VINOD KRISHNA KUPPA",
+        "upi_type_got": "NA",
+        "upi_type_expected": "P2P"
+      },
+      {
+        "id": "T_99000008",
+        "desc": "UPI-RELIANCE JIO INFOCOM-JIO@CITIBANK-CITI0RTGSMI-5016472773"
+      },
+      {
+        "id": "T_99000009",
+        "desc": "05721610043813   NET BANKING SI -STERLING 5042 RENT"
+      },
+      {
+        "id": "T_99000010",
+        "desc": "ACH D- IDFC FIRST BANK-1667588167"
+      },
+      {
+        "id": "T_99000011",
+        "desc": "NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SAS",
+        "txn_type_got": "SELF_TRANSFER",
+        "txn_type_expected": "INCOME_OTHER",
+        "counterparty_got": "IT Department Tax Refund",
+        "counterparty_expected": "ITD Tax Refund",
+        "counterparty_category_got": "Salary & Income",
+        "counterparty_category_expected": "Fees, Charges & Interest"
+      },
+      {
+        "id": "T_99000012",
+        "desc": "UPI-ARYAN KUKREJA-ARYAN.KUKREJA256@OKICICI-ICIC0002526-53681"
+      },
+      {
+        "id": "T_99000013",
+        "desc": "UPI-CHANDRASHEKAR G C-CHANDUSAVI53366-2@OKSBI-CNRB0000033-50"
+      },
+      {
+        "id": "T_99000014",
+        "desc": "UPI-K R LOKESHA-LOKESHKUMAR6340@YBL-CNRB0000033-501838188843",
+        "counterparty_got": "K R Lokesha",
+        "counterparty_expected": "Uber",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Transport & Fuel"
+      },
+      {
+        "id": "T_99000015",
+        "desc": "UPI-RAMJATAN YADAV-PAYTMQR60XXZ7@PTYS-YESB0PTMUPI-5036532051",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Uber",
+        "counterparty_expected": "RAMJATAN YADAV",
+        "counterparty_category_got": "Transport & Fuel",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000016",
+        "desc": "UPI-RATHLAVATH RAMESH-BHARATPE.90059105732@FBPE-FDRL0001382-",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Uber",
+        "counterparty_expected": "Rathlavath Ramesh",
+        "counterparty_category_got": "Transport & Fuel",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000017",
+        "desc": "UPI-SHAH AAHAN USHIR-AHAANSHAH2409@OKHDFCBANK-HDFC0003962-50",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Shah Aahan Ushir",
+        "counterparty_expected": "ED SHEERAN CONCERT",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000018",
+        "desc": "05721610043813-TPT-STERLING 5042 RENT-ASHLESHA NAOKARKAR",
+        "counterparty_category_got": "Gifts & Personal Transfers",
+        "counterparty_category_expected": "Rent & Housing"
+      },
+      {
+        "id": "T_99000019",
+        "desc": "NEFT DR-ICIC0001390-MEICICI-NETBANK,MUM-HDFCN520250124214516",
+        "counterparty_got": "Self Transfer",
+        "counterparty_expected": "VINOD"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "model": "claude-sonnet-4-6",
+    "strategy": "single",
+    "total_fields": 74,
+    "correct_fields": 53,
+    "field_scores": {
+      "txn_type": {
+        "correct": 16,
+        "total": 20
+      },
+      "upi_type": {
+        "correct": 10,
+        "total": 14
+      },
+      "counterparty": {
+        "correct": 13,
+        "total": 20
+      },
+      "counterparty_category": {
+        "correct": 14,
+        "total": 20
+      }
+    },
+    "input_tokens": 3783,
+    "output_tokens": 914,
+    "cost_usd": 0.025058999999999998,
+    "elapsed_s": 10.616028785705566,
+    "per_txn": [
+      {
+        "id": "T_99000000",
+        "desc": "UPI-SPOTIFY INDIA-SPOTIFY.BDSI@ICICI-ICIC0DC0099-50069355349"
+      },
+      {
+        "id": "T_99000001",
+        "desc": "UPI-AMAZON INDIA-AMAZON@RAPL-RATN000RAPL-503322666760-YOU AR"
+      },
+      {
+        "id": "T_99000002",
+        "desc": "UPI-SWIGGY LIMITED-SWIGGYINSTAMART1ONLINE.GPAY@OKPAYAXIS-UTI"
+      },
+      {
+        "id": "T_99000003",
+        "desc": "NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN520250",
+        "counterparty_got": "Tide Platform",
+        "counterparty_expected": "Sashank Sai Kuppa"
+      },
+      {
+        "id": "T_99000004",
+        "desc": "UPI-APOLLO PHARMACY-APOLLOPHARMACYOFFLINE@YBL-YESB0YBLUPI-50"
+      },
+      {
+        "id": "T_99000005",
+        "desc": "UPI-THIRD WAVE COFFEE-THIRDWAVECOFFEE.42605934@HDFCBANK-HDFC"
+      },
+      {
+        "id": "T_99000006",
+        "desc": "UPI-NIMISH GUPTA-NIMIGUP@ICICI-ICIC0001601-500143178869-UPI",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000007",
+        "desc": "RDA FIR INW-R25601497544-VENKATA VINOD KRISHNA KUPPA",
+        "upi_type_got": "NA",
+        "upi_type_expected": "P2P"
+      },
+      {
+        "id": "T_99000008",
+        "desc": "UPI-RELIANCE JIO INFOCOM-JIO@CITIBANK-CITI0RTGSMI-5016472773",
+        "counterparty_category_got": "Mobile, OTT & Subscriptions",
+        "counterparty_category_expected": "Utilities & Internet"
+      },
+      {
+        "id": "T_99000009",
+        "desc": "05721610043813   NET BANKING SI -STERLING 5042 RENT",
+        "counterparty_got": "Sterling 5042",
+        "counterparty_expected": "Sterling Rent"
+      },
+      {
+        "id": "T_99000010",
+        "desc": "ACH D- IDFC FIRST BANK-1667588167"
+      },
+      {
+        "id": "T_99000011",
+        "desc": "NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SAS",
+        "txn_type_got": "SELF_TRANSFER",
+        "txn_type_expected": "INCOME_OTHER",
+        "counterparty_got": "IT Department Tax Refund",
+        "counterparty_expected": "ITD Tax Refund",
+        "counterparty_category_got": "Salary & Income",
+        "counterparty_category_expected": "Fees, Charges & Interest"
+      },
+      {
+        "id": "T_99000012",
+        "desc": "UPI-ARYAN KUKREJA-ARYAN.KUKREJA256@OKICICI-ICIC0002526-53681"
+      },
+      {
+        "id": "T_99000013",
+        "desc": "UPI-CHANDRASHEKAR G C-CHANDUSAVI53366-2@OKSBI-CNRB0000033-50"
+      },
+      {
+        "id": "T_99000014",
+        "desc": "UPI-K R LOKESHA-LOKESHKUMAR6340@YBL-CNRB0000033-501838188843",
+        "counterparty_got": "K R Lokesha",
+        "counterparty_expected": "Uber",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Transport & Fuel"
+      },
+      {
+        "id": "T_99000015",
+        "desc": "UPI-RAMJATAN YADAV-PAYTMQR60XXZ7@PTYS-YESB0PTMUPI-5036532051",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M"
+      },
+      {
+        "id": "T_99000016",
+        "desc": "UPI-RATHLAVATH RAMESH-BHARATPE.90059105732@FBPE-FDRL0001382-",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Uber",
+        "counterparty_expected": "Rathlavath Ramesh",
+        "counterparty_category_got": "Transport & Fuel",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000017",
+        "desc": "UPI-SHAH AAHAN USHIR-AHAANSHAH2409@OKHDFCBANK-HDFC0003962-50",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Shah Aahan Ushir",
+        "counterparty_expected": "ED SHEERAN CONCERT",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000018",
+        "desc": "05721610043813-TPT-STERLING 5042 RENT-ASHLESHA NAOKARKAR"
+      },
+      {
+        "id": "T_99000019",
+        "desc": "NEFT DR-ICIC0001390-MEICICI-NETBANK,MUM-HDFCN520250124214516",
+        "counterparty_got": "Self Transfer",
+        "counterparty_expected": "VINOD"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "model": "claude-sonnet-4-6",
+    "strategy": "two-pass",
+    "total_fields": 74,
+    "correct_fields": 52,
+    "field_scores": {
+      "txn_type": {
+        "correct": 16,
+        "total": 20
+      },
+      "upi_type": {
+        "correct": 10,
+        "total": 14
+      },
+      "counterparty": {
+        "correct": 13,
+        "total": 20
+      },
+      "counterparty_category": {
+        "correct": 13,
+        "total": 20
+      }
+    },
+    "input_tokens": 4958,
+    "output_tokens": 1098,
+    "cost_usd": 0.031344,
+    "elapsed_s": 12.979618787765503,
+    "per_txn": [
+      {
+        "id": "T_99000000",
+        "desc": "UPI-SPOTIFY INDIA-SPOTIFY.BDSI@ICICI-ICIC0DC0099-50069355349"
+      },
+      {
+        "id": "T_99000001",
+        "desc": "UPI-AMAZON INDIA-AMAZON@RAPL-RATN000RAPL-503322666760-YOU AR"
+      },
+      {
+        "id": "T_99000002",
+        "desc": "UPI-SWIGGY LIMITED-SWIGGYINSTAMART1ONLINE.GPAY@OKPAYAXIS-UTI"
+      },
+      {
+        "id": "T_99000003",
+        "desc": "NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN520250",
+        "counterparty_got": "Tide Platform",
+        "counterparty_expected": "Sashank Sai Kuppa"
+      },
+      {
+        "id": "T_99000004",
+        "desc": "UPI-APOLLO PHARMACY-APOLLOPHARMACYOFFLINE@YBL-YESB0YBLUPI-50"
+      },
+      {
+        "id": "T_99000005",
+        "desc": "UPI-THIRD WAVE COFFEE-THIRDWAVECOFFEE.42605934@HDFCBANK-HDFC"
+      },
+      {
+        "id": "T_99000006",
+        "desc": "UPI-NIMISH GUPTA-NIMIGUP@ICICI-ICIC0001601-500143178869-UPI",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000007",
+        "desc": "RDA FIR INW-R25601497544-VENKATA VINOD KRISHNA KUPPA",
+        "upi_type_got": "NA",
+        "upi_type_expected": "P2P"
+      },
+      {
+        "id": "T_99000008",
+        "desc": "UPI-RELIANCE JIO INFOCOM-JIO@CITIBANK-CITI0RTGSMI-5016472773"
+      },
+      {
+        "id": "T_99000009",
+        "desc": "05721610043813   NET BANKING SI -STERLING 5042 RENT",
+        "counterparty_got": "Sterling 5042 Rent",
+        "counterparty_expected": "Sterling Rent"
+      },
+      {
+        "id": "T_99000010",
+        "desc": "ACH D- IDFC FIRST BANK-1667588167"
+      },
+      {
+        "id": "T_99000011",
+        "desc": "NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SAS",
+        "txn_type_got": "SELF_TRANSFER",
+        "txn_type_expected": "INCOME_OTHER",
+        "counterparty_got": "IT Department Tax Refund",
+        "counterparty_expected": "ITD Tax Refund",
+        "counterparty_category_got": "Salary & Income",
+        "counterparty_category_expected": "Fees, Charges & Interest"
+      },
+      {
+        "id": "T_99000012",
+        "desc": "UPI-ARYAN KUKREJA-ARYAN.KUKREJA256@OKICICI-ICIC0002526-53681"
+      },
+      {
+        "id": "T_99000013",
+        "desc": "UPI-CHANDRASHEKAR G C-CHANDUSAVI53366-2@OKSBI-CNRB0000033-50"
+      },
+      {
+        "id": "T_99000014",
+        "desc": "UPI-K R LOKESHA-LOKESHKUMAR6340@YBL-CNRB0000033-501838188843",
+        "counterparty_got": "K R Lokesha",
+        "counterparty_expected": "Uber",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Transport & Fuel"
+      },
+      {
+        "id": "T_99000015",
+        "desc": "UPI-RAMJATAN YADAV-PAYTMQR60XXZ7@PTYS-YESB0PTMUPI-5036532051",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000016",
+        "desc": "UPI-RATHLAVATH RAMESH-BHARATPE.90059105732@FBPE-FDRL0001382-",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Uber",
+        "counterparty_expected": "Rathlavath Ramesh",
+        "counterparty_category_got": "Transport & Fuel",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000017",
+        "desc": "UPI-SHAH AAHAN USHIR-AHAANSHAH2409@OKHDFCBANK-HDFC0003962-50",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Shah Aahan Ushir",
+        "counterparty_expected": "ED SHEERAN CONCERT",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000018",
+        "desc": "05721610043813-TPT-STERLING 5042 RENT-ASHLESHA NAOKARKAR",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Rent & Housing"
+      },
+      {
+        "id": "T_99000019",
+        "desc": "NEFT DR-ICIC0001390-MEICICI-NETBANK,MUM-HDFCN520250124214516",
+        "counterparty_got": "ICICI Bank Self",
+        "counterparty_expected": "VINOD"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "model": "claude-opus-4-6",
+    "strategy": "single",
+    "total_fields": 74,
+    "correct_fields": 58,
+    "field_scores": {
+      "txn_type": {
+        "correct": 17,
+        "total": 20
+      },
+      "upi_type": {
+        "correct": 11,
+        "total": 14
+      },
+      "counterparty": {
+        "correct": 15,
+        "total": 20
+      },
+      "counterparty_category": {
+        "correct": 15,
+        "total": 20
+      }
+    },
+    "input_tokens": 3783,
+    "output_tokens": 914,
+    "cost_usd": 0.041765,
+    "elapsed_s": 9.815447807312012,
+    "per_txn": [
+      {
+        "id": "T_99000000",
+        "desc": "UPI-SPOTIFY INDIA-SPOTIFY.BDSI@ICICI-ICIC0DC0099-50069355349"
+      },
+      {
+        "id": "T_99000001",
+        "desc": "UPI-AMAZON INDIA-AMAZON@RAPL-RATN000RAPL-503322666760-YOU AR"
+      },
+      {
+        "id": "T_99000002",
+        "desc": "UPI-SWIGGY LIMITED-SWIGGYINSTAMART1ONLINE.GPAY@OKPAYAXIS-UTI"
+      },
+      {
+        "id": "T_99000003",
+        "desc": "NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN520250",
+        "counterparty_got": "Tideplatfo",
+        "counterparty_expected": "Sashank Sai Kuppa"
+      },
+      {
+        "id": "T_99000004",
+        "desc": "UPI-APOLLO PHARMACY-APOLLOPHARMACYOFFLINE@YBL-YESB0YBLUPI-50"
+      },
+      {
+        "id": "T_99000005",
+        "desc": "UPI-THIRD WAVE COFFEE-THIRDWAVECOFFEE.42605934@HDFCBANK-HDFC"
+      },
+      {
+        "id": "T_99000006",
+        "desc": "UPI-NIMISH GUPTA-NIMIGUP@ICICI-ICIC0001601-500143178869-UPI",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000007",
+        "desc": "RDA FIR INW-R25601497544-VENKATA VINOD KRISHNA KUPPA",
+        "upi_type_got": "NA",
+        "upi_type_expected": "P2P"
+      },
+      {
+        "id": "T_99000008",
+        "desc": "UPI-RELIANCE JIO INFOCOM-JIO@CITIBANK-CITI0RTGSMI-5016472773"
+      },
+      {
+        "id": "T_99000009",
+        "desc": "05721610043813   NET BANKING SI -STERLING 5042 RENT"
+      },
+      {
+        "id": "T_99000010",
+        "desc": "ACH D- IDFC FIRST BANK-1667588167"
+      },
+      {
+        "id": "T_99000011",
+        "desc": "NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SAS",
+        "txn_type_got": "SELF_TRANSFER",
+        "txn_type_expected": "INCOME_OTHER",
+        "counterparty_got": "IT Department Tax Refund",
+        "counterparty_expected": "ITD Tax Refund",
+        "counterparty_category_got": "Salary & Income",
+        "counterparty_category_expected": "Fees, Charges & Interest"
+      },
+      {
+        "id": "T_99000012",
+        "desc": "UPI-ARYAN KUKREJA-ARYAN.KUKREJA256@OKICICI-ICIC0002526-53681"
+      },
+      {
+        "id": "T_99000013",
+        "desc": "UPI-CHANDRASHEKAR G C-CHANDUSAVI53366-2@OKSBI-CNRB0000033-50"
+      },
+      {
+        "id": "T_99000014",
+        "desc": "UPI-K R LOKESHA-LOKESHKUMAR6340@YBL-CNRB0000033-501838188843"
+      },
+      {
+        "id": "T_99000015",
+        "desc": "UPI-RAMJATAN YADAV-PAYTMQR60XXZ7@PTYS-YESB0PTMUPI-5036532051",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_category_got": "Food & Dining",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000016",
+        "desc": "UPI-RATHLAVATH RAMESH-BHARATPE.90059105732@FBPE-FDRL0001382-",
+        "counterparty_got": "BharatPe Merchant",
+        "counterparty_expected": "Rathlavath Ramesh",
+        "counterparty_category_got": "Food & Dining",
+        "counterparty_category_expected": "Miscellaneous"
+      },
+      {
+        "id": "T_99000017",
+        "desc": "UPI-SHAH AAHAN USHIR-AHAANSHAH2409@OKHDFCBANK-HDFC0003962-50",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Shah Aahan Ushir",
+        "counterparty_expected": "ED SHEERAN CONCERT",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000018",
+        "desc": "05721610043813-TPT-STERLING 5042 RENT-ASHLESHA NAOKARKAR"
+      },
+      {
+        "id": "T_99000019",
+        "desc": "NEFT DR-ICIC0001390-MEICICI-NETBANK,MUM-HDFCN520250124214516",
+        "counterparty_got": "Self Account ICICI",
+        "counterparty_expected": "VINOD"
+      }
+    ],
+    "errors": []
+  },
+  {
+    "model": "claude-opus-4-6",
+    "strategy": "two-pass",
+    "total_fields": 74,
+    "correct_fields": 59,
+    "field_scores": {
+      "txn_type": {
+        "correct": 18,
+        "total": 20
+      },
+      "upi_type": {
+        "correct": 12,
+        "total": 14
+      },
+      "counterparty": {
+        "correct": 14,
+        "total": 20
+      },
+      "counterparty_category": {
+        "correct": 15,
+        "total": 20
+      }
+    },
+    "input_tokens": 4961,
+    "output_tokens": 1174,
+    "cost_usd": 0.054155,
+    "elapsed_s": 13.352515935897827,
+    "per_txn": [
+      {
+        "id": "T_99000000",
+        "desc": "UPI-SPOTIFY INDIA-SPOTIFY.BDSI@ICICI-ICIC0DC0099-50069355349"
+      },
+      {
+        "id": "T_99000001",
+        "desc": "UPI-AMAZON INDIA-AMAZON@RAPL-RATN000RAPL-503322666760-YOU AR"
+      },
+      {
+        "id": "T_99000002",
+        "desc": "UPI-SWIGGY LIMITED-SWIGGYINSTAMART1ONLINE.GPAY@OKPAYAXIS-UTI"
+      },
+      {
+        "id": "T_99000003",
+        "desc": "NEFT CR-RATN0000999-TIDEPLATFO-SASHANK SAI KUPPA-RATNN520250",
+        "counterparty_got": "Tideplatfo",
+        "counterparty_expected": "Sashank Sai Kuppa"
+      },
+      {
+        "id": "T_99000004",
+        "desc": "UPI-APOLLO PHARMACY-APOLLOPHARMACYOFFLINE@YBL-YESB0YBLUPI-50"
+      },
+      {
+        "id": "T_99000005",
+        "desc": "UPI-THIRD WAVE COFFEE-THIRDWAVECOFFEE.42605934@HDFCBANK-HDFC"
+      },
+      {
+        "id": "T_99000006",
+        "desc": "UPI-NIMISH GUPTA-NIMIGUP@ICICI-ICIC0001601-500143178869-UPI",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000007",
+        "desc": "RDA FIR INW-R25601497544-VENKATA VINOD KRISHNA KUPPA",
+        "upi_type_got": "NA",
+        "upi_type_expected": "P2P"
+      },
+      {
+        "id": "T_99000008",
+        "desc": "UPI-RELIANCE JIO INFOCOM-JIO@CITIBANK-CITI0RTGSMI-5016472773"
+      },
+      {
+        "id": "T_99000009",
+        "desc": "05721610043813   NET BANKING SI -STERLING 5042 RENT"
+      },
+      {
+        "id": "T_99000010",
+        "desc": "ACH D- IDFC FIRST BANK-1667588167"
+      },
+      {
+        "id": "T_99000011",
+        "desc": "NEFT CR-SBIN0000TBU-ITDTAX REFUND 2025-26 IQCPK1665P-SAI SAS",
+        "txn_type_got": "SELF_TRANSFER",
+        "txn_type_expected": "INCOME_OTHER",
+        "counterparty_got": "IT Department Tax Refund",
+        "counterparty_expected": "ITD Tax Refund",
+        "counterparty_category_got": "Salary & Income",
+        "counterparty_category_expected": "Fees, Charges & Interest"
+      },
+      {
+        "id": "T_99000012",
+        "desc": "UPI-ARYAN KUKREJA-ARYAN.KUKREJA256@OKICICI-ICIC0002526-53681"
+      },
+      {
+        "id": "T_99000013",
+        "desc": "UPI-CHANDRASHEKAR G C-CHANDUSAVI53366-2@OKSBI-CNRB0000033-50"
+      },
+      {
+        "id": "T_99000014",
+        "desc": "UPI-K R LOKESHA-LOKESHKUMAR6340@YBL-CNRB0000033-501838188843",
+        "counterparty_got": "K R Lokesha",
+        "counterparty_expected": "Uber",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Transport & Fuel"
+      },
+      {
+        "id": "T_99000015",
+        "desc": "UPI-RAMJATAN YADAV-PAYTMQR60XXZ7@PTYS-YESB0PTMUPI-5036532051"
+      },
+      {
+        "id": "T_99000016",
+        "desc": "UPI-RATHLAVATH RAMESH-BHARATPE.90059105732@FBPE-FDRL0001382-",
+        "counterparty_got": "BharatPe Merchant",
+        "counterparty_expected": "Rathlavath Ramesh"
+      },
+      {
+        "id": "T_99000017",
+        "desc": "UPI-SHAH AAHAN USHIR-AHAANSHAH2409@OKHDFCBANK-HDFC0003962-50",
+        "txn_type_got": "UPI_TRANSFER",
+        "txn_type_expected": "UPI_EXPENSE",
+        "upi_type_got": "P2P",
+        "upi_type_expected": "P2M",
+        "counterparty_got": "Shah Aahan Ushir",
+        "counterparty_expected": "ED SHEERAN CONCERT",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Entertainment & Events"
+      },
+      {
+        "id": "T_99000018",
+        "desc": "05721610043813-TPT-STERLING 5042 RENT-ASHLESHA NAOKARKAR",
+        "counterparty_category_got": "Friends and Family",
+        "counterparty_category_expected": "Rent & Housing"
+      },
+      {
+        "id": "T_99000019",
+        "desc": "NEFT DR-ICIC0001390-MEICICI-NETBANK,MUM-HDFCN520250124214516",
+        "counterparty_got": "Self Transfer ICICI",
+        "counterparty_expected": "VINOD"
+      }
+    ],
+    "errors": []
+  }
+]

@@ -23,6 +23,9 @@ dist/
 .coverage*
 htmlcov/
 
+# Environment secrets (API keys — never commit)
+.env
+
 # OS / editor files
 .DS_Store
 .idea/
@@ -30,4 +33,8 @@ htmlcov/
 
 # Personal financial data (do NOT commit)
 docs/personal-data/
+
+# Generated pipeline output and LLM cache
+data/output/
+data/.llm_cache/
 
