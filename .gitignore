@@ -1,0 +1,30 @@
+# Ignore Cursor project metadata
+.cursor/
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python cache and build artifacts
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.build/
+build/
+dist/
+.eggs/
+*.egg-info/
+
+# Test and coverage artifacts
+.pytest_cache/
+.coverage*
+htmlcov/
+
+# OS / editor files
+.DS_Store
+.idea/
+.vscode/
+
