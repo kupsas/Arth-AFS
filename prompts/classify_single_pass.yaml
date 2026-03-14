@@ -36,6 +36,24 @@ system_template: |-
   - "Entertainment & Events": Cinemas, malls (entry/events), concert venues, amusement parks.
   - Do NOT confuse small BharatPe/PayTM QR merchant payments with person-to-person transfers.
 
+  Uber / Ola ride-hailing detection (IMPORTANT — read carefully):
+  This user takes Uber/Ola rides very frequently and rarely does person-to-person UPI
+  transfers. In India, Uber and Ola payments go to the driver's personal UPI handle, so
+  the description shows a person's name (e.g. "RAJESH", "BASAPPA", "SOMANNA") rather
+  than "UBER" or "OLA".
+  DEFAULT RULE: If the UPI name looks like an Indian person's name (not a business) and
+  the amount is ₹100–₹1,500, classify it as an Uber ride. This user's P2P transfers to
+  actual friends/family are rare (about once a month) and are typically to names already
+  identified in the friends/family lists earlier in the pipeline.
+    → counterparty="Uber", txn_type=UPI_TRANSFER, upi_type=P2P,
+      counterparty_category="Transport & Fuel"
+  The ONLY exception: Do NOT classify as Uber if the UPI name is clearly a business,
+  brand, or restaurant — e.g. Subway, Dominos, MakeMyTrip, Burger King, Reliance, MTR,
+  Starbucks, any company name with "Ltd", "PVT", "Limited", "Enterprises", "Solutions",
+  "Communications", etc. Those are merchant payments, not rides.
+  For amounts above ₹1,500 to a person's name, use your judgement — it could be a long
+  Uber ride or a genuine P2P transfer.
+
   IMPORTANT for counterparty_category: First identify the txn_type and counterparty, then use their combination to pick the best category. For example, "UPI_EXPENSE Spotify" → "Mobile, OTT & Subscriptions", "UPI_EXPENSE Reliance Jio Infocom" → "Utilities & Internet".
 
   {few_shot}

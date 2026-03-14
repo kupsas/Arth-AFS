@@ -15,14 +15,20 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ---------------------------------------------------------------------------
+# Environment — controls which DB file is used (prod vs test)
+# pytest overrides this via in-memory SQLite, so it doesn't use either file.
+# ---------------------------------------------------------------------------
+APP_ENV: str = os.getenv("APP_ENV", "prod")
+
+# ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "docs" / "personal-data"
 OUTPUT_DIR = REPO_ROOT / "data" / "output"
+DB_PATH: Path = REPO_ROOT / "data" / ("arth_test.db" if APP_ENV == "test" else "arth.db")
 
 # Source files — add new statements here as they arrive
-HDFC_SAVINGS_FILE = DATA_DIR / "HDFC_Statement.txt"
 GSHEET_BENCHMARK_FILE = DATA_DIR / "GSheet_Transactions_modifiedForLLMTraining.csv"
 
 # ---------------------------------------------------------------------------
@@ -33,7 +39,7 @@ SOURCE_CONFIGS: dict[str, dict] = {
     "hdfc_savings": {
         "account_id": "HDFC_SAL_3703",
         "currency": "INR",
-        "source_statement": "HDFC_Statement.txt",
+        "source_statement": "HDFC_Savings",   # directory of yearly .txt files
     },
     # HDFC credit cards — each key points at a directory of 12 monthly CSVs.
     # The HDFCCreditCardParser.parse() accepts either a file or a directory.
@@ -47,11 +53,11 @@ SOURCE_CONFIGS: dict[str, dict] = {
         "currency": "INR",
         "source_statement": "5778_CC",   # directory of monthly CSVs
     },
-    # ICICI savings account — single full-year PDF
+    # ICICI savings account — directory of yearly PDFs
     "icici_savings": {
         "account_id": "ICICI_SAV_6118",
         "currency": "INR",
-        "source_statement": "ICICI_PDF_010125_311225.pdf",
+        "source_statement": "ICICI_Savings",   # directory of yearly .pdf files
     },
 }
 

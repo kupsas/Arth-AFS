@@ -84,8 +84,28 @@ class ICICISavingsParser(BaseParser):
         return "icici_savings"
 
     def parse(self, file_path: str | Path) -> list[ParsedTransaction]:
-        """Open the ICICI savings PDF and return all transactions."""
-        file_path = Path(file_path)
+        """Accept either a single .pdf file or a directory of yearly .pdf files.
+
+        In directory mode, all matching files are parsed and results are merged
+        and sorted chronologically before being returned — same pattern as the CC parser.
+        """
+        path = Path(file_path)
+
+        if path.is_dir():
+            rows: list[ParsedTransaction] = []
+            # Sort so yearly PDFs are processed in chronological order.
+            for pdf_file in sorted(path.glob("*.pdf")):
+                rows.extend(self._parse_file(pdf_file))
+            return sorted(rows, key=lambda r: r.txn_date)
+
+        return self._parse_file(path)
+
+    # ------------------------------------------------------------------
+    # Per-file parsing
+    # ------------------------------------------------------------------
+
+    def _parse_file(self, file_path: Path) -> list[ParsedTransaction]:
+        """Open a single ICICI savings PDF and return all its transactions."""
         rows: list[ParsedTransaction] = []
 
         with pdfplumber.open(file_path) as pdf:
@@ -95,7 +115,8 @@ class ICICISavingsParser(BaseParser):
                     rows.extend(page_rows)
                 except Exception as exc:
                     warnings.warn(
-                        f"[icici_savings] Error on page {page_num}: {exc}",
+                        f"[icici_savings] Error on page {page_num} of "
+                        f"{file_path.name}: {exc}",
                         stacklevel=2,
                     )
 

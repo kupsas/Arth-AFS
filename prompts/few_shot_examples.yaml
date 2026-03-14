@@ -141,3 +141,36 @@ examples:
     upi_type: "P2P"
     counterparty: "Satyansh Rai"
     counterparty_category: "Gifts & Personal Transfers"
+
+  - number: 14
+    title: "UPI P2P likely Uber ride (person's name + amount in ride range = probable ride-hailing)"
+    desc: "UPI-SOMANNA-PAYTM.S1D4U5K@PTY-YESB0MCHUPI-110658266868-UPI"
+    direction: "OUTFLOW"
+    amount: "308"
+    channel: "UPI"
+    txn_type: "UPI_TRANSFER"
+    upi_type: "P2P"
+    counterparty: "Uber"
+    counterparty_category: "Transport & Fuel"
+
+  - number: 15
+    title: "UPI P2M restaurant \u2014 NOT Uber even though amount is 230 (Burger King is a business name)"
+    desc: "UPI-BURGER KING  HYDERAB-Q547042925@YBL-YESB0YBLUPI-429261543331-UPI"
+    direction: "OUTFLOW"
+    amount: "230"
+    channel: "UPI"
+    txn_type: "UPI_EXPENSE"
+    upi_type: "P2M"
+    counterparty: "Burger King"
+    counterparty_category: "Food & Dining"
+
+  - number: 16
+    title: "UPI P2M travel booking \u2014 NOT Uber even though amount is 1056 (MakeMyTrip is a business)"
+    desc: "UPI-MAKE MY TRIP-MAKEMYTRIPONLINE@YBL-YESB0YBLUPI-428541081594-PAYMENT FOR M497C9"
+    direction: "OUTFLOW"
+    amount: "1056"
+    channel: "UPI"
+    txn_type: "UPI_EXPENSE"
+    upi_type: "P2M"
+    counterparty: "MakeMyTrip"
+    counterparty_category: "Travel & Stay"

@@ -28,6 +28,7 @@ from pipeline.config import (
 )
 from pipeline.models import (
     CanonicalTransaction,
+    Channel,
     CounterpartyCategory,
     TxnType,
     UPIType,
@@ -327,6 +328,23 @@ def _apply_results(
                     if member.value.lower() == cat_val.lower():
                         txn.counterparty_category = member
                         break
+
+        _enforce_consistency(txn)
+
+
+def _enforce_consistency(txn: CanonicalTransaction) -> None:
+    """Fix logically impossible field combinations after LLM fills values.
+
+    The LLM occasionally returns a txn_type that contradicts the channel
+    (e.g. BANK_TRANSFER for a UPI transaction).  This guard corrects those
+    after the fact so we don't pollute the database.
+    """
+    if txn.channel == Channel.UPI and txn.txn_type == TxnType.BANK_TRANSFER:
+        txn.txn_type = TxnType.UPI_TRANSFER
+
+    if txn.channel == Channel.UPI and txn.upi_type == UPIType.P2P:
+        if txn.txn_type not in (TxnType.UPI_TRANSFER, TxnType.SELF_TRANSFER):
+            txn.txn_type = TxnType.UPI_TRANSFER
 
 
 # ---------------------------------------------------------------------------

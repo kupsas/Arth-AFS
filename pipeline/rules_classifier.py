@@ -410,9 +410,12 @@ def _classify_txn_type(txn: CanonicalTransaction) -> None:
         txn.txn_type = TxnType.INCOME_SALARY
         return
 
-    # --- Interest paid by the bank ---
-    if "INTEREST PAID" in desc_upper:
-        txn.txn_type = TxnType.EXPENSE_OTHER
+    # --- Interest credited by the bank ---
+    # HDFC narration "INTEREST PAID TILL …" means interest paid *to the customer*,
+    # so the direction is INFLOW and the correct type is INCOME_OTHER (not EXPENSE).
+    # "CREDIT INTEREST CAPITALISED" is the same (quarterly interest credit).
+    if "INTEREST PAID" in desc_upper or "CREDIT INTEREST" in desc_upper:
+        txn.txn_type = TxnType.INCOME_OTHER
         return
 
     # --- Processing fees ---
@@ -695,8 +698,10 @@ def _classify_txn_type_from_upi(txn: CanonicalTransaction) -> None:
             txn.txn_type = TxnType.UPI_EXPENSE
 
     elif txn.upi_type == UPIType.P2P:
-        if txn.direction == Direction.INFLOW:
-            txn.txn_type = TxnType.UPI_TRANSFER
+        # P2P is always a transfer to/from another person.  Self-transfers
+        # are caught earlier in _classify_txn_type, so anything still None
+        # here is a genuine person-to-person transfer in either direction.
+        txn.txn_type = TxnType.UPI_TRANSFER
 
 
 # ---------------------------------------------------------------------------
@@ -1044,9 +1049,8 @@ def _classify_counterparty_category(txn: CanonicalTransaction) -> None:
       3. Family / friends list → Friends and Family
       4. Acquaintances list → Gifts & Personal Transfers
       5. UPI outflow to unknown non-merchant person:
-         a. Amount ₹100–1 500 → Uber (Transport & Fuel)
-         b. Amount > ₹1 500 → Gifts & Personal Transfers
-         c. Amount < ₹100 → Miscellaneous
+         a. Amount < ₹100 → Miscellaneous
+         b. Everything else → leave for LLM (includes Uber/Ola detection)
       6. Anything else → leave for LLM
     """
     desc = txn.raw_description
@@ -1061,6 +1065,13 @@ def _classify_counterparty_category(txn: CanonicalTransaction) -> None:
     # ── Credit card: full counterparty classification ─────────────────
     if txn.channel == Channel.CARD:
         _classify_cc_counterparty(txn)
+        return
+
+    # ── Bank interest (savings account credits) ─────────────────────────
+    # Covers both "INTEREST PAID TILL …" and "CREDIT INTEREST CAPITALISED".
+    if "INTEREST PAID" in desc_upper or "CREDIT INTEREST" in desc_upper:
+        txn.counterparty = "Bank Interest"
+        txn.counterparty_category = CounterpartyCategory.FEES_CHARGES_INTEREST
         return
 
     # ── Sterling rent payments always go to Ashlesha Naokarkar ───────────
@@ -1189,17 +1200,13 @@ def _classify_counterparty_category(txn: CanonicalTransaction) -> None:
 
         amount = float(txn.amount)
 
-        # Uber/Ola ride: unknown non-merchant person, amount ₹100–₹1 500.
-        if 100 <= amount <= 1500:
-            txn.counterparty = "Uber"
-            txn.counterparty_category = CounterpartyCategory.TRANSPORT_FUEL
-            return
-
-        # Small amounts (< ₹100) to unknown persons
+        # Small amounts (< ₹100) to unknown persons — too small for
+        # meaningful classification; label as Miscellaneous.
         if amount < 100:
             txn.counterparty_category = CounterpartyCategory.MISCELLANEOUS
             return
 
-        # Large amounts to unknown non-merchant persons — let the LLM decide.
-        # (Removed the blanket "Gifts & Personal Transfers" default that was
-        # catching legitimate merchant purchases like EatClub, clothing stores.)
+        # Everything else (including possible Uber/Ola rides to personal
+        # UPI handles) — let the LLM decide. The prompt includes heuristic
+        # guidance for ride-hailing detection so the LLM can make an
+        # informed judgement call based on amount + UPI name pattern.
