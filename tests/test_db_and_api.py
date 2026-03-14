@@ -1,0 +1,450 @@
+"""
+Tests for Phase 2: SQLite database operations and FastAPI endpoints.
+
+Uses an in-memory SQLite database so tests are fast, isolated, and don't
+touch any real data.  The FastAPI TestClient makes synchronous HTTP calls
+without starting a real server.
+"""
+
+from __future__ import annotations
+
+import datetime
+from decimal import Decimal
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.pool import StaticPool
+from sqlmodel import Session, SQLModel, create_engine
+
+from api.main import app
+from api.database import get_session
+from api.models import PipelineRun, Transaction
+from pipeline.db_writer import compute_content_hash, write_to_db
+from pipeline.models import (
+    CanonicalTransaction,
+    Channel,
+    CounterpartyCategory,
+    Direction,
+    TxnType,
+)
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Fixtures — in-memory SQLite, overridden session, TestClient
+# ───────────────────────────────────────────────────────────────────────────
+
+@pytest.fixture(name="engine")
+def in_memory_engine():
+    """Create a fresh in-memory SQLite engine for each test.
+
+    StaticPool ensures every connection from this engine shares the same
+    in-memory database (by default, each connection to "sqlite://" gets
+    its own independent DB — not what we want for tests).
+    """
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+    yield engine
+    SQLModel.metadata.drop_all(engine)
+    engine.dispose()
+
+
+@pytest.fixture(name="session")
+def db_session(engine):
+    """Yield a Session bound to the in-memory engine."""
+    with Session(engine) as session:
+        yield session
+
+
+@pytest.fixture(name="client")
+def api_client(engine):
+    """FastAPI TestClient with the DB session overridden to use in-memory SQLite.
+
+    We also need to create the tables on the test engine because the app's
+    lifespan init_db() runs against the production engine, not our test one.
+    The in_memory_engine fixture already calls create_all(), so tables exist.
+    We just need to wire the session override so all API requests hit them.
+    """
+    def _override_session():
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _override_session
+
+    # Temporarily neuter init_db() so the lifespan doesn't try to create
+    # tables on the production engine (which would touch a real DB file).
+    import api.database as _db_mod
+    _original_init = _db_mod.init_db
+    _db_mod.init_db = lambda: None
+
+    with TestClient(app) as c:
+        yield c
+
+    _db_mod.init_db = _original_init
+    app.dependency_overrides.clear()
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Factory helpers — build CanonicalTransaction and DB rows easily
+# ───────────────────────────────────────────────────────────────────────────
+
+def _make_canonical(
+    *,
+    txn_date: str = "2025-03-15",
+    raw_description: str = "UPI/123456/Swiggy/sbi@ybl",
+    amount: str = "450.00",
+    account_id: str = "HDFC_SAL_3703",
+    direction: Direction = Direction.OUTFLOW,
+    txn_type: TxnType | None = TxnType.UPI_EXPENSE,
+    channel: Channel | None = Channel.UPI,
+    counterparty: str | None = "Swiggy",
+    counterparty_category: CounterpartyCategory | None = CounterpartyCategory.SWIGGY,
+) -> CanonicalTransaction:
+    return CanonicalTransaction(
+        txn_id="T_00000001",
+        txn_date=datetime.date.fromisoformat(txn_date),
+        account_id=account_id,
+        source_statement="HDFC_Statement.txt",
+        direction=direction,
+        amount=Decimal(amount),
+        currency="INR",
+        txn_type=txn_type,
+        channel=channel,
+        counterparty=counterparty,
+        counterparty_category=counterparty_category,
+        raw_description=raw_description,
+    )
+
+
+def _seed_db_transaction(session: Session, **overrides) -> Transaction:
+    """Insert a Transaction row directly (bypassing the pipeline)."""
+    defaults = {
+        "content_hash": "abc123",
+        "txn_date": datetime.date(2025, 3, 15),
+        "account_id": "HDFC_SAL_3703",
+        "source_statement": "HDFC_Statement.txt",
+        "direction": "OUTFLOW",
+        "amount": 450.0,
+        "currency": "INR",
+        "txn_type": "UPI_EXPENSE",
+        "channel": "UPI",
+        "counterparty": "Swiggy",
+        "counterparty_category": "Swiggy",
+        "raw_description": "UPI/123456/Swiggy/sbi@ybl",
+        "is_reviewed": True,
+    }
+    defaults.update(overrides)
+    txn = Transaction(**defaults)
+    session.add(txn)
+    session.commit()
+    session.refresh(txn)
+    return txn
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DB Writer Tests
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestContentHash:
+    def test_deterministic(self):
+        """Same input always produces the same hash."""
+        txn = _make_canonical()
+        assert compute_content_hash(txn) == compute_content_hash(txn)
+
+    def test_different_amount_different_hash(self):
+        """Changing any component of the natural key changes the hash."""
+        txn_a = _make_canonical(amount="450.00")
+        txn_b = _make_canonical(amount="451.00")
+        assert compute_content_hash(txn_a) != compute_content_hash(txn_b)
+
+    def test_different_date_different_hash(self):
+        txn_a = _make_canonical(txn_date="2025-03-15")
+        txn_b = _make_canonical(txn_date="2025-03-16")
+        assert compute_content_hash(txn_a) != compute_content_hash(txn_b)
+
+
+class TestWriteToDb:
+    def test_basic_insert(self, session: Session):
+        """A single transaction is inserted with correct fields."""
+        txn = _make_canonical()
+        run = write_to_db([txn], source_key="hdfc_savings", llm_model="none", session=session)
+
+        assert run.status == "completed"
+        assert run.txn_count == 1
+        assert run.new_count == 1
+        assert run.txn_date_min == datetime.date(2025, 3, 15)
+        assert run.txn_date_max == datetime.date(2025, 3, 15)
+
+        # Verify the row is in the DB
+        db_txn = session.get(Transaction, 1)
+        assert db_txn is not None
+        assert db_txn.counterparty == "Swiggy"
+        assert db_txn.amount == 450.0
+        assert db_txn.direction == "OUTFLOW"
+
+    def test_dedup_skips_existing(self, session: Session):
+        """Re-inserting the same transaction is a no-op (idempotent)."""
+        txn = _make_canonical()
+        run_1 = write_to_db([txn], source_key="hdfc_savings", llm_model="none", session=session)
+        run_2 = write_to_db([txn], source_key="hdfc_savings", llm_model="none", session=session)
+
+        assert run_1.new_count == 1
+        assert run_2.new_count == 0       # skipped as duplicate
+        assert run_2.updated_count == 0   # all fields already filled
+        assert run_2.txn_count == 1       # still processed 1
+
+    def test_backfill_fills_nulls_without_overwriting(self, session: Session):
+        """Re-running with richer data fills NULL fields but never overwrites existing values."""
+        # First run: insert with no counterparty or category (simulates rules-only)
+        txn_sparse = _make_canonical(
+            counterparty=None,
+            counterparty_category=None,
+            txn_type=None,
+        )
+        run_1 = write_to_db([txn_sparse], source_key="hdfc_savings", llm_model="none", session=session)
+        assert run_1.new_count == 1
+
+        db_txn = session.get(Transaction, 1)
+        assert db_txn.counterparty is None
+        assert db_txn.counterparty_category is None
+        assert db_txn.txn_type is None
+
+        # Second run: same transaction but now with LLM-filled fields
+        txn_rich = _make_canonical(
+            counterparty="Swiggy",
+            counterparty_category=CounterpartyCategory.SWIGGY,
+            txn_type=TxnType.UPI_EXPENSE,
+        )
+        run_2 = write_to_db([txn_rich], source_key="hdfc_savings", llm_model="auto", session=session)
+
+        assert run_2.new_count == 0       # not a new insert
+        assert run_2.updated_count == 1   # one row was backfilled
+
+        session.refresh(db_txn)
+        assert db_txn.counterparty == "Swiggy"
+        assert db_txn.counterparty_category == "Swiggy"
+        assert db_txn.txn_type == "UPI_EXPENSE"
+
+    def test_backfill_does_not_overwrite_existing_values(self, session: Session):
+        """Backfill must not clobber a value that was already set (e.g. manual edit)."""
+        txn_original = _make_canonical(counterparty="Swiggy")
+        write_to_db([txn_original], source_key="hdfc_savings", llm_model="none", session=session)
+
+        # Simulate a re-run where the LLM returns a different counterparty
+        txn_different = _make_canonical(counterparty="Zomato")
+        run_2 = write_to_db([txn_different], source_key="hdfc_savings", llm_model="auto", session=session)
+
+        assert run_2.updated_count == 0  # nothing to backfill — already filled
+
+        db_txn = session.get(Transaction, 1)
+        assert db_txn.counterparty == "Swiggy"  # original value preserved
+
+    def test_different_txns_both_inserted(self, session: Session):
+        """Two distinct transactions both get inserted."""
+        txn_a = _make_canonical(raw_description="UPI/111/Swiggy", amount="100.00")
+        txn_b = _make_canonical(raw_description="UPI/222/Zomato", amount="200.00")
+        run = write_to_db([txn_a, txn_b], source_key="hdfc_savings", llm_model="none", session=session)
+
+        assert run.new_count == 2
+        assert run.txn_count == 2
+
+    def test_pipeline_run_linked(self, session: Session):
+        """Transaction row is linked to the correct PipelineRun."""
+        txn = _make_canonical()
+        run = write_to_db([txn], source_key="hdfc_savings", llm_model="none", session=session)
+
+        db_txn = session.get(Transaction, 1)
+        assert db_txn.pipeline_run_id == run.id
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# API Endpoint Tests
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestHealthCheck:
+    def test_health(self, client: TestClient):
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+
+
+class TestTransactionList:
+    def test_empty_db(self, client: TestClient):
+        """Empty DB returns zero items with correct pagination metadata."""
+        resp = client.get("/api/transactions")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 0
+        assert data["items"] == []
+        assert data["page"] == 1
+
+    def test_returns_seeded_data(self, client: TestClient, session: Session):
+        """Seeded transactions show up in the list endpoint."""
+        _seed_db_transaction(session, content_hash="hash1", counterparty="Swiggy")
+        _seed_db_transaction(session, content_hash="hash2", counterparty="Zomato")
+
+        resp = client.get("/api/transactions")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 2
+        assert len(data["items"]) == 2
+
+    def test_filter_by_direction(self, client: TestClient, session: Session):
+        _seed_db_transaction(session, content_hash="h1", direction="OUTFLOW")
+        _seed_db_transaction(session, content_hash="h2", direction="INFLOW")
+
+        resp = client.get("/api/transactions", params={"direction": "INFLOW"})
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["items"][0]["direction"] == "INFLOW"
+
+    def test_filter_by_date_range(self, client: TestClient, session: Session):
+        _seed_db_transaction(session, content_hash="h1", txn_date=datetime.date(2025, 1, 15))
+        _seed_db_transaction(session, content_hash="h2", txn_date=datetime.date(2025, 6, 15))
+
+        resp = client.get("/api/transactions", params={
+            "date_from": "2025-05-01",
+            "date_to": "2025-12-31",
+        })
+        data = resp.json()
+        assert data["total"] == 1
+
+    def test_search_text(self, client: TestClient, session: Session):
+        _seed_db_transaction(session, content_hash="h1", counterparty="Swiggy", raw_description="UPI/Swiggy")
+        _seed_db_transaction(session, content_hash="h2", counterparty="Zomato", raw_description="UPI/Zomato")
+
+        resp = client.get("/api/transactions", params={"search": "swiggy"})
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["items"][0]["counterparty"] == "Swiggy"
+
+    def test_pagination(self, client: TestClient, session: Session):
+        for i in range(5):
+            _seed_db_transaction(session, content_hash=f"h{i}")
+
+        resp = client.get("/api/transactions", params={"page": 1, "page_size": 2})
+        data = resp.json()
+        assert data["total"] == 5
+        assert len(data["items"]) == 2
+        assert data["total_pages"] == 3
+
+
+class TestTransactionGetOne:
+    def test_found(self, client: TestClient, session: Session):
+        txn = _seed_db_transaction(session)
+        resp = client.get(f"/api/transactions/{txn.id}")
+        assert resp.status_code == 200
+        assert resp.json()["counterparty"] == "Swiggy"
+
+    def test_not_found(self, client: TestClient):
+        resp = client.get("/api/transactions/9999")
+        assert resp.status_code == 404
+
+
+class TestTransactionPatch:
+    def test_update_counterparty(self, client: TestClient, session: Session):
+        txn = _seed_db_transaction(session)
+        resp = client.patch(
+            f"/api/transactions/{txn.id}",
+            json={"counterparty": "Zomato", "counterparty_category": "Food & Dining"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["counterparty"] == "Zomato"
+        assert data["counterparty_category"] == "Food & Dining"
+
+    def test_update_not_found(self, client: TestClient):
+        resp = client.patch("/api/transactions/9999", json={"notes": "test"})
+        assert resp.status_code == 404
+
+    def test_update_preserves_other_fields(self, client: TestClient, session: Session):
+        """Updating one field doesn't clobber others."""
+        txn = _seed_db_transaction(session, counterparty="Swiggy", notes="original")
+        resp = client.patch(
+            f"/api/transactions/{txn.id}",
+            json={"notes": "updated"},
+        )
+        data = resp.json()
+        assert data["notes"] == "updated"
+        assert data["counterparty"] == "Swiggy"  # untouched
+
+
+class TestBulkUpdate:
+    def test_bulk_update(self, client: TestClient, session: Session):
+        t1 = _seed_db_transaction(session, content_hash="h1", is_reviewed=True)
+        t2 = _seed_db_transaction(session, content_hash="h2", is_reviewed=True)
+
+        resp = client.patch("/api/transactions/bulk", json={
+            "ids": [t1.id, t2.id],
+            "update": {"is_reviewed": False},
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert set(data["updated"]) == {t1.id, t2.id}
+        assert data["not_found"] == []
+
+    def test_bulk_update_partial_not_found(self, client: TestClient, session: Session):
+        t1 = _seed_db_transaction(session, content_hash="h1")
+        resp = client.patch("/api/transactions/bulk", json={
+            "ids": [t1.id, 9999],
+            "update": {"notes": "bulk test"},
+        })
+        data = resp.json()
+        assert data["updated"] == [t1.id]
+        assert data["not_found"] == [9999]
+
+
+class TestPipelineRunsList:
+    def test_empty(self, client: TestClient):
+        resp = client.get("/api/pipeline/runs")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_lists_runs(self, client: TestClient, session: Session):
+        run = PipelineRun(source_key="hdfc_savings", llm_model="none", status="completed")
+        session.add(run)
+        session.commit()
+
+        resp = client.get("/api/pipeline/runs")
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["source_key"] == "hdfc_savings"
+        assert data[0]["status"] == "completed"
+
+
+class TestPipelineRunDetail:
+    def test_found(self, client: TestClient, session: Session):
+        run = PipelineRun(source_key="icici_savings", llm_model="auto", status="running")
+        session.add(run)
+        session.commit()
+        session.refresh(run)
+
+        resp = client.get(f"/api/pipeline/runs/{run.id}")
+        assert resp.status_code == 200
+        assert resp.json()["source_key"] == "icici_savings"
+
+    def test_not_found(self, client: TestClient):
+        resp = client.get("/api/pipeline/runs/9999")
+        assert resp.status_code == 404
+
+
+class TestPipelineTrigger:
+    def test_invalid_source(self, client: TestClient):
+        resp = client.post("/api/pipeline/run", json={"source_key": "nope"})
+        assert resp.status_code == 400
+
+    def test_valid_source_returns_run_ids(self, client: TestClient):
+        """Triggering a valid source returns run IDs (the background thread
+        will fail because we don't have real data files, but the API response
+        itself should be immediate and correct)."""
+        resp = client.post("/api/pipeline/run", json={
+            "source_key": "hdfc_savings",
+            "llm_model": "none",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["run_ids"]) == 1
+        assert "Pipeline started" in data["message"]

@@ -2,14 +2,17 @@
 CLI entry point for the raw-to-canonical pipeline.
 
 Usage:
-    python3 -m pipeline.run                          # default: auto fallback chain
-    python3 -m pipeline.run --source hdfc_savings     # explicit source
-    python3 -m pipeline.run --validate                # also run validator vs GSheet
-    python3 -m pipeline.run --llm gemini-3.1-flash-lite  # force a specific model
-    python3 -m pipeline.run --llm none                # rules-only, no LLM
+    python3 -m pipeline.run                                # default source, write to DB
+    python3 -m pipeline.run --source hdfc_savings           # explicit source
+    python3 -m pipeline.run --all-sources                   # run all 4 sources sequentially
+    python3 -m pipeline.run --all-sources --llm none        # fast rules-only pass for all
+    python3 -m pipeline.run --csv                           # legacy CSV output instead of DB
+    python3 -m pipeline.run --validate                      # also run validator vs GSheet
+    python3 -m pipeline.run --llm gemini-3.1-flash-lite     # force a specific model
+    python3 -m pipeline.run --llm none                      # rules-only, no LLM
 
 The pipeline stages run in order:
-    1. Parse  →  2. Transform  →  3. Rules classify  →  4. LLM classify  →  5. Write CSV
+    1. Parse  →  2. Transform  →  3. Rules classify  →  4. LLM classify  →  5. Write (DB or CSV)
     (optional)  6. Validate against GSheet benchmark
 """
 
@@ -21,21 +24,24 @@ import time
 
 from pipeline import config
 from pipeline.llm_classifier import classify_llm
+from pipeline.models import CanonicalTransaction
 from pipeline.parsers import PARSER_REGISTRY
 from pipeline.rules_classifier import classify_rules
 from pipeline.transformer import transform
-from pipeline.validator import print_report, validate
 from pipeline.writer import write_csv
 
 
-def main(argv: list[str] | None = None) -> None:
-    args = _parse_args(argv)
+def _run_single_source(
+    source_key: str,
+    *,
+    input_file: str | None = None,
+    write_to_csv: bool = False,
+    output_file: str | None = None,
+) -> list[CanonicalTransaction]:
+    """Run the full pipeline for one source and persist results.
 
-    # Allow CLI to override the LLM model
-    if args.llm:
-        config.LLM_MODEL = args.llm
-
-    source_key = args.source
+    Returns the list of enriched transactions (useful for validation).
+    """
     if source_key not in PARSER_REGISTRY:
         print(f"Unknown source: {source_key!r}")
         print(f"Available: {list(PARSER_REGISTRY)}")
@@ -45,17 +51,15 @@ def main(argv: list[str] | None = None) -> None:
     parser_cls = PARSER_REGISTRY[source_key]
     parser = parser_cls()
 
-    # Resolve input file
-    input_file = args.input or config.DATA_DIR / source_cfg["source_statement"]
-
-    print(f"Pipeline: source={source_key}  llm={config.LLM_MODEL}  file={input_file}")
+    resolved_input = input_file or config.DATA_DIR / source_cfg["source_statement"]
+    print(f"Pipeline: source={source_key}  llm={config.LLM_MODEL}  file={resolved_input}")
     print()
 
     t0 = time.time()
 
     # ── Stage 1: Parse ──────────────────────────────────────────────
     print("[1/5] Parsing...")
-    parsed = parser.parse(input_file)
+    parsed = parser.parse(resolved_input)
     print(f"      → {len(parsed)} rows parsed")
 
     # ── Stage 2: Transform ──────────────────────────────────────────
@@ -86,20 +90,65 @@ def main(argv: list[str] | None = None) -> None:
     print(f"      → counterparty filled: {filled_cp}/{len(canonical)}")
     print(f"      → category filled: {filled_cat}/{len(canonical)}")
 
-    # ── Stage 5: Write CSV ──────────────────────────────────────────
-    output_file = args.output or config.OUTPUT_DIR / f"transactions_{source_key}.csv"
-    print(f"[5/5] Writing CSV → {output_file}")
-    write_csv(canonical, output_file)
+    # ── Stage 5: Write ──────────────────────────────────────────────
+    if write_to_csv:
+        csv_path = output_file or config.OUTPUT_DIR / f"transactions_{source_key}.csv"
+        print(f"[5/5] Writing CSV → {csv_path}")
+        write_csv(canonical, csv_path)
+    else:
+        print("[5/5] Writing to SQLite DB...")
+        from api.database import get_engine, init_db
+        from pipeline.db_writer import write_to_db
+        from sqlmodel import Session
+
+        init_db()
+        with Session(get_engine()) as session:
+            run = write_to_db(
+                canonical,
+                source_key=source_key,
+                llm_model=config.LLM_MODEL,
+                session=session,
+            )
+        print(f"      → {run.new_count} new rows inserted, {run.updated_count} rows backfilled ({run.txn_count} total processed)")
+        print(f"      → pipeline_run id={run.id}")
 
     elapsed = time.time() - t0
     print(f"\nDone in {elapsed:.1f}s")
+    return canonical
 
-    # ── Optional: Validate ──────────────────────────────────────────
-    if args.validate:
-        benchmark = args.benchmark or config.GSHEET_BENCHMARK_FILE
-        print(f"\nValidating against {benchmark}...")
-        result = validate(canonical, benchmark)
-        print_report(result)
+
+def main(argv: list[str] | None = None) -> None:
+    args = _parse_args(argv)
+
+    if args.llm:
+        config.LLM_MODEL = args.llm
+
+    write_to_csv = args.csv
+
+    if args.all_sources:
+        # Run every source in SOURCE_CONFIGS sequentially
+        print(f"Running all {len(config.SOURCE_CONFIGS)} sources...\n")
+        for i, source_key in enumerate(config.SOURCE_CONFIGS, 1):
+            print(f"{'=' * 60}")
+            print(f"  Source {i}/{len(config.SOURCE_CONFIGS)}: {source_key}")
+            print(f"{'=' * 60}")
+            _run_single_source(source_key, write_to_csv=write_to_csv)
+            print()
+    else:
+        canonical = _run_single_source(
+            args.source,
+            input_file=args.input,
+            write_to_csv=write_to_csv,
+            output_file=args.output,
+        )
+
+        # ── Optional: Validate ──────────────────────────────────────
+        if args.validate:
+            from pipeline.validator import print_report, validate
+            benchmark = args.benchmark or config.GSHEET_BENCHMARK_FILE
+            print(f"\nValidating against {benchmark}...")
+            result = validate(canonical, benchmark)
+            print_report(result)
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -111,16 +160,24 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Source key (default: hdfc_savings)",
     )
     p.add_argument(
+        "--all-sources", action="store_true",
+        help="Run all sources in SOURCE_CONFIGS sequentially",
+    )
+    p.add_argument(
         "--input", type=str, default=None,
-        help="Override input file path",
+        help="Override input file path (single-source mode only)",
     )
     p.add_argument(
         "--output", type=str, default=None,
-        help="Override output CSV path",
+        help="Override output CSV path (requires --csv)",
+    )
+    p.add_argument(
+        "--csv", action="store_true",
+        help="Write to CSV instead of SQLite (legacy mode)",
     )
     p.add_argument(
         "--llm", type=str, default=None,
-        help="Override LLM model (auto, none, or a specific model key like gemini-3.1-flash-lite)",
+        help="Override LLM model (auto, none, or a specific model key)",
     )
     p.add_argument(
         "--validate", action="store_true",

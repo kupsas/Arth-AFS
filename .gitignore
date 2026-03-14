@@ -43,3 +43,6 @@ data/test/benchmark_*.csv
 data/output/
 data/.llm_cache/
 
+# SQLite database files (real data — never commit)
+data/*.db
+

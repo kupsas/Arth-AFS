@@ -26,7 +26,28 @@ class HDFCSavingsParser(BaseParser):
         return "hdfc_savings"
 
     def parse(self, file_path: str | Path) -> list[ParsedTransaction]:
-        file_path = Path(file_path)
+        """Accept either a single .txt file or a directory of yearly .txt files.
+
+        In directory mode, all matching files are parsed and results are merged
+        and sorted chronologically before being returned — same pattern as the CC parser.
+        """
+        path = Path(file_path)
+
+        if path.is_dir():
+            rows: list[ParsedTransaction] = []
+            # Sort so FY files are processed in chronological order.
+            for txt_file in sorted(path.glob("*.txt")):
+                rows.extend(self._parse_file(txt_file))
+            return sorted(rows, key=lambda r: r.txn_date)
+
+        return self._parse_file(path)
+
+    # ------------------------------------------------------------------
+    # Per-file parsing
+    # ------------------------------------------------------------------
+
+    def _parse_file(self, file_path: Path) -> list[ParsedTransaction]:
+        """Parse a single HDFC savings .txt statement and return all transactions."""
         rows: list[ParsedTransaction] = []
 
         with open(file_path, encoding="utf-8") as fh:
