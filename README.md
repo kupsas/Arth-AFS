@@ -5,7 +5,7 @@ Personal finance transaction pipeline with a SQLite database and FastAPI backend
 ## Quick Start
 
 ```bash
-# 1. Install dependencies
+# 1. Install Python dependencies
 python3 -m pip install -r requirements.txt
 
 # 2. Set up API keys
@@ -17,9 +17,23 @@ python3 -m pipeline.run --all-sources          # full pipeline with LLM
 python3 -m pipeline.run --all-sources --llm none  # rules-only, no LLM
 
 # 4. Run the API server
-uvicorn api.main:app --reload --port 8000
+python3 -m uvicorn api.main:app --reload --port 8000
 # Swagger UI at http://localhost:8000/docs
+
+# 5. (Optional) Run the dashboard UI
+cd dashboard && npm install && npm run dev
+# Dashboard at http://localhost:3000
 ```
+
+## Dashboard (Phase 3)
+
+A Next.js + shadcn/ui frontend lives in `dashboard/`. It talks to the FastAPI backend and provides:
+
+- **Overview page** — summary cards (income / expense / net / savings rate with MoM delta), category breakdown chart, monthly trend chart, top counterparties table
+- **Transactions page** — server-side paginated data table with search, multi-filter bar, sortable columns, row selection, bulk "Mark Reviewed", and a slide-in edit panel
+- **Review Queue** — card-based view of unreviewed transactions with one-click approve, edit-and-approve, or skip
+
+See [`dashboard/README.md`](dashboard/README.md) for setup instructions.
 
 ## How It Works
 
@@ -128,6 +142,12 @@ Arth-api/
     personal-data/           Raw bank statements + GSheet ground truth (gitignored symlink)
     evaluations/             Archived benchmark results & evaluation tools
     data-notes/              Design notes from earlier work
+
+  dashboard/                 # Next.js 16.2 UI dashboard (Phase 3)
+    src/app/                   Pages: /, /transactions, /review
+    src/components/            Layout shell, dashboard charts, transaction table, review cards
+    src/hooks/                 React Query hooks (useTransactions, useMetrics…)
+    src/lib/                   TypeScript types, API client, formatting utilities
 
   .env / .env.example        API keys and config (`.env` gitignored)
   requirements.txt           Python dependencies

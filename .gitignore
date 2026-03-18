@@ -46,3 +46,10 @@ data/.llm_cache/
 # SQLite database files (real data — never commit)
 data/*.db
 
+# Next.js dashboard build artifacts and nested git repo
+dashboard/node_modules/
+dashboard/.next/
+dashboard/.env*.local
+# dashboard has its own git history — exclude it from the root repo
+dashboard/.git/
+
