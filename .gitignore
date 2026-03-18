@@ -46,3 +46,11 @@ data/.llm_cache/
 # SQLite database files (real data — never commit)
 data/*.db
 
+# Gmail OAuth credentials and token (never commit — contains secrets)
+data/gmail_credentials.json
+data/gmail_token.json
+
+# Real bank alert HTML (PII / account hints) — keep on your machine only.
+# Use scripts/discover_emails.py to populate locally; never commit samples.
+tests/fixtures/email_samples/
+
