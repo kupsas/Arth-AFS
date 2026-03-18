@@ -1,0 +1,112 @@
+# Arth Dashboard
+
+Next.js + shadcn/ui dashboard for the Arth personal finance pipeline. Surfaces spending insights, a searchable transaction table with inline editing, and a review queue for unreviewed transactions.
+
+## Stack
+
+| Layer | Choice |
+|-------|--------|
+| Framework | Next.js 16.2 (App Router, TypeScript) |
+| UI | shadcn/ui → base-ui (see note below) |
+| Styling | Tailwind CSS v4 (CSS-based config) |
+| Charts | Recharts (via shadcn chart components) |
+| Data table | TanStack Table v8 |
+| Data fetching | TanStack Query (React Query v5) |
+| Theme | next-themes, defaults to dark |
+
+> **shadcn/ui uses `@base-ui/react`** on this install, not the default Radix UI primitives. TooltipTrigger is already a `<button>` — do NOT nest a `<Button>` inside it.
+
+## Quick Start
+
+```bash
+# 1. Install dependencies (from the dashboard/ directory)
+cd dashboard
+npm install
+
+# 2. Start the dev server
+npm run dev
+# → http://localhost:3000
+
+# 3. The dashboard talks to the FastAPI backend at http://localhost:8000
+#    Make sure the backend is running (see root README) before opening the app.
+```
+
+## Starting the Backend
+
+The dashboard fetches data from the FastAPI backend. In a separate terminal:
+
+```bash
+# From the repo root (Arth-ui-dashboard/)
+python3 -m uvicorn api.main:app --port 8000 --reload
+# Swagger UI → http://localhost:8000/docs
+```
+
+> Use `python3 -m uvicorn` (not `uvicorn` directly). The global `uvicorn` binary
+> may point to a different Python version than your SQLModel/FastAPI install.
+
+## Pages
+
+| Route | Description |
+|-------|-------------|
+| `/` | Dashboard — summary cards, category breakdown chart, monthly trend, top counterparties |
+| `/transactions` | Full transaction table with filters, sorting, pagination, and inline editing |
+| `/review` | Review queue — card-based view of unreviewed transactions with approve/edit/skip actions |
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Base URL of the FastAPI backend |
+
+Create a `.env.local` file in `dashboard/` to override:
+
+```bash
+NEXT_PUBLIC_API_URL=http://localhost:8000
+```
+
+## Project Structure
+
+```
+dashboard/src/
+  app/
+    layout.tsx                # Root shell: Providers + Sidebar + Header
+    page.tsx                  # Dashboard page (charts + summary cards)
+    globals.css               # Tailwind v4 + shadcn oklch theme vars
+    transactions/page.tsx     # Transactions table page
+    review/page.tsx           # Review queue page
+  components/
+    layout/
+      sidebar.tsx             # Fixed left nav
+      header.tsx              # Page title + theme toggle
+      theme-toggle.tsx        # Dark/light mode button
+    providers.tsx             # QueryClient + ThemeProvider + TooltipProvider
+    dashboard/                # Dashboard-specific components
+      date-range-picker.tsx
+      summary-cards.tsx
+      category-breakdown-chart.tsx
+      monthly-trend-chart.tsx
+      top-counterparties-table.tsx
+    transactions/             # Transaction table components
+      transaction-table.tsx   # TanStack Table data table
+      transaction-filters.tsx # Filter bar (search, dropdowns, date range)
+      transaction-edit-sheet.tsx  # Slide-in edit panel
+    review/                   # Review queue components
+      review-card.tsx         # Individual transaction card (approve/edit/skip)
+    ui/                       # shadcn UI primitives (21 components)
+  hooks/
+    use-transactions.ts       # React Query hooks for transaction endpoints
+    use-metrics.ts            # React Query hooks for metrics endpoints
+  lib/
+    types.ts                  # Shared TypeScript types (mirrors Python models)
+    api.ts                    # Typed HTTP client
+    utils.ts                  # cn(), formatCurrency, formatDate, categoryColor, etc.
+```
+
+## Key Implementation Notes
+
+- **Date range presets** — "This Month", "Last Month", "Last 3M", "Last 6M" or custom via calendar popover.
+- **Server-side pagination + sorting** — TanStack Table is used for column definitions and row selection only; the actual data operations happen on the backend.
+- **Optimistic cache updates** — `useUpdateTransaction` writes the updated transaction into the React Query cache immediately, then invalidates list queries in the background.
+- **Review queue skip** — "Skip" is local state only (no PATCH). Cards reappear on refresh. This is intentional: skip means "deal with later", not "reviewed".
+- **Currency formatting** — Indian number system (lakhs/crores) using `Intl.NumberFormat("en-IN")`.
+- **CC double-counting** — `CARD_EXPENSE` is included in expense totals; `CARD_PAYMENT` (the CC bill payment) is excluded (it's a self-transfer between your own accounts).

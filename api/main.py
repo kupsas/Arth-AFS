@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.database import init_db
-from api.routes import pipeline, transactions
+from api.routes import metrics, pipeline, transactions
 from api.routes.scraper import router as scraper_router
 from scraper.scheduler import shutdown_scheduler, start_scheduler
 
@@ -64,8 +64,9 @@ app.add_middleware(
 # Routes
 # ---------------------------------------------------------------------------
 app.include_router(transactions.router, prefix="/api/transactions", tags=["Transactions"])
-app.include_router(pipeline.router,      prefix="/api/pipeline",      tags=["Pipeline"])
-app.include_router(scraper_router,       prefix="/api/scraper",        tags=["Scraper"])
+app.include_router(metrics.router,      prefix="/api/metrics",       tags=["Metrics"])
+app.include_router(pipeline.router,     prefix="/api/pipeline",      tags=["Pipeline"])
+app.include_router(scraper_router,      prefix="/api/scraper",       tags=["Scraper"])
 
 
 # ---------------------------------------------------------------------------

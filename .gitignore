@@ -54,3 +54,10 @@ data/gmail_token.json
 # Use scripts/discover_emails.py to populate locally; never commit samples.
 tests/fixtures/email_samples/
 
+# Next.js dashboard build artifacts and nested git repo
+dashboard/node_modules/
+dashboard/.next/
+dashboard/.env*.local
+# dashboard has its own git history — exclude it from the root repo
+dashboard/.git/
+
