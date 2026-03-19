@@ -3,7 +3,7 @@
  *
  * Layout (top → bottom):
  *   1. Date Range Picker (top-right, controls everything below)
- *   2. Summary Cards (4-up grid: Income / Expense / Net / Savings Rate)
+ *   2. Summary Cards (4-up grid: Inflow / Outflow / Savings / Savings Rate)
  *   3. Two-column row:
  *        Left  (~60%): Category Breakdown horizontal bar chart
  *        Right (~40%): Top Counterparties table
@@ -124,7 +124,7 @@ export default function DashboardPage() {
               {deficitData.months_with_deficit} of the last{" "}
               {deficitData.total_months} months
             </strong>{" "}
-            had spending that exceeded income — totalling a{" "}
+            had outflow that exceeded inflow — totalling a{" "}
             <strong>{formatCurrency(deficitData.total_deficit)}</strong>{" "}
             shortfall.
             {deficitData.deficit_months.length > 0 && (

@@ -189,16 +189,17 @@ export interface DateRange {
  * GET /api/metrics/summary
  * High-level financial snapshot for a date range.
  *
- * Note: savings_rate is a 0–100 percentage (e.g. 42.5 = 42.5% saved),
- * NOT a 0–1 fraction. The backend computes: (income - expense) / income * 100
+ * savings_rate = total_savings / income * 100 (what % of income went to investments).
+ * total_savings = OUTFLOW to Asset Markets (equities, MFs).
  */
 export interface MetricsSummary {
   date_from: string;       // "YYYY-MM-DD" — echoed back from the request (or defaulted)
   date_to: string;         // "YYYY-MM-DD"
   total_income: number;
   total_expense: number;
+  total_savings: number;   // OUTFLOW to Asset Markets (investments)
   net: number;
-  savings_rate: number;    // 0–100 percentage (e.g. 42.5 = 42.5% savings rate)
+  savings_rate: number;    // 0–100 percentage (e.g. 42.5 = 42.5% invested)
   txn_count: number;
 }
 
@@ -229,7 +230,7 @@ export interface TopCounterparty {
  * One row from GET /api/metrics/monthly-trend
  * `month` is "YYYY-MM" (e.g. "2025-03").
  *
- * Note: savings_rate is a 0–100 percentage, same as MetricsSummary.
+ * savings_rate = invested % of income (Asset Markets outflows / income).
  * Zero-filled rows are returned for months with no transactions so the
  * frontend can render a smooth chart without gaps.
  */
@@ -238,7 +239,7 @@ export interface MonthlyTrend {
   income: number;
   expense: number;
   net: number;
-  savings_rate: number;  // 0–100 percentage (e.g. 42.5 = 42.5% savings rate)
+  savings_rate: number;  // 0–100 percentage (invested % of income)
 }
 
 /**

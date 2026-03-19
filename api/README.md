@@ -70,7 +70,7 @@ All metrics endpoints accept `date_from` and `date_to` query params (both defaul
 
 | Method | Path | Description | Key params |
 |---|---|---|---|
-| `GET` | `/summary` | Total income, expense, net, savings rate, txn count | `date_from`, `date_to` |
+| `GET` | `/summary` | Total income, expense, total_savings (Asset Markets outflows), net, savings rate, txn count | `date_from`, `date_to` |
 | `GET` | `/by-category` | Spending or income ranked by category with percentages | `date_from`, `date_to`, `direction` |
 | `GET` | `/top-counterparties` | Top N merchants by spend (OUTFLOW only) | `date_from`, `date_to`, `limit` |
 | `GET` | `/monthly-trend` | Month-by-month income vs expense, zero-filled for empty months | `months` (default 12, max 36) |

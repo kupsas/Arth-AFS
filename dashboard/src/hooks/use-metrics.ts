@@ -74,8 +74,8 @@ export const metricsKeys = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Returns { total_income, total_expense, net, savings_rate, txn_count }
- * for the given date range.
+ * Returns { total_income, total_expense, total_savings, net, savings_rate, txn_count }
+ * for the given date range. savings_rate = invested % of income (Asset Markets outflows).
  *
  * Defaults to the current month when no date range is provided
  * (the backend handles this default).

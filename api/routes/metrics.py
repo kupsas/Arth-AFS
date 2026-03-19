@@ -40,6 +40,11 @@ _INCOME_EXCLUSIONS: tuple[str, ...] = ("SELF_TRANSFER",)
 # txn_types excluded from expense totals (these outflows aren't real spending)
 _EXPENSE_EXCLUSIONS: tuple[str, ...] = ("CARD_PAYMENT", "SELF_TRANSFER")
 
+# counterparty_category values that count as "savings" (money invested).
+# Asset Markets = equities, MFs via ICICI Direct. Add others if needed
+# (e.g. "Financial Services, Insurance & Banking" for PPF, insurance with savings component).
+_SAVINGS_CATEGORIES: tuple[str, ...] = ("Asset Markets",)
+
 
 # ───────────────────────────────────────────────────────────────────────────
 # Response schemas (what each endpoint returns as JSON)
@@ -50,8 +55,9 @@ class MetricsSummary(BaseModel):
     date_to: str
     total_income: float
     total_expense: float
+    total_savings: float   # sum of OUTFLOW to Asset Markets (investments)
     net: float
-    savings_rate: float   # e.g. 42.5 means 42.5%
+    savings_rate: float   # total_savings / income * 100 (e.g. 42.5 = 42.5% invested)
     txn_count: int        # income + expense transaction count combined
 
 
@@ -109,11 +115,26 @@ def _current_month_range() -> tuple[datetime.date, datetime.date]:
     return today.replace(day=1), today
 
 
-def _savings_rate(income: float, expense: float) -> float:
-    """Percentage of income kept after expenses. Returns 0.0 when income = 0."""
+def _savings_rate(income: float, total_savings: float) -> float:
+    """
+    Percentage of income that went into savings (investments).
+    savings = OUTFLOW to Asset Markets. Returns 0.0 when income = 0.
+    """
     if income <= 0:
         return 0.0
-    return round((income - expense) / income * 100, 2)
+    return round(total_savings / income * 100, 2)
+
+
+def _savings_where(q):
+    """
+    Narrow a query to savings transactions: OUTFLOW with counterparty_category
+    in _SAVINGS_CATEGORIES (e.g. Asset Markets = equities, MFs).
+    CARD_PAYMENT and SELF_TRANSFER are categorised as Self Transfer, not Asset Markets,
+    so the category filter is sufficient.
+    """
+    return q.where(Transaction.direction == "OUTFLOW").where(
+        col(Transaction.counterparty_category).in_(_SAVINGS_CATEGORIES)
+    )
 
 
 def _income_where(q):
@@ -217,6 +238,15 @@ def get_summary(
     )
     expense_sum, expense_count = session.exec(expense_q).one()
 
+    # ── Savings (OUTFLOW to Asset Markets) ───────────────────────────────
+    savings_q = _date_where(
+        _savings_where(
+            select(func.coalesce(func.sum(Transaction.amount), 0.0))
+        ),
+        date_from, date_to,
+    )
+    total_savings = round(float(session.exec(savings_q).one() or 0), 2)
+
     total_income = round(float(income_sum), 2)
     total_expense = round(float(expense_sum), 2)
 
@@ -225,8 +255,9 @@ def get_summary(
         date_to=date_to.isoformat(),
         total_income=total_income,
         total_expense=total_expense,
+        total_savings=total_savings,
         net=round(total_income - total_expense, 2),
-        savings_rate=_savings_rate(total_income, total_expense),
+        savings_rate=_savings_rate(total_income, total_savings),
         txn_count=income_count + expense_count,
     )
 
@@ -395,18 +426,29 @@ def get_monthly_trend(
         for row in session.exec(expense_q).all()
     }
 
+    # ── Savings by month (OUTFLOW to Asset Markets) ───────────────────────
+    savings_q = _savings_where(
+        select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+    ).where(Transaction.txn_date >= cutoff).group_by(month_col)
+
+    savings_by_month: dict[str, float] = {
+        row.month: float(row.total or 0)
+        for row in session.exec(savings_q).all()
+    }
+
     # ── Merge into ordered list, zero-filling missing months ─────────────
     result = []
     for label in _generate_month_labels(months):
         income = round(income_by_month.get(label, 0.0), 2)
         expense = round(expense_by_month.get(label, 0.0), 2)
+        savings = round(savings_by_month.get(label, 0.0), 2)
         result.append(
             MonthlyTrendRow(
                 month=label,
                 income=income,
                 expense=expense,
                 net=round(income - expense, 2),
-                savings_rate=_savings_rate(income, expense),
+                savings_rate=_savings_rate(income, savings),
             )
         )
 
