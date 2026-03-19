@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from api.database import init_db
 from api.routes import metrics, pipeline, transactions
@@ -67,6 +68,16 @@ app.include_router(transactions.router, prefix="/api/transactions", tags=["Trans
 app.include_router(metrics.router,      prefix="/api/metrics",       tags=["Metrics"])
 app.include_router(pipeline.router,     prefix="/api/pipeline",      tags=["Pipeline"])
 app.include_router(scraper_router,      prefix="/api/scraper",       tags=["Scraper"])
+
+
+# ---------------------------------------------------------------------------
+# Root — browsers open "/" by default; without this you only get a 404 JSON blob.
+# Redirect to interactive API docs so localhost:8000 immediately looks "alive".
+# ---------------------------------------------------------------------------
+@app.get("/", include_in_schema=False)
+def root_redirect():
+    """Send humans to Swagger UI; machines can still use /health or /api/... ."""
+    return RedirectResponse(url="/docs", status_code=307)
 
 
 # ---------------------------------------------------------------------------
