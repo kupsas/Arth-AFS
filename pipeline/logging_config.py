@@ -5,6 +5,11 @@ Call ``setup_logging()`` once at application startup (e.g. in api/main.py's
 lifespan, or at the top of pipeline/run.py's main()).  Every other module
 just does ``logger = logging.getLogger(__name__)`` — no further config needed.
 
+**Convention:** importable library code (``pipeline/``, ``api/``, ``scraper/``)
+should log, not ``print``.  One-off CLI tools under ``scripts/`` and human-facing
+CLI output (e.g. ``pipeline/validator.py`` reports) may still use ``print`` for
+stdout UX.
+
 Output behaviour:
   - INFO and above → stdout (colourless, human-readable)
   - DEBUG and above → data/logs/arth.log  (rotating, 5MB × 3 backups)

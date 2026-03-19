@@ -55,6 +55,9 @@ data/backups/
 
 # SQLite database files (real data — never commit)
 data/*.db
+# WAL mode creates these alongside the main .db file — machine-local, do not commit
+data/*.db-wal
+data/*.db-shm
 
 # Gmail OAuth credentials and token (never commit — contains secrets)
 data/gmail_credentials.json
