@@ -21,7 +21,7 @@ import datetime
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import case, text
+from sqlalchemy import case
 from sqlmodel import Session, col, func, select
 
 from api.database import get_session
@@ -83,6 +83,20 @@ class AccountRow(BaseModel):
     last_txn_date: str | None
     total_inflow: float
     total_outflow: float
+
+
+class DeficitMonthRow(BaseModel):
+    month: str       # "YYYY-MM"
+    income: float
+    expense: float
+    net: float       # always negative for rows in this list
+
+
+class NegativeSurplusResponse(BaseModel):
+    months_with_deficit: int
+    total_months: int
+    deficit_months: list[DeficitMonthRow]
+    total_deficit: float  # sum of |net| across deficit months (positive number)
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -397,6 +411,72 @@ def get_monthly_trend(
         )
 
     return result
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# GET /negative-surplus-months  (Q11)
+# ───────────────────────────────────────────────────────────────────────────
+
+@router.get("/negative-surplus-months", response_model=NegativeSurplusResponse)
+def get_negative_surplus_months(
+    months: int = Query(
+        12, ge=1, le=36,
+        description="How many trailing months to scan (default 12, max 36)."
+    ),
+    *,
+    session: Session = Depends(get_session),
+):
+    """
+    Months where spending exceeded income (net < 0).
+
+    Answers Q11: "How many of my recent months had a budget deficit?"
+
+    Reuses the same monthly trend query — computes income and expense by month,
+    then filters for months where net < 0.  Returns the count, the list of
+    specific months, and the total deficit amount.
+    """
+    today = datetime.date.today()
+    base_total = today.year * 12 + (today.month - 1)
+    start_total = base_total - (months - 1)
+    start_year, start_mo = divmod(start_total, 12)
+    cutoff = datetime.date(start_year, start_mo + 1, 1)
+
+    month_col = func.strftime("%Y-%m", Transaction.txn_date)
+
+    income_by_month: dict[str, float] = {
+        row.month: float(row.total or 0)
+        for row in session.exec(
+            _income_where(
+                select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+            ).where(Transaction.txn_date >= cutoff).group_by(month_col)
+        ).all()
+    }
+
+    expense_by_month: dict[str, float] = {
+        row.month: float(row.total or 0)
+        for row in session.exec(
+            _expense_where(
+                select(month_col.label("month"), func.sum(Transaction.amount).label("total"))
+            ).where(Transaction.txn_date >= cutoff).group_by(month_col)
+        ).all()
+    }
+
+    deficit_months: list[DeficitMonthRow] = []
+    for label in _generate_month_labels(months):
+        income = round(income_by_month.get(label, 0.0), 2)
+        expense = round(expense_by_month.get(label, 0.0), 2)
+        net = round(income - expense, 2)
+        if net < 0:
+            deficit_months.append(
+                DeficitMonthRow(month=label, income=income, expense=expense, net=net)
+            )
+
+    return NegativeSurplusResponse(
+        months_with_deficit=len(deficit_months),
+        total_months=months,
+        deficit_months=deficit_months,
+        total_deficit=round(sum(abs(m.net) for m in deficit_months), 2),
+    )
 
 
 # ───────────────────────────────────────────────────────────────────────────

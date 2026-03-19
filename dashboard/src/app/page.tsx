@@ -35,6 +35,8 @@ import { CategoryBreakdownChart } from "@/components/dashboard/category-breakdow
 import { MonthlyTrendChart } from "@/components/dashboard/monthly-trend-chart"
 import { TopCounterpartiesTable } from "@/components/dashboard/top-counterparties-table"
 import { useTransactions } from "@/hooks/use-transactions"
+import { useNegativeSurplusMonths } from "@/hooks/use-metrics"
+import { formatCurrency } from "@/lib/utils"
 import type { DateRange } from "@/lib/types"
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -52,6 +54,9 @@ export default function DashboardPage() {
     page_size: 1,
   })
   const unreviewedCount = unreviewedData?.total ?? 0
+
+  // Q11: how many of the last 12 months spent more than earned?
+  const { data: deficitData } = useNegativeSurplusMonths(12)
 
   // Default to "this month" — the most useful view on first load
   const [preset, setPreset] = React.useState<Preset>("this-month")
@@ -108,6 +113,31 @@ export default function DashboardPage() {
             Go to Review Queue →
           </span>
         </Link>
+      )}
+
+      {/* ── Deficit months callout (Q11) ─────────────────────────── */}
+      {deficitData && deficitData.months_with_deficit > 0 && (
+        <div className="flex items-start gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-red-500" />
+          <div className="flex-1 text-red-700 dark:text-red-400">
+            <strong>
+              {deficitData.months_with_deficit} of the last{" "}
+              {deficitData.total_months} months
+            </strong>{" "}
+            had spending that exceeded income — totalling a{" "}
+            <strong>{formatCurrency(deficitData.total_deficit)}</strong>{" "}
+            shortfall.
+            {deficitData.deficit_months.length > 0 && (
+              <span className="ml-1 text-red-600/80 dark:text-red-400/80">
+                (
+                {deficitData.deficit_months
+                  .map((m) => m.month)
+                  .join(", ")}
+                )
+              </span>
+            )}
+          </div>
+        </div>
       )}
 
       {/* ── Date Range Picker ─────────────────────────────────────── */}

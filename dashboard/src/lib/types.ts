@@ -251,3 +251,28 @@ export interface AccountSummary {
   total_inflow: number;
   total_outflow: number;
 }
+
+/**
+ * One deficit month from GET /api/metrics/negative-surplus-months (Q11)
+ * net is always negative here (expense exceeded income that month).
+ */
+export interface DeficitMonthRow {
+  month: string;   // "YYYY-MM"
+  income: number;
+  expense: number;
+  net: number;     // negative value
+}
+
+/**
+ * GET /api/metrics/negative-surplus-months (Q11)
+ * Answers: "How many of my recent months had a spending deficit?"
+ *
+ * total_deficit is the sum of |net| across all deficit months — a positive number
+ * representing how much more was spent than earned across those bad months.
+ */
+export interface NegativeSurplusResponse {
+  months_with_deficit: number;
+  total_months: number;
+  deficit_months: DeficitMonthRow[];
+  total_deficit: number;  // always positive — the cumulative shortfall
+}

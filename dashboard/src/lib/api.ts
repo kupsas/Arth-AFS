@@ -22,6 +22,7 @@ import type {
   Direction,
   MetricsSummary,
   MonthlyTrend,
+  NegativeSurplusResponse,
   PaginatedResponse,
   TopCounterparty,
   Transaction,
@@ -67,6 +68,7 @@ type QueryParams = Record<string, string | number | boolean | undefined | null>;
 /**
  * Performs a GET request, appends query params, and deserialises the JSON body.
  * Throws ApiError on non-2xx responses.
+ * Redirects to /login on 401 (session expired or missing).
  */
 async function get<T>(path: string, params?: QueryParams): Promise<T> {
   const url = new URL(`${BASE_URL}${path}`);
@@ -82,7 +84,17 @@ async function get<T>(path: string, params?: QueryParams): Promise<T> {
 
   const res = await fetch(url.toString(), {
     headers: { "Content-Type": "application/json" },
+    // credentials: "include" is required for the browser to send the
+    // httpOnly "arth_session" cookie on cross-port requests (3000 → 8000).
+    credentials: "include",
   });
+
+  if (res.status === 401) {
+    // Session expired or cookie missing — redirect to login
+    window.location.href = `/login?from=${encodeURIComponent(window.location.pathname)}`;
+    // Return a promise that never resolves so the calling code doesn't continue
+    return new Promise(() => {});
+  }
 
   if (!res.ok) {
     // Try to extract a human-readable error message from the response body
@@ -96,13 +108,20 @@ async function get<T>(path: string, params?: QueryParams): Promise<T> {
 /**
  * Performs a PATCH request with a JSON body and deserialises the response.
  * Throws ApiError on non-2xx responses.
+ * Redirects to /login on 401.
  */
 async function patch<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
+    credentials: "include",
     body: JSON.stringify(body),
   });
+
+  if (res.status === 401) {
+    window.location.href = `/login?from=${encodeURIComponent(window.location.pathname)}`;
+    return new Promise(() => {});
+  }
 
   if (!res.ok) {
     const detail = await res.text().catch(() => res.statusText);
@@ -231,4 +250,52 @@ export function fetchMonthlyTrend(months = 12): Promise<MonthlyTrend[]> {
  */
 export function fetchAccountsSummary(): Promise<AccountSummary[]> {
   return get<AccountSummary[]>("/api/metrics/accounts-summary");
+}
+
+/**
+ * GET /api/metrics/negative-surplus-months  (Q11)
+ * Returns months where spending exceeded income, plus a deficit total.
+ * Default window is 12 months; pass a different value for a longer view.
+ */
+export function fetchNegativeSurplusMonths(months = 12): Promise<NegativeSurplusResponse> {
+  return get<NegativeSurplusResponse>("/api/metrics/negative-surplus-months", {
+    months,
+  } as QueryParams);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Auth endpoints  →  /api/auth
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/auth/login
+ * Sends credentials to FastAPI. On success, FastAPI sets the httpOnly
+ * "arth_session" cookie — the browser stores it automatically.
+ * Throws ApiError on 401 (wrong credentials).
+ */
+export async function login(username: string, password: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new ApiError(res.status, detail.detail ?? "Login failed");
+  }
+}
+
+/**
+ * POST /api/auth/logout
+ * Tells FastAPI to clear the session cookie. After this, the browser no
+ * longer sends the cookie and all API calls will return 401.
+ */
+export async function logout(): Promise<void> {
+  await fetch(`${BASE_URL}/api/auth/logout`, {
+    method: "POST",
+    credentials: "include",
+  });
+  // Redirect to login page regardless of the response
+  window.location.href = "/login";
 }

@@ -2,11 +2,12 @@
  * use-metrics.ts — React Query hooks for dashboard metrics.
  *
  * These hooks power the Dashboard page (Phase 3d):
- *   - useMetricsSummary()       → 4 summary cards at the top
- *   - useCategoryBreakdown()    → horizontal bar / donut chart
- *   - useTopCounterparties()    → top merchants table
- *   - useMonthlyTrend()         → income vs expense area chart
- *   - useAccountsSummary()      → per-account breakdown (sidebar / future use)
+ *   - useMetricsSummary()           → 4 summary cards at the top
+ *   - useCategoryBreakdown()        → horizontal bar / donut chart
+ *   - useTopCounterparties()        → top merchants table
+ *   - useMonthlyTrend()             → income vs expense area chart
+ *   - useAccountsSummary()          → per-account breakdown (sidebar / future use)
+ *   - useNegativeSurplusMonths()    → deficit months callout (Q11)
  *
  * All hooks accept an optional `dateRange` so the dashboard's date range
  * picker can control every widget from a single piece of state.
@@ -21,6 +22,7 @@ import {
   fetchCategoryBreakdown,
   fetchMetricsSummary,
   fetchMonthlyTrend,
+  fetchNegativeSurplusMonths,
   fetchTopCounterparties,
 } from "@/lib/api";
 import type {
@@ -30,6 +32,7 @@ import type {
   Direction,
   MetricsSummary,
   MonthlyTrend,
+  NegativeSurplusResponse,
   TopCounterparty,
 } from "@/lib/types";
 
@@ -61,6 +64,9 @@ export const metricsKeys = {
 
   accounts: () =>
     [...metricsKeys.all, "accounts"] as const,
+
+  negativeSurplus: (months: number) =>
+    [...metricsKeys.all, "negative-surplus", months] as const,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -191,6 +197,34 @@ export function useAccountsSummary(
     queryFn: () => fetchAccountsSummary(),
     // Account list rarely changes; cache aggressively
     staleTime: 10 * 60 * 1_000,
+    ...options,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// useNegativeSurplusMonths — deficit months callout (Q11)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Returns how many of the last N months had spending > income, plus the list
+ * of those specific months and the total cumulative shortfall.
+ *
+ * Answers: "How many bad months did I have recently — and how bad were they?"
+ *
+ * @param months  trailing months to scan (default 12)
+ *
+ * Usage:
+ *   const { data: deficit } = useNegativeSurplusMonths(12);
+ *   // data.months_with_deficit === 2 → "2 of last 12 months had a deficit"
+ */
+export function useNegativeSurplusMonths(
+  months = 12,
+  options?: Partial<UseQueryOptions<NegativeSurplusResponse>>,
+) {
+  return useQuery<NegativeSurplusResponse>({
+    queryKey: metricsKeys.negativeSurplus(months),
+    queryFn: () => fetchNegativeSurplusMonths(months),
+    staleTime: 5 * 60 * 1_000,
     ...options,
   });
 }
