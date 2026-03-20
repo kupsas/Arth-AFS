@@ -10,6 +10,7 @@ Swagger docs at http://localhost:8000/docs
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
@@ -63,12 +64,19 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 # CORS — allow the Next.js dashboard and Swagger UI.
 # allow_credentials=True is required for cookies to be sent cross-port.
+#
+# For Cloudflare Tunnel (or any non-localhost dashboard URL), add origins via
+# .env: CORS_EXTRA_ORIGINS=https://your-app.trycloudflare.com,https://other...
 # ---------------------------------------------------------------------------
+_cors_extra = os.getenv("CORS_EXTRA_ORIGINS", "")
+_cors_extra_list = [o.strip() for o in _cors_extra.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",   # Next.js dev server
         "http://localhost:8000",   # Swagger UI served by FastAPI itself
+        *_cors_extra_list,
     ],
     allow_credentials=True,       # required for Set-Cookie / Cookie headers
     allow_methods=["*"],

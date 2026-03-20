@@ -203,7 +203,7 @@ Dedup ledger for the Gmail scraper. One row per Gmail message the scraper has to
 
 ## Architecture Notes
 
-- **CORS:** Restricted to `localhost:3000` (Next.js dev) and `localhost:8000` (Swagger UI). Update `api/main.py` if serving from a different origin.
+- **CORS:** Defaults to `localhost:3000` and `localhost:8000`. For Cloudflare Tunnel or other origins, set `CORS_EXTRA_ORIGINS` in `.env` (comma-separated full origins, e.g. `https://abc.trycloudflare.com`).
 - **Auth:** No authentication in the current implementation. This is a known gap — see the gap analysis for the security roadmap.
 - **Scheduler lifecycle:** The APScheduler background thread starts with the FastAPI `lifespan` context and shuts down cleanly on exit. One `uvicorn` command manages the API and the email scraper.
 - **Database sessions:** Injected via FastAPI's `Depends(get_session)`. No global session state — each request gets its own session.

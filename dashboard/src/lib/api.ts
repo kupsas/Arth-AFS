@@ -9,8 +9,9 @@
  * The React Query hooks in src/hooks/ call these functions.
  * Components never call fetch() directly — they always go through a hook.
  *
- * Base URL is read from NEXT_PUBLIC_API_URL env var (falls back to localhost:8000).
- * In production you'd set this to your actual API domain.
+ * Base URL is read from NEXT_PUBLIC_API_URL (see `api-base.ts`).
+ * Use NEXT_PUBLIC_API_URL=same-origin when the UI is on a different hostname than
+ * the API (e.g. two tunnel URLs) so session cookies stay on the dashboard origin.
  */
 
 import type {
@@ -37,12 +38,7 @@ import type {
   UploadResponse,
 } from "@/lib/types";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Config
-// ─────────────────────────────────────────────────────────────────────────────
-
-const BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { buildApiUrl } from "@/lib/api-base";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Error type
@@ -78,18 +74,9 @@ type QueryParams = Record<string, string | number | boolean | undefined | null>;
  * Redirects to /login on 401 (session expired or missing).
  */
 async function get<T>(path: string, params?: QueryParams): Promise<T> {
-  const url = new URL(`${BASE_URL}${path}`);
+  const url = buildApiUrl(path, params);
 
-  if (params) {
-    for (const [key, value] of Object.entries(params)) {
-      // Skip undefined/null — those mean "don't filter by this param"
-      if (value !== undefined && value !== null) {
-        url.searchParams.set(key, String(value));
-      }
-    }
-  }
-
-  const res = await fetch(url.toString(), {
+  const res = await fetch(url, {
     headers: { "Content-Type": "application/json" },
     // credentials: "include" is required for the browser to send the
     // httpOnly "arth_session" cookie on cross-port requests (3000 → 8000).
@@ -118,7 +105,7 @@ async function get<T>(path: string, params?: QueryParams): Promise<T> {
  * Redirects to /login on 401.
  */
 async function patch<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await fetch(buildApiUrl(path), {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -144,7 +131,7 @@ async function patch<T>(path: string, body: unknown): Promise<T> {
  * Redirects to /login on 401.
  */
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await fetch(buildApiUrl(path), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -172,7 +159,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
  * Throws ApiError on non-2xx responses.
  */
 async function del(path: string): Promise<void> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await fetch(buildApiUrl(path), {
     method: "DELETE",
     credentials: "include",
   });
@@ -331,7 +318,7 @@ export function fetchNegativeSurplusMonths(months = 12): Promise<NegativeSurplus
  * Throws ApiError on 401 (wrong credentials).
  */
 export async function login(username: string, password: string): Promise<void> {
-  const res = await fetch(`${BASE_URL}/api/auth/login`, {
+  const res = await fetch(buildApiUrl("/api/auth/login"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -349,7 +336,7 @@ export async function login(username: string, password: string): Promise<void> {
  * longer sends the cookie and all API calls will return 401.
  */
 export async function logout(): Promise<void> {
-  await fetch(`${BASE_URL}/api/auth/logout`, {
+  await fetch(buildApiUrl("/api/auth/logout"), {
     method: "POST",
     credentials: "include",
   });
@@ -488,10 +475,12 @@ export async function uploadStatement(
   const formData = new FormData();
   formData.append("file", file);
 
-  const url = new URL(`${BASE_URL}/api/pipeline/upload`);
-  if (sourceKey) url.searchParams.set("source_key", sourceKey);
+  const url = buildApiUrl(
+    "/api/pipeline/upload",
+    sourceKey ? { source_key: sourceKey } : undefined,
+  );
 
-  const res = await fetch(url.toString(), {
+  const res = await fetch(url, {
     method: "POST",
     credentials: "include",
     body: formData,

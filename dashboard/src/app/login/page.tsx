@@ -19,8 +19,7 @@
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
-const BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+import { buildApiUrl } from "@/lib/api-base";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -38,7 +37,7 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const res = await fetch(`${BASE_URL}/api/auth/login`, {
+      const res = await fetch(buildApiUrl("/api/auth/login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",   // needed so FastAPI's Set-Cookie is accepted

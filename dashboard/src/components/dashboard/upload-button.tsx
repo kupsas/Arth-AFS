@@ -29,6 +29,7 @@ import {
 import { Progress } from "@/components/ui/progress"
 import { uploadStatement } from "@/lib/api"
 import { ApiError } from "@/lib/api"
+import { buildApiUrl } from "@/lib/api-base"
 import { metricsKeys } from "@/hooks/use-metrics"
 import { cn } from "@/lib/utils"
 
@@ -52,11 +53,10 @@ async function pollRunStatus(
   onDone: (txnCount: number, newCount: number) => void,
   onError: (msg: string) => void,
 ) {
-  const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
   for (let attempts = 0; attempts < 60; attempts++) {
     await new Promise((r) => setTimeout(r, 2_000))
     try {
-      const res = await fetch(`${BASE_URL}/api/pipeline/runs/${runId}`, {
+      const res = await fetch(buildApiUrl(`/api/pipeline/runs/${runId}`), {
         credentials: "include",
       })
       if (!res.ok) break
