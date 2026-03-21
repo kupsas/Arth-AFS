@@ -180,6 +180,7 @@ export function ExpenseStackedBar({
                   <RechartsTooltipCard
                     {...props}
                     labelPrefix="Month "
+                    showTotal
                     formatValue={(v) => {
                       if (typeof v !== "number") return String(v)
                       return pctMode ? `${v}%` : formatCurrency(v)
