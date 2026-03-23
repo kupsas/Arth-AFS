@@ -30,7 +30,7 @@ from typing import Iterable
 import httpx
 import yfinance as yf
 from nse import NSE
-from sqlmodel import Session, col, select
+from sqlmodel import Session, col, func, select
 
 from api.models import Holding, Price
 from pipeline.config import REPO_ROOT
@@ -280,6 +280,136 @@ def backfill_prices(
     return {"symbol": normalize_equity_symbol(symbol), "inserted": inserted, "status": "ok"}
 
 
+def _select_market_priced_holdings(
+    session: Session, *, user_id: str | None = None
+) -> list[Holding]:
+    """Active holdings we try to mark via NSE / AMFI / yfinance (same filter as refresh)."""
+    q = select(Holding).where(
+        Holding.is_active == True,  # noqa: E712
+        Holding.valuation_method == ValuationMethod.MARKET_PRICE.value,
+        col(Holding.asset_class).in_(_MARKET_ASSET_CLASSES),
+    )
+    if user_id:
+        q = q.where(Holding.user_id == user_id)
+    return list(session.exec(q).all())
+
+
+def latest_bhav_target_date(as_of: datetime.date | None = None) -> datetime.date:
+    """Most recent Mon–Fri on or before ``as_of`` (UTC calendar date), for NSE session alignment."""
+    today = as_of if as_of is not None else datetime.datetime.now(datetime.UTC).date()
+    d = today
+    for _ in range(5):
+        if d.weekday() < 5:
+            return d
+        d -= datetime.timedelta(days=1)
+    return today
+
+
+def nse_normalised_symbols_for_holdings(holdings: list[Holding]) -> list[str]:
+    """NSE bhav symbols (normalised) implied by portfolio holdings — excludes MF codes and Yahoo intl tickers."""
+    raw: list[str] = []
+    for h in holdings:
+        if not h.symbol:
+            continue
+        ac = h.asset_class
+        sym = h.symbol.strip()
+        if ac == AssetClass.MUTUAL_FUND.value and _is_amfi_scheme_code(sym):
+            continue
+        if ac == AssetClass.GOLD.value and _is_international_yfinance_symbol(sym):
+            continue
+        if ac in (
+            AssetClass.EQUITY.value,
+            AssetClass.ESOP.value,
+            AssetClass.SOVEREIGN_GOLD_BOND.value,
+            AssetClass.GOLD.value,
+        ):
+            raw.append(sym)
+    return sorted({normalize_equity_symbol(s) for s in raw})
+
+
+def has_market_priced_holdings(session: Session, *, user_id: str | None = None) -> bool:
+    """True if any row would be picked up by :func:`refresh_all_prices`."""
+    q = select(Holding.id).where(
+        Holding.is_active == True,  # noqa: E712
+        Holding.valuation_method == ValuationMethod.MARKET_PRICE.value,
+        col(Holding.asset_class).in_(_MARKET_ASSET_CLASSES),
+    )
+    if user_id:
+        q = q.where(Holding.user_id == user_id)
+    return session.exec(q.limit(1)).first() is not None
+
+
+def backfill_nse_portfolio_gaps(
+    session: Session,
+    *,
+    user_id: str | None = None,
+    max_calendar_lookback_if_empty: int = 120,
+) -> dict[str, object]:
+    """Insert missing NSE ``prices`` rows when any portfolio symbol is behind the latest weekday session.
+
+    Mutual funds and international Yahoo symbols are **not** backfilled here (AMFI has no cheap
+    historical API in this module; yfinance is refresh-only). After this, call
+    :func:`refresh_all_prices` to update MF / intl and push marks onto ``Holding`` rows.
+
+    ``max_calendar_lookback_if_empty`` caps how far we walk back when a symbol has **no** ``prices``
+    rows yet (avoids a 30-minute first boot when the DB is empty).
+    """
+    holdings = _select_market_priced_holdings(session, user_id=user_id)
+    symbols = nse_normalised_symbols_for_holdings(holdings)
+    if not symbols:
+        return {"symbols": [], "target": None, "details": []}
+
+    target = latest_bhav_target_date()
+    today = datetime.datetime.now(datetime.UTC).date()
+    details: list[dict[str, int | str]] = []
+
+    for sym in symbols:
+        last_d = session.exec(
+            select(func.max(Price.date)).where(Price.symbol == sym)
+        ).one()
+        if last_d is not None and last_d >= target:
+            continue
+
+        if last_d is None:
+            start = target - datetime.timedelta(days=max_calendar_lookback_if_empty)
+            if start > target:
+                start = target
+        else:
+            start = last_d + datetime.timedelta(days=1)
+
+        if start > target:
+            continue
+
+        res = backfill_prices(session, sym, start, target)
+        details.append(res)
+
+    return {
+        "symbols": symbols,
+        "target": target.isoformat(),
+        "as_of_calendar": today.isoformat(),
+        "details": details,
+    }
+
+
+def run_startup_price_sync(session: Session) -> dict[str, object]:
+    """Phase A.4.2 — after ``init_db()``: backfill stale NSE history, then one full refresh.
+
+    Safe when there are no market-priced holdings (no-op). Caller should ``commit()`` the session.
+    """
+    if not has_market_priced_holdings(session):
+        logger.info("Startup price sync skipped — no market-priced holdings")
+        return {"skipped": True, "reason": "no_market_holdings"}
+
+    bf = backfill_nse_portfolio_gaps(session)
+    refreshed = refresh_all_prices(session)
+    logger.info(
+        "Startup price sync done — NSE backfill detail rows: %d, refresh as_of=%s",
+        len(bf.get("details", [])),
+        refreshed.get("as_of"),
+    )
+    return {"backfill": bf, "refresh": refreshed}
+
+
 def _is_amfi_scheme_code(symbol: str | None) -> bool:
     if not symbol:
         return False
@@ -295,24 +425,9 @@ def refresh_all_prices(session: Session, *, user_id: str | None = None) -> dict[
 
     Caller should ``session.commit()`` when embedding in a request transaction.
     """
-    q = select(Holding).where(
-        Holding.is_active == True,  # noqa: E712
-        Holding.valuation_method == ValuationMethod.MARKET_PRICE.value,
-        col(Holding.asset_class).in_(_MARKET_ASSET_CLASSES),
-    )
-    if user_id:
-        q = q.where(Holding.user_id == user_id)
-    holdings = list(session.exec(q).all())
+    holdings = _select_market_priced_holdings(session, user_id=user_id)
 
-    today = datetime.datetime.now(datetime.UTC).date()
-    # Walk back to a weekday for bhavcopy (markets closed Sat/Sun).
-    d = today
-    for _ in range(5):
-        if d.weekday() < 5:
-            break
-        d -= datetime.timedelta(days=1)
-    else:
-        d = today
+    d = latest_bhav_target_date()
 
     nse_symbols: list[str] = []
     mf_codes: list[str] = []
