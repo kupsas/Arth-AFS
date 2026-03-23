@@ -65,11 +65,11 @@ class LiabilityCreate(BaseModel):
 
 
 class LiabilityUpdate(BaseModel):
-    name: str | None = Field(default=None, max_length=512)
+    name: str | None = Field(default=None, min_length=1, max_length=512)
     liability_type: str | None = None
     principal_outstanding: float | None = Field(default=None, gt=0)
     interest_rate: float | None = Field(default=None, ge=0, le=100)
-    emi_amount: float | None = None
+    emi_amount: float | None = Field(default=None, ge=0)
     tenure_remaining_months: int | None = Field(default=None, ge=0)
     emi_start_date: datetime.date | None = None
     emi_end_date: datetime.date | None = None

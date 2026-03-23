@@ -82,27 +82,27 @@ class HoldingCreate(BaseModel):
 
     name: str = Field(min_length=1, max_length=512)
     symbol: str | None = Field(default=None, max_length=64)
-    quantity: float | None = None
+    quantity: float | None = Field(default=None, ge=0)
     asset_class: str
     account_platform: str = Field(min_length=1, max_length=128)
     valuation_method: str
     liquidity_class: str
-    currency: str = "INR"
-    current_value: float | None = None
+    currency: str = Field(default="INR", min_length=3, max_length=8)
+    current_value: float | None = Field(default=None, ge=0)
     last_valued_date: datetime.date | None = None
-    average_cost_per_unit: float | None = None
-    current_price_per_unit: float | None = None
-    principal_amount: float | None = None
-    interest_rate: float | None = None
+    average_cost_per_unit: float | None = Field(default=None, ge=0)
+    current_price_per_unit: float | None = Field(default=None, ge=0)
+    principal_amount: float | None = Field(default=None, ge=0)
+    interest_rate: float | None = Field(default=None, ge=0, le=100)
     maturity_date: datetime.date | None = None
-    compounding_frequency: str | None = None
-    face_value: float | None = None
-    coupon_rate: float | None = None
-    coupon_frequency: str | None = None
+    compounding_frequency: str | None = Field(default=None, max_length=32)
+    face_value: float | None = Field(default=None, ge=0)
+    coupon_rate: float | None = Field(default=None, ge=0, le=100)
+    coupon_frequency: str | None = Field(default=None, max_length=32)
     fund_type: str | None = None
     folio_number: str | None = Field(default=None, max_length=128)
     account_identifier: str | None = Field(default=None, max_length=256)
-    user_id: str = "sashank"
+    user_id: str = Field(default="sashank", min_length=1, max_length=64)
     is_active: bool = True
     notes: str | None = Field(default=None, max_length=10_000)
 
@@ -110,7 +110,7 @@ class HoldingCreate(BaseModel):
 class HoldingUpdate(BaseModel):
     """Allowed manual tweaks — intended for ``MANUAL`` marks (plan A.3.1)."""
 
-    current_value: float | None = None
+    current_value: float | None = Field(default=None, ge=0)
     last_valued_date: datetime.date | None = None
     notes: str | None = Field(default=None, max_length=10_000)
 

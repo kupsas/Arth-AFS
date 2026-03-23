@@ -18,6 +18,9 @@ from api.services.price_feed import normalize_equity_symbol, refresh_all_prices
 
 router = APIRouter()
 
+# Reject absurdly long path segments (log injection / accidental paste).
+_MAX_SYMBOL_LEN = 64
+
 
 class PricePointOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -74,6 +77,11 @@ def get_price_history(
     end_date: str | None = Query(default=None, description="YYYY-MM-DD inclusive"),
     limit: int = Query(default=2000, ge=1, le=20_000),
 ):
+    if len(symbol) > _MAX_SYMBOL_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"symbol too long (max {_MAX_SYMBOL_LEN} characters)",
+        )
     variants = _symbol_variants(symbol)
     q = select(Price).where(col(Price.symbol).in_(variants))
     if start_date:
