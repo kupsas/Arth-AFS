@@ -64,6 +64,25 @@ def api_client(engine):
     app.dependency_overrides.pop(get_current_user, None)
 
 
+@pytest.fixture(name="bare_client")
+def api_client_no_auth(engine):
+    """TestClient with the real get_current_user dependency (no override).
+
+    Session still points to the in-memory DB so the app boots cleanly, but
+    no arth_session cookie is sent — every request should return 401.
+    """
+    def _override_session():
+        with Session(engine) as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _override_session
+    # Deliberately do NOT override get_current_user — the real implementation
+    # reads the cookie and raises 401 when it is absent.
+    app.dependency_overrides.pop(get_current_user, None)
+    yield TestClient(app, raise_server_exceptions=False)
+    app.dependency_overrides.pop(get_session, None)
+
+
 @contextmanager
 def _as_user(user_id: str):
     """Temporarily override get_current_user for cross-user isolation tests.
@@ -812,3 +831,89 @@ class TestSecurityInputValidation:
         # child_goal_id must remain c1, not c2
         assert updated["child_goal_id"] == c1["id"]
         assert updated["description"] == "Legitimate update"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 6. AUTH GUARD (B.6.4) — every B.3 endpoint requires authentication
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestAuthGuard:
+    """Verify that all Phase B.3 endpoints return HTTP 401 when no session
+    cookie is present.
+
+    The ``bare_client`` fixture uses the real ``get_current_user`` dependency
+    (not overridden), so any request without an ``arth_session`` cookie hits
+    the 401 guard in ``api/auth.py``.
+
+    This satisfies the B.6.4 checklist item: "all new endpoints require auth".
+    """
+
+    # ── Goals hierarchy endpoints ─────────────────────────────────────────
+
+    def test_goals_list_requires_auth(self, bare_client):
+        assert bare_client.get("/api/goals").status_code == 401
+
+    def test_goals_create_requires_auth(self, bare_client):
+        assert bare_client.post("/api/goals", json={
+            "name": "X", "goal_type": "SAVINGS",
+        }).status_code == 401
+
+    def test_goals_get_requires_auth(self, bare_client):
+        assert bare_client.get("/api/goals/1").status_code == 401
+
+    def test_goals_patch_requires_auth(self, bare_client):
+        assert bare_client.patch("/api/goals/1", json={"name": "X"}).status_code == 401
+
+    def test_goals_delete_requires_auth(self, bare_client):
+        assert bare_client.delete("/api/goals/1").status_code == 401
+
+    # ── Goal tree endpoints ────────────────────────────────────────────────
+
+    def test_goal_tree_requires_auth(self, bare_client):
+        assert bare_client.get("/api/goals/tree").status_code == 401
+
+    def test_goal_allocation_requires_auth(self, bare_client):
+        assert bare_client.get("/api/goals/allocation").status_code == 401
+
+    def test_goal_ancestors_requires_auth(self, bare_client):
+        assert bare_client.get("/api/goals/1/ancestors").status_code == 401
+
+    def test_goal_descendants_requires_auth(self, bare_client):
+        assert bare_client.get("/api/goals/1/descendants").status_code == 401
+
+    def test_goal_impact_requires_auth(self, bare_client):
+        assert bare_client.get("/api/goals/1/impact").status_code == 401
+
+    # ── GoalLink endpoints ─────────────────────────────────────────────────
+
+    def test_goal_links_list_requires_auth(self, bare_client):
+        assert bare_client.get("/api/goal-links").status_code == 401
+
+    def test_goal_links_create_requires_auth(self, bare_client):
+        assert bare_client.post("/api/goal-links", json={
+            "parent_goal_id": 1, "child_goal_id": 2, "link_type": "DECOMPOSES_INTO",
+        }).status_code == 401
+
+    def test_goal_links_patch_requires_auth(self, bare_client):
+        assert bare_client.patch("/api/goal-links/1", json={
+            "description": "x",
+        }).status_code == 401
+
+    def test_goal_links_delete_requires_auth(self, bare_client):
+        assert bare_client.delete("/api/goal-links/1").status_code == 401
+
+    # ── LifeEvent endpoints ────────────────────────────────────────────────
+
+    def test_life_events_list_requires_auth(self, bare_client):
+        assert bare_client.get("/api/life-events").status_code == 401
+
+    def test_life_events_create_requires_auth(self, bare_client):
+        assert bare_client.post("/api/life-events", json={
+            "event_key": "employed",
+        }).status_code == 401
+
+    def test_life_events_patch_requires_auth(self, bare_client):
+        assert bare_client.patch("/api/life-events/1", json={
+            "occurred": True,
+        }).status_code == 401
