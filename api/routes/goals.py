@@ -1,29 +1,42 @@
 """
-Goals CRUD endpoints — Phase 4.5d
+Goals CRUD endpoints — Phase 4.5d + Phase B.3 hierarchy
 
 POST   /api/goals           — create a goal
-GET    /api/goals           — list goals (filterable by user_id, goal_type, status)
+GET    /api/goals           — list goals (scoped to the authenticated user)
 GET    /api/goals/{id}      — single goal with computed progress
 PATCH  /api/goals/{id}      — update goal fields or current_value
 DELETE /api/goals/{id}      — delete a goal
 
+B.3: Hierarchy fields (tier, pyramid_id, activation_*, allocations) are validated
+on write. ``user_id`` is always taken from the session — never from the request body
+or cross-user query params. Tree/allocation/ancestors routes live in ``goal_tree.py``
+and are registered before this router so static paths win.
+
 Progress computation:
   - EXPENSE_LIMIT goals: auto-computed from transactions DB (current month spend)
   - All other goal types: use goal.current_value vs goal.target_amount
-  - Status: ON_TRACK | AT_RISK | BEHIND | ACHIEVED | PAUSED
+  - Response ``status`` is derived progress (ON_TRACK / AT_RISK / …), separate from
+    ``activation_status`` (PENDING / ACTIVE / COMPLETED / PAUSED).
 """
 
 from __future__ import annotations
 
 import datetime
 import logging
+from typing import TypeGuard
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session, col, select
 
+from api.auth import get_current_user
 from api.database import get_session
 from api.models import Goal
+from api.services.activation_engine import (
+    ConditionParseError,
+    check_and_update_activations,
+    validate_condition,
+)
 from api.services.chart_metrics import (
     CHART_KEY_EXPENSE_NEED_WANT_STACK,
     CHART_KEY_INVESTMENT_NET,
@@ -40,32 +53,55 @@ router = APIRouter()
 # ───────────────────────────────────────────────────────────────────────────
 
 class GoalCreate(BaseModel):
-    name: str
-    goal_type: str                          # e.g. "EXPENSE_LIMIT", "SAVINGS", etc.
+    """Create payload — ``user_id`` is not accepted; the API uses the logged-in user."""
+
+    name: str = Field(min_length=1, max_length=512)
+    goal_type: str
     target_amount: float | None = None
-    target_date: str | None = None          # "YYYY-MM-DD" or null
-    target_metric: str | None = None        # JSON blob for complex conditions
-    priority: int = 3                       # 1 (highest) to 5 (lowest)
-    linked_layer: int = 3                   # 1-5
-    linked_category: str | None = None      # e.g. "Food & Dining"
-    chart_key: str | None = None            # dashboard binding (optional)
-    progress_cadence: str | None = None     # MONTHLY (default) | ANNUAL (EXPENSE_LIMIT only)
-    user_id: str = "sashank"
+    target_date: str | None = None
+    target_metric: str | None = Field(default=None, max_length=4000)
+    priority: int = Field(default=3, ge=1, le=5)
+    linked_layer: int = Field(default=3, ge=1, le=5)
+    linked_category: str | None = Field(default=None, max_length=256)
+    chart_key: str | None = Field(default=None, max_length=128)
+    progress_cadence: str | None = None
     current_value: float | None = None
-    notes: str | None = None
+    notes: str | None = Field(default=None, max_length=4000)
+    # Phase B.0 / B.3 — pyramid & activation (all optional on create)
+    pyramid_id: str | None = Field(default=None, max_length=10)
+    tier: str | None = Field(default=None, max_length=32)
+    time_horizon: str | None = Field(default=None, max_length=32)
+    funding_mode: str | None = Field(default=None, max_length=32)
+    activation_status: str | None = Field(default=None, max_length=32)
+    activation_condition: str | None = Field(default=None, max_length=500)
+    monthly_allocation: float | None = Field(default=None, ge=0)
+    allocation_priority: int | None = Field(default=None, ge=1, le=100)
+    interruptible: bool | None = None
+    sensitivity_to_returns: str | None = Field(default=None, max_length=16)
 
 
 class GoalUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=512)
     target_amount: float | None = None
     target_date: str | None = None
-    priority: int | None = None
-    linked_category: str | None = None
-    chart_key: str | None = None
+    target_metric: str | None = Field(default=None, max_length=4000)
+    priority: int | None = Field(default=None, ge=1, le=5)
+    linked_category: str | None = Field(default=None, max_length=256)
+    chart_key: str | None = Field(default=None, max_length=128)
     progress_cadence: str | None = None
     current_value: float | None = None
-    status: str | None = None               # allow manual status override (e.g. PAUSED)
-    notes: str | None = None
+    status: str | None = None
+    notes: str | None = Field(default=None, max_length=4000)
+    pyramid_id: str | None = Field(default=None, max_length=10)
+    tier: str | None = Field(default=None, max_length=32)
+    time_horizon: str | None = Field(default=None, max_length=32)
+    funding_mode: str | None = Field(default=None, max_length=32)
+    activation_status: str | None = Field(default=None, max_length=32)
+    activation_condition: str | None = Field(default=None, max_length=500)
+    monthly_allocation: float | None = Field(default=None, ge=0)
+    allocation_priority: int | None = Field(default=None, ge=1, le=100)
+    interruptible: bool | None = None
+    sensitivity_to_returns: str | None = Field(default=None, max_length=16)
 
 
 _VALID_GOAL_TYPES = {
@@ -77,9 +113,16 @@ _VALID_STATUSES = {"ON_TRACK", "AT_RISK", "BEHIND", "ACHIEVED", "PAUSED"}
 
 _VALID_PROGRESS_CADENCE = {"MONTHLY", "ANNUAL"}
 
+_VALID_TIERS = frozenset({"VISION", "STRATEGY", "TACTIC", "OPERATIONAL"})
+_VALID_TIME_HORIZON = frozenset(
+    {"MONTHLY", "QUARTERLY", "ANNUAL", "MULTI_YEAR", "DECADE"}
+)
+_VALID_FUNDING_MODE = frozenset({"ACCUMULATION", "CONSTRAINT", "EVENT", "MAINTENANCE"})
+_VALID_ACTIVATION_STATUS = frozenset({"PENDING", "ACTIVE", "COMPLETED", "PAUSED"})
+_VALID_SENSITIVITY = frozenset({"LOW", "MEDIUM", "HIGH"})
+
 
 def _validate_progress_cadence(goal_type: str, cadence: str | None) -> str:
-    """Default MONTHLY; ANNUAL only for EXPENSE_LIMIT."""
     raw = (cadence or "MONTHLY").strip().upper()
     if raw not in _VALID_PROGRESS_CADENCE:
         raise HTTPException(
@@ -95,7 +138,6 @@ def _validate_progress_cadence(goal_type: str, cadence: str | None) -> str:
 
 
 def _default_chart_key_on_create(goal_type: str, linked_category: str | None, chart_key: str | None) -> str | None:
-    """Apply sensible defaults when the client omits chart_key."""
     if chart_key is not None:
         return chart_key
     if goal_type == "INVESTMENT":
@@ -124,13 +166,71 @@ def _ensure_chart_key_unique(
         )
 
 
+def _ensure_pyramid_id_unique(
+    session: Session,
+    user_id: str,
+    pyramid_id: str | None,
+    *,
+    exclude_goal_id: int | None = None,
+) -> None:
+    if not pyramid_id or not pyramid_id.strip():
+        return
+    pid = pyramid_id.strip()
+    q = (
+        select(Goal)
+        .where(Goal.user_id == user_id)
+        .where(Goal.pyramid_id == pid)
+    )
+    if exclude_goal_id is not None:
+        q = q.where(Goal.id != exclude_goal_id)
+    if session.exec(q).first():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Another goal already uses pyramid_id {pid!r} for this user.",
+        )
+
+
+def _validate_optional_enum(
+    field_name: str,
+    value: str | None,
+    allowed: frozenset[str],
+) -> str | None:
+    if value is None:
+        return None
+    v = value.strip().upper()
+    if not v:
+        return None
+    if v not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {field_name}: {value!r}. Valid: {sorted(allowed)}",
+        )
+    return v
+
+
+def _validate_activation_condition_or_400(raw: str | None) -> None:
+    try:
+        validate_condition(raw)
+    except ConditionParseError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+def _goal_owned(goal: Goal | None, current_user: str) -> TypeGuard[Goal]:
+    """True when ``goal`` exists and belongs to ``current_user`` (narrows type for mypy)."""
+    return goal is not None and goal.user_id == current_user
+
+
 # ───────────────────────────────────────────────────────────────────────────
 # POST / — create a goal
 # ───────────────────────────────────────────────────────────────────────────
 
 @router.post("", status_code=201)
-def create_goal(body: GoalCreate, *, session: Session = Depends(get_session)) -> dict:
-    """Create a new financial goal."""
+def create_goal(
+    body: GoalCreate,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> dict:
     if body.goal_type not in _VALID_GOAL_TYPES:
         raise HTTPException(
             status_code=400,
@@ -154,9 +254,32 @@ def create_goal(body: GoalCreate, *, session: Session = Depends(get_session)) ->
         validate_chart_key_for_goal(body.goal_type, resolved_ck)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    _ensure_chart_key_unique(session, body.user_id, resolved_ck)
+    _ensure_chart_key_unique(session, current_user, resolved_ck)
 
     pc = _validate_progress_cadence(body.goal_type, body.progress_cadence)
+
+    tier = _validate_optional_enum("tier", body.tier, _VALID_TIERS)
+    time_horizon = _validate_optional_enum(
+        "time_horizon", body.time_horizon, _VALID_TIME_HORIZON
+    )
+    funding_mode = _validate_optional_enum(
+        "funding_mode", body.funding_mode, _VALID_FUNDING_MODE
+    )
+    act_status = body.activation_status
+    if act_status is None:
+        activation_status = "ACTIVE"
+    else:
+        validated_act = _validate_optional_enum(
+            "activation_status", act_status, _VALID_ACTIVATION_STATUS
+        )
+        # Empty or whitespace-only client values normalize to default ACTIVE.
+        activation_status = validated_act if validated_act is not None else "ACTIVE"
+    sensitivity = _validate_optional_enum(
+        "sensitivity_to_returns", body.sensitivity_to_returns, _VALID_SENSITIVITY
+    )
+
+    _validate_activation_condition_or_400(body.activation_condition)
+    _ensure_pyramid_id_unique(session, current_user, body.pyramid_id)
 
     goal = Goal(
         name=body.name,
@@ -169,13 +292,28 @@ def create_goal(body: GoalCreate, *, session: Session = Depends(get_session)) ->
         linked_category=body.linked_category,
         chart_key=resolved_ck,
         progress_cadence=pc,
-        user_id=body.user_id,
+        user_id=current_user,
         current_value=body.current_value,
         notes=body.notes,
+        pyramid_id=body.pyramid_id.strip() if body.pyramid_id and body.pyramid_id.strip() else None,
+        tier=tier,
+        time_horizon=time_horizon,
+        funding_mode=funding_mode,
+        activation_status=activation_status,
+        activation_condition=body.activation_condition.strip() if body.activation_condition and body.activation_condition.strip() else None,
+        monthly_allocation=body.monthly_allocation,
+        allocation_priority=body.allocation_priority,
+        interruptible=True if body.interruptible is None else body.interruptible,
+        sensitivity_to_returns=sensitivity,
     )
     session.add(goal)
     session.commit()
     session.refresh(goal)
+
+    if goal.activation_status == "COMPLETED":
+        check_and_update_activations(session, current_user)
+        session.commit()
+        session.refresh(goal)
 
     progress = compute_progress(goal, session)
     return _goal_to_dict(goal, progress)
@@ -187,21 +325,30 @@ def create_goal(body: GoalCreate, *, session: Session = Depends(get_session)) ->
 
 @router.get("")
 def list_goals(
-    user_id: str | None = Query(None),
     goal_type: str | None = Query(None),
     status: str | None = Query(None),
+    tier: str | None = Query(None),
+    activation_status: str | None = Query(None),
+    funding_mode: str | None = Query(None),
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ) -> list[dict]:
-    """List all goals, optionally filtered by user_id, goal_type, or status."""
-    query = select(Goal)
+    """List goals for the authenticated user only (B.3 — no cross-user filter param)."""
+    query = select(Goal).where(Goal.user_id == current_user)
 
-    if user_id is not None:
-        query = query.where(Goal.user_id == user_id)
     if goal_type is not None:
         query = query.where(Goal.goal_type == goal_type)
     if status is not None:
         query = query.where(Goal.status == status)
+    if tier is not None:
+        query = query.where(Goal.tier == tier.strip().upper())
+    if activation_status is not None:
+        query = query.where(
+            Goal.activation_status == activation_status.strip().upper()
+        )
+    if funding_mode is not None:
+        query = query.where(Goal.funding_mode == funding_mode.strip().upper())
 
     query = query.order_by(col(Goal.priority), col(Goal.created_at))
     goals = session.exec(query).all()
@@ -218,10 +365,14 @@ def list_goals(
 # ───────────────────────────────────────────────────────────────────────────
 
 @router.get("/{goal_id}")
-def get_goal(goal_id: int, *, session: Session = Depends(get_session)) -> dict:
-    """Get a single goal with live-computed progress."""
+def get_goal(
+    goal_id: int,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> dict:
     goal = session.get(Goal, goal_id)
-    if not goal:
+    if not _goal_owned(goal, current_user):
         raise HTTPException(status_code=404, detail=f"Goal {goal_id} not found")
 
     progress = compute_progress(goal, session)
@@ -238,16 +389,13 @@ def update_goal(
     body: GoalUpdate,
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ) -> dict:
-    """Update mutable fields on a goal.
-
-    The most common use: set current_value (manual progress update) or
-    change status to PAUSED / ACHIEVED if you want to override auto-computation.
-    """
     goal = session.get(Goal, goal_id)
-    if not goal:
+    if not _goal_owned(goal, current_user):
         raise HTTPException(status_code=404, detail=f"Goal {goal_id} not found")
 
+    old_activation = goal.activation_status
     update_data = body.model_dump(exclude_unset=True)
 
     if "status" in update_data and update_data["status"] not in _VALID_STATUSES:
@@ -271,13 +419,59 @@ def update_goal(
             validate_chart_key_for_goal(goal.goal_type, ck)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
-        _ensure_chart_key_unique(
-            session, goal.user_id, ck, exclude_goal_id=goal.id
-        )
+        _ensure_chart_key_unique(session, goal.user_id, ck, exclude_goal_id=goal.id)
 
     if "progress_cadence" in update_data:
         update_data["progress_cadence"] = _validate_progress_cadence(
             goal.goal_type, update_data["progress_cadence"]
+        )
+
+    if "activation_condition" in update_data:
+        _validate_activation_condition_or_400(update_data["activation_condition"])
+        ac = update_data["activation_condition"]
+        update_data["activation_condition"] = (
+            ac.strip() if ac and str(ac).strip() else None
+        )
+
+    if "pyramid_id" in update_data:
+        pv = update_data["pyramid_id"]
+        normalized_pyramid = pv.strip() if pv and str(pv).strip() else None
+        _ensure_pyramid_id_unique(
+            session,
+            current_user,
+            normalized_pyramid,
+            exclude_goal_id=goal.id,
+        )
+        update_data["pyramid_id"] = normalized_pyramid
+
+    if "tier" in update_data:
+        update_data["tier"] = _validate_optional_enum(
+            "tier", update_data["tier"], _VALID_TIERS
+        )
+    if "time_horizon" in update_data:
+        update_data["time_horizon"] = _validate_optional_enum(
+            "time_horizon", update_data["time_horizon"], _VALID_TIME_HORIZON
+        )
+    if "funding_mode" in update_data:
+        update_data["funding_mode"] = _validate_optional_enum(
+            "funding_mode", update_data["funding_mode"], _VALID_FUNDING_MODE
+        )
+    if "activation_status" in update_data:
+        v = update_data["activation_status"]
+        norm = _validate_optional_enum(
+            "activation_status", v, _VALID_ACTIVATION_STATUS
+        )
+        if norm is None and v is not None and str(v).strip() == "":
+            raise HTTPException(
+                status_code=400,
+                detail="activation_status cannot be empty when provided.",
+            )
+        update_data["activation_status"] = norm
+    if "sensitivity_to_returns" in update_data:
+        update_data["sensitivity_to_returns"] = _validate_optional_enum(
+            "sensitivity_to_returns",
+            update_data["sensitivity_to_returns"],
+            _VALID_SENSITIVITY,
         )
 
     for field, value in update_data.items():
@@ -285,6 +479,12 @@ def update_goal(
 
     goal.updated_at = datetime.datetime.now(datetime.UTC)
     session.add(goal)
+    session.flush()
+
+    new_activation = goal.activation_status
+    if new_activation == "COMPLETED" and old_activation != "COMPLETED":
+        check_and_update_activations(session, current_user)
+
     session.commit()
     session.refresh(goal)
 
@@ -297,10 +497,14 @@ def update_goal(
 # ───────────────────────────────────────────────────────────────────────────
 
 @router.delete("/{goal_id}", status_code=204)
-def delete_goal(goal_id: int, *, session: Session = Depends(get_session)) -> None:
-    """Permanently delete a goal."""
+def delete_goal(
+    goal_id: int,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> None:
     goal = session.get(Goal, goal_id)
-    if not goal:
+    if not _goal_owned(goal, current_user):
         raise HTTPException(status_code=404, detail=f"Goal {goal_id} not found")
     session.delete(goal)
     session.commit()
@@ -327,10 +531,20 @@ def _goal_to_dict(goal: Goal, progress: dict) -> dict:
         "user_id": goal.user_id,
         "current_value": goal.current_value,
         "notes": goal.notes,
-        # Computed progress fields
+        "pyramid_id": goal.pyramid_id,
+        "tier": goal.tier,
+        "time_horizon": goal.time_horizon,
+        "funding_mode": goal.funding_mode,
+        "activation_status": goal.activation_status,
+        "activation_condition": goal.activation_condition,
+        "monthly_allocation": goal.monthly_allocation,
+        "allocation_priority": goal.allocation_priority,
+        "interruptible": goal.interruptible,
+        "sensitivity_to_returns": goal.sensitivity_to_returns,
+        # Computed progress fields (progress ``status`` is separate from activation_status)
         "computed_current_value": progress["current_value"],
         "computed_percentage": progress["percentage"],
-        "status": progress["status"],         # always return the derived status
+        "status": progress["status"],
         "created_at": goal.created_at.isoformat() if goal.created_at else None,
         "updated_at": goal.updated_at.isoformat() if goal.updated_at else None,
     }

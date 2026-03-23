@@ -9,7 +9,9 @@ Tables:
   - ProcessedEmail    — dedup ledger for the Gmail scraper; one row per Gmail
                         message ID so the same email is never processed twice
   - RecurringPattern  — auto-detected recurring transaction patterns (Phase 4.5c)
-  - Goal              — user-defined financial goals (Phase 4.5d)
+  - Goal              — user-defined financial goals (Phase 4.5d, hierarchy Phase B.0)
+  - GoalLink          — parent/child causal links between goals (Phase B.0)
+  - LifeEvent         — flags for activation DSL (event:...) (Phase B.0)
   - Holding           — portfolio position snapshot (Phase A.0)
   - InvestmentTransaction — broker/fund ledger rows (Phase A.0)
   - Liability         — loans and recurring obligations (Phase A.0)
@@ -254,9 +256,19 @@ class Goal(SQLModel, table=True):
 
     ``chart_key`` binds a goal to a dashboard chart metric (e.g. expense_need_want_stack,
     investment_net, category:swiggy_food) so limits match chart filters.
+
+    Phase B.0 — hierarchy / pyramid:
+      ``tier`` groups goals (VISION / STRATEGY / TACTIC / OPERATIONAL).
+      ``activation_status`` is lifecycle (PENDING / ACTIVE / COMPLETED / PAUSED), separate
+      from ``status`` which remains progress (ON_TRACK / AT_RISK / …).
+      ``pyramid_id`` is a short stable id (e.g. V1, S4) unique per ``user_id`` for DSL refs.
     """
 
     __tablename__ = "goals"
+    __table_args__ = (
+        # Named unique index (SQLite names inline UNIQUE as sqlite_autoindex_* otherwise).
+        Index("uq_goals_user_pyramid_id", "user_id", "pyramid_id", unique=True),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
 
@@ -287,6 +299,122 @@ class Goal(SQLModel, table=True):
     status: str = Field(default="ON_TRACK", index=True)
     notes: str | None = None
 
+    # ── Phase B.0: goal pyramid / activation (see module docstring) ─────────
+    # Field(max_length=, ge=, le=) documents the contract for OpenAPI / future use.
+    # SQLModel does not run Pydantic validation when you construct or load ORM rows,
+    # so bounds and string lengths are enforced on create/update in the API (Phase B.3).
+    pyramid_id: str | None = Field(
+        default=None,
+        max_length=10,
+        description="Stable tier label, e.g. V1, S4 — unique per user when set.",
+    )
+    tier: str | None = Field(
+        default=None,
+        index=True,
+        max_length=32,
+        description="VISION | STRATEGY | TACTIC | OPERATIONAL",
+    )
+    time_horizon: str | None = Field(
+        default=None,
+        max_length=32,
+        description="MONTHLY | QUARTERLY | ANNUAL | MULTI_YEAR | DECADE",
+    )
+    funding_mode: str | None = Field(
+        default=None,
+        max_length=32,
+        description="ACCUMULATION | CONSTRAINT | EVENT | MAINTENANCE",
+    )
+    activation_status: str = Field(
+        default="ACTIVE",
+        index=True,
+        max_length=32,
+        description="PENDING | ACTIVE | COMPLETED | PAUSED",
+    )
+    activation_condition: str | None = Field(
+        default=None,
+        max_length=500,
+        description="DSL, e.g. goal:S4:completed AND event:child_born",
+    )
+    monthly_allocation: float | None = Field(
+        default=None,
+        ge=0,
+        description="Current monthly INR from surplus pool.",
+    )
+    allocation_priority: int | None = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="Surplus funding order; 1 = highest.",
+    )
+    interruptible: bool = Field(
+        default=True,
+        description="Whether pausing this goal is considered safe.",
+    )
+    sensitivity_to_returns: str | None = Field(
+        default=None,
+        max_length=16,
+        description="LOW | MEDIUM | HIGH",
+    )
+
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+    updated_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# GoalLink — directed edges in the goal pyramid (Phase B.0)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class GoalLink(SQLModel, table=True):
+    """Relationship between two goals owned by the same user.
+
+    link_type values: DECOMPOSES_INTO | DEPENDS_ON | CONTRIBUTES_TO
+    Cycles and duplicate (parent, child, type) triples are rejected in application code (B.1).
+    """
+
+    __tablename__ = "goal_links"
+    __table_args__ = (
+        Index(
+            "uq_goal_link_parent_child_type",
+            "parent_goal_id",
+            "child_goal_id",
+            "link_type",
+            unique=True,
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    parent_goal_id: int = Field(foreign_key="goals.id", index=True)
+    child_goal_id: int = Field(foreign_key="goals.id", index=True)
+    link_type: str = Field(max_length=32)
+    description: str | None = Field(default=None, max_length=500)
+    contribution_amount: float | None = Field(default=None, ge=0)
+    user_id: str = Field(default="sashank", index=True)
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# LifeEvent — boolean flags referenced by activation_condition DSL (Phase B.0)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class LifeEvent(SQLModel, table=True):
+    """Named life milestone (employed, married, …) for event:<key> in the activation DSL."""
+
+    __tablename__ = "life_events"
+
+    id: int | None = Field(default=None, primary_key=True)
+    event_key: str = Field(index=True, max_length=64)
+    occurred: bool = Field(default=False)
+    occurred_date: datetime.date | None = None
+    user_id: str = Field(default="sashank", index=True)
+    notes: str | None = Field(default=None, max_length=2000)
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )
