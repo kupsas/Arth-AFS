@@ -9,7 +9,7 @@ from __future__ import annotations
 import csv
 import io
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from pipeline.holding_parsers.base import (
@@ -24,7 +24,7 @@ from pipeline.models import AssetClass, InvestmentTxnType, LiquidityClass, Valua
 PLATFORM = "NPS (CRA)"
 
 
-def _parse_stmt_date(s: str) -> datetime.date | None:
+def _parse_stmt_date(s: str) -> date | None:
     s = s.strip()
     for fmt in ("%d-%b-%Y", "%d/%m/%Y", "%Y-%m-%d"):
         try:

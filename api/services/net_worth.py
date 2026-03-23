@@ -17,7 +17,7 @@ import datetime
 from collections import defaultdict
 from typing import Literal
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from api.models import Holding, Liability, Price
 from api.services.price_feed import normalize_equity_symbol
@@ -52,7 +52,7 @@ def _latest_price_on_or_before(
     q = (
         select(Price.close_price)
         .where(Price.symbol == symbol, Price.date <= as_of)
-        .order_by(Price.date.desc())
+        .order_by(col(Price.date).desc())
         .limit(1)
     )
     row = session.exec(q).first()
@@ -159,7 +159,7 @@ def compute_concentration(
     *,
     as_of_date: datetime.date | None = None,
     user_id: str | None = None,
-) -> dict[str, float | None]:
+) -> dict[str, float | str | None]:
     """Largest position weighting and ESOP sleeve size."""
     holdings = _active_holdings(session, user_id)
     values = [(h, _holding_value(session, h, as_of_date)) for h in holdings]
@@ -224,10 +224,10 @@ def compute_net_worth_history(
     granularity: Granularity = "monthly",
     *,
     user_id: str | None = None,
-) -> list[dict[str, float | str]]:
+) -> list[dict[str, float | str | None]]:
     """Time series of net worth (recomputed at each anchor date)."""
     points = _iter_period_starts(start_date, end_date, granularity)
-    series: list[dict[str, float | str]] = []
+    series: list[dict[str, float | str | None]] = []
     for d in points:
         snap = compute_net_worth(session, as_of_date=d, user_id=user_id)
         series.append(
@@ -247,7 +247,8 @@ def liability_summary(session: Session, *, user_id: str | None = None) -> dict[s
     total_out = sum(float(r.principal_outstanding) for r in rows)
     total_emi = sum(float(r.emi_amount or 0.0) for r in rows)
     nw = compute_net_worth(session, user_id=user_id)
-    assets = float(nw["total_assets"])
+    ta = nw["total_assets"]
+    assets = float(ta) if isinstance(ta, (int, float)) else 0.0
     ratio = (total_out / assets) if assets > 0 else 0.0
     return {
         "principal_outstanding": round(total_out, 2),

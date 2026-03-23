@@ -118,7 +118,7 @@ class HoldingUpdate(BaseModel):
 class HoldingsSummaryOut(BaseModel):
     net_worth: dict[str, Any]
     allocation: dict[str, dict[str, float]]
-    concentration: dict[str, float | None]
+    concentration: dict[str, float | str | None]
 
 
 class NetWorthHistoryOut(BaseModel):

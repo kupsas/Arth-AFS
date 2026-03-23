@@ -7,6 +7,7 @@ Trigger a refresh (NSE / AMFI / yfinance per ``price_feed`` rules) and read hist
 from __future__ import annotations
 
 import datetime
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
@@ -60,11 +61,11 @@ def post_refresh_prices(
     # Normalise typed return for response_model
     return RefreshPricesOut(
         as_of=str(result["as_of"]),
-        price_rows_upserted=int(result["price_rows_upserted"]),
-        holdings_updated=int(result["holdings_updated"]),
-        nse_symbols=list(result["nse_symbols"]),
-        mf_codes=list(result["mf_codes"]),
-        international_yfinance_symbols=list(result["international_yfinance_symbols"]),
+        price_rows_upserted=int(cast(Any, result["price_rows_upserted"])),
+        holdings_updated=int(cast(Any, result["holdings_updated"])),
+        nse_symbols=list(cast(Any, result["nse_symbols"])),
+        mf_codes=list(cast(Any, result["mf_codes"])),
+        international_yfinance_symbols=list(cast(Any, result["international_yfinance_symbols"])),
     )
 
 
@@ -96,6 +97,6 @@ def get_price_history(
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid end_date")
         q = q.where(Price.date <= d1)
-    q = q.order_by(Price.date.asc()).limit(limit)
+    q = q.order_by(col(Price.date).asc()).limit(limit)
     rows = list(session.exec(q).all())
     return rows

@@ -27,7 +27,7 @@ from typing import Any
 
 import pyxirr
 from scipy.optimize import newton
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from api.models import Holding, InvestmentTransaction
 from pipeline.models import AssetClass, CompoundingFrequency, InvestmentTxnType, ValuationMethod
@@ -78,7 +78,7 @@ def _investment_txns_for_holding(
     q = (
         select(InvestmentTransaction)
         .where(InvestmentTransaction.holding_id == holding_id)
-        .order_by(InvestmentTransaction.txn_date, InvestmentTransaction.id)
+        .order_by(col(InvestmentTransaction.txn_date), col(InvestmentTransaction.id))
     )
     return list(session.exec(q).all())
 
