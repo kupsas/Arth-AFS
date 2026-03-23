@@ -25,7 +25,7 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, cast
 
 import httpx
 import yfinance as yf
@@ -364,21 +364,21 @@ def backfill_nse_portfolio_gaps(
     details: list[dict[str, int | str]] = []
 
     for sym in symbols:
-        last_d = session.exec(
-            select(func.max(Price.date)).where(Price.symbol == sym)
-        ).one()
+        # ``MAX(date)`` is NULL when there are no rows; stubs often type ``.one()`` as non-optional.
+        last_d = cast(
+            datetime.date | None,
+            session.exec(
+                select(func.max(Price.date)).where(Price.symbol == sym)
+            ).one(),
+        )
         if last_d is not None and last_d >= target:
             continue
 
         if last_d is None:
             start = target - datetime.timedelta(days=max_calendar_lookback_if_empty)
-            if start > target:
-                start = target
         else:
+            # Only reached when ``last_d < target`` (otherwise we ``continue`` above).
             start = last_d + datetime.timedelta(days=1)
-
-        if start > target:
-            continue
 
         res = backfill_prices(session, sym, start, target)
         details.append(res)
@@ -402,9 +402,11 @@ def run_startup_price_sync(session: Session) -> dict[str, object]:
 
     bf = backfill_nse_portfolio_gaps(session)
     refreshed = refresh_all_prices(session)
+    details_raw = bf.get("details", [])
+    n_detail_rows = len(details_raw) if isinstance(details_raw, list) else 0
     logger.info(
         "Startup price sync done — NSE backfill detail rows: %d, refresh as_of=%s",
-        len(bf.get("details", [])),
+        n_detail_rows,
         refreshed.get("as_of"),
     )
     return {"backfill": bf, "refresh": refreshed}
@@ -444,7 +446,8 @@ def refresh_all_prices(session: Session, *, user_id: str | None = None) -> dict[
             continue
 
         if ac == AssetClass.GOLD.value and _is_international_yfinance_symbol(sym):
-            intl_gold.append((h.id, sym))
+            if h.id is not None:
+                intl_gold.append((h.id, sym))
             continue
 
         if ac in (

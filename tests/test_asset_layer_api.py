@@ -22,7 +22,7 @@ os.environ.setdefault("FERNET_KEY", Fernet.generate_key().decode("ascii"))
 from api.auth import get_current_user  # noqa: E402
 from api.database import get_session  # noqa: E402
 from api.main import app  # noqa: E402
-from api.models import Holding, Liability, Price  # noqa: E402
+from api.models import Holding, Price  # noqa: E402
 from pipeline.models import (  # noqa: E402
     AssetClass,
     InvestmentTxnType,
