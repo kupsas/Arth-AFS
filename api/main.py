@@ -23,7 +23,10 @@ from api.database import get_engine, init_db
 from api.routes import metrics, pipeline, transactions
 from api.services.price_feed import run_startup_price_sync
 from api.routes.auth import router as auth_router
+from api.routes.goal_links import router as goal_links_router
+from api.routes.goal_tree import router as goal_tree_router
 from api.routes.goals import router as goals_router
+from api.routes.life_events import router as life_events_router
 from api.routes.holdings import router as holdings_router
 from api.routes.investment_transactions import router as investment_transactions_router
 from api.routes.liabilities import router as liabilities_router
@@ -120,7 +123,11 @@ app.include_router(metrics.router,      prefix="/api/metrics",       tags=["Metr
 app.include_router(pipeline.router,     prefix="/api/pipeline",      tags=["Pipeline"],      dependencies=_auth)
 app.include_router(scraper_router,      prefix="/api/scraper",       tags=["Scraper"],       dependencies=_auth)
 app.include_router(recurring_router,    prefix="/api/recurring",     tags=["Recurring"],     dependencies=_auth)
+# goal_tree_router first: static paths /tree and /allocation must not hit /{goal_id}.
+app.include_router(goal_tree_router,   prefix="/api/goals",         tags=["Goals"],         dependencies=_auth)
 app.include_router(goals_router,        prefix="/api/goals",         tags=["Goals"],         dependencies=_auth)
+app.include_router(goal_links_router,   prefix="/api/goal-links",   tags=["Goal links"],    dependencies=_auth)
+app.include_router(life_events_router, prefix="/api/life-events",   tags=["Life events"],   dependencies=_auth)
 app.include_router(settings_router,    prefix="/api/settings",      tags=["Settings"],      dependencies=_auth)
 app.include_router(holdings_router,           prefix="/api/holdings",                  tags=["Holdings"],                  dependencies=_auth)
 app.include_router(investment_transactions_router, prefix="/api/investment-transactions", tags=["Investment transactions"], dependencies=_auth)
