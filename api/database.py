@@ -49,6 +49,14 @@ def _column_exists(conn, table: str, column: str) -> bool:
     return any(row[1] == column for row in result)
 
 
+def _index_exists(conn, name: str) -> bool:
+    row = conn.execute(
+        text("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = :n"),
+        {"n": name},
+    ).fetchone()
+    return row is not None
+
+
 def _backfill_goal_chart_keys(conn) -> None:
     """One-time style updates: map legacy goals to dashboard chart_key (idempotent)."""
     if not _column_exists(conn, "goals", "chart_key"):
@@ -134,6 +142,44 @@ def _apply_sqlite_patches() -> None:
         # Phase A.0 — link bank transactions to holdings (e.g. dividend → equity position).
         if not _column_exists(conn, "transactions", "holding_id"):
             conn.execute(text("ALTER TABLE transactions ADD COLUMN holding_id INTEGER"))
+
+        # Phase B.0 — goal pyramid / activation columns (additive, safe for existing rows).
+        if not _column_exists(conn, "goals", "pyramid_id"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN pyramid_id TEXT"))
+        if not _column_exists(conn, "goals", "tier"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN tier TEXT"))
+        if not _column_exists(conn, "goals", "time_horizon"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN time_horizon TEXT"))
+        if not _column_exists(conn, "goals", "funding_mode"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN funding_mode TEXT"))
+        if not _column_exists(conn, "goals", "activation_status"):
+            conn.execute(
+                text(
+                    "ALTER TABLE goals ADD COLUMN activation_status TEXT "
+                    "NOT NULL DEFAULT 'ACTIVE'"
+                )
+            )
+        if not _column_exists(conn, "goals", "activation_condition"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN activation_condition TEXT"))
+        if not _column_exists(conn, "goals", "monthly_allocation"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN monthly_allocation REAL"))
+        if not _column_exists(conn, "goals", "allocation_priority"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN allocation_priority INTEGER"))
+        if not _column_exists(conn, "goals", "interruptible"):
+            conn.execute(
+                text("ALTER TABLE goals ADD COLUMN interruptible INTEGER NOT NULL DEFAULT 1")
+            )
+        if not _column_exists(conn, "goals", "sensitivity_to_returns"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN sensitivity_to_returns TEXT"))
+
+        # Enforce pyramid_id uniqueness per user when set (SQLite treats NULLs as distinct).
+        if not _index_exists(conn, "uq_goals_user_pyramid_id"):
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX uq_goals_user_pyramid_id "
+                    "ON goals (user_id, pyramid_id)"
+                )
+            )
 
 
 def _chmod_owner_rw_only(path: Path) -> None:
