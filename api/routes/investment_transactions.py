@@ -67,6 +67,11 @@ class ImportInvTxnResultOut(BaseModel):
 def list_investment_transactions(
     *,
     session: Session = Depends(get_session),
+    user_id: str | None = Query(
+        default=None,
+        description="When set, only rows linked to a holding owned by this user (via JOIN). "
+        "Omit for an unscoped list (includes rows with no holding_id).",
+    ),
     holding_id: int | None = None,
     txn_type: str | None = None,
     symbol: str | None = None,
@@ -76,6 +81,10 @@ def list_investment_transactions(
     offset: int = Query(default=0, ge=0),
 ):
     q = select(InvestmentTransaction)
+    uid = user_id.strip() if user_id and user_id.strip() else None
+    if uid is not None:
+        # Inner join: only transactions tied to a holding for this user (excludes orphans).
+        q = q.join(Holding, InvestmentTransaction.holding_id == Holding.id).where(Holding.user_id == uid)
     if holding_id is not None:
         q = q.where(InvestmentTransaction.holding_id == holding_id)
     if txn_type is not None:
