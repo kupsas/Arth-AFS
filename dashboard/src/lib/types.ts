@@ -171,6 +171,16 @@ export interface BulkUpdateResponse {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Auth — mirrors AuthStatusResponse in api/routes/auth.py
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** GET /api/auth/me — session check without reading the httpOnly cookie in JS. */
+export interface AuthStatus {
+  authenticated: boolean;
+  username: string | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Query filter types (used by the API client and hooks)
 // ─────────────────────────────────────────────────────────────────────────────
 

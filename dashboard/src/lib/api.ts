@@ -16,6 +16,7 @@
 
 import type {
   AccountSummary,
+  AuthStatus,
   BarDrilldownChart,
   BulkUpdateRequest,
   BulkUpdateResponse,
@@ -378,6 +379,15 @@ export async function logout(): Promise<void> {
   });
   // Redirect to login page regardless of the response
   window.location.href = "/login";
+}
+
+/**
+ * GET /api/auth/me
+ * Returns who is logged in (username matches ``user_id`` on holdings / goals).
+ * Uses the same ``get()`` helper as the rest of the app (401 → redirect to login).
+ */
+export function fetchAuthMe(): Promise<AuthStatus> {
+  return get<AuthStatus>("/api/auth/me");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

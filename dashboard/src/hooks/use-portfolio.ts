@@ -25,10 +25,12 @@ import {
   fetchLiabilitySummary,
   fetchNetWorthHistory,
   refreshPrices,
+  updateHoldingValue,
 } from "@/lib/api";
 import type {
   Holding,
   HoldingDetail,
+  HoldingValueUpdate,
   HoldingsListFilters,
   HoldingsSummary,
   InvestmentTxn,
@@ -171,6 +173,32 @@ export function useLiabilitySummary(
 }
 
 type RefreshPricesVars = { user_id?: string } | undefined;
+
+type UpdateHoldingVars = {
+  id: number;
+  body: HoldingValueUpdate;
+  user_id?: string;
+};
+
+/**
+ * PATCH /api/holdings/{id} — server only applies to MANUAL valuation rows.
+ * Invalidates portfolio cache on success.
+ */
+export function useUpdateHoldingValue(
+  options?: UseMutationOptions<Holding, Error, UpdateHoldingVars>,
+) {
+  const queryClient = useQueryClient();
+  const { onSuccess: userOnSuccess, ...rest } = options ?? {};
+  return useMutation({
+    ...rest,
+    mutationFn: ({ id, body, user_id }) =>
+      updateHoldingValue(id, body, user_id ? { user_id } : undefined),
+    onSuccess: async (data, variables, onMutateResult, context) => {
+      await queryClient.invalidateQueries({ queryKey: portfolioKeys.all });
+      await userOnSuccess?.(data, variables, onMutateResult, context);
+    },
+  });
+}
 
 /**
  * Triggers POST /api/prices/refresh; on success invalidates all ``portfolioKeys``
