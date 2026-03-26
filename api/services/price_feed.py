@@ -15,6 +15,11 @@ case. Prefer NSE-listed gold ETFs (e.g. ``GOLDBEES``) when you want a single sou
 
 **Orchestration** — ``refresh_all_prices`` updates the ``prices`` table and pushes
 the latest close onto each market-priced ``Holding`` row.
+
+**ICICI legacy symbols** — Broker short codes (e.g. ``APOTYR``) are mapped to NSE
+bhav tickers (``APOLLOTYRE``) via :func:`canonical_nse_symbol`. If today's bhav is
+missing or not yet published, we fall back to the newest ``prices`` row on or before
+the target session date so holdings do not stay stuck on stale CSV marks.
 """
 
 from __future__ import annotations
@@ -77,6 +82,24 @@ def normalize_equity_symbol(symbol: str) -> str:
         if s.endswith(suf):
             s = s[: -len(suf)]
     return s
+
+
+# ICICI Direct "Stock Symbol" values from portfolio CSV — not valid NSE bhav keys.
+# Keep in sync with ``ICICI_SHORT_TO_NSE`` in ``pipeline.holding_parsers.icici_direct_equity``.
+_ICICI_BROKER_TO_NSE: dict[str, str] = {
+    "APOTYR": "APOLLOTYRE",
+    "INDOIL": "IOC",
+    "KANNER": "KANSAINER",
+    "LARTOU": "LT",
+    "RELIND": "RELIANCE",
+    "TATPOW": "TATAPOWER",
+}
+
+
+def canonical_nse_symbol(symbol: str) -> str:
+    """NSE bhav / ``prices.symbol`` key: normalize then map legacy ICICI codes."""
+    n = normalize_equity_symbol(symbol)
+    return _ICICI_BROKER_TO_NSE.get(n, n)
 
 
 def _is_international_yfinance_symbol(symbol: str) -> bool:
@@ -212,7 +235,7 @@ def fetch_equity_closes_from_nse_bhav(
         logger.debug("NSE bhavcopy failed for %s: %s", trade_date, exc)
         return {}
     closes = _bhav_symbol_to_close(Path(path))
-    norm = [normalize_equity_symbol(s) for s in symbols]
+    norm = [canonical_nse_symbol(s) for s in symbols]
     return {s: closes[s] for s in norm if s in closes}
 
 
@@ -228,7 +251,7 @@ def fetch_equity_prices_nse(
     out: list[Price] = []
     if start_date > end_date:
         return out
-    norm_syms = sorted({normalize_equity_symbol(s) for s in symbols})
+    norm_syms = sorted({canonical_nse_symbol(s) for s in symbols})
     d = start_date
     first = True
     while d <= end_date:
@@ -277,9 +300,9 @@ def backfill_prices(
     """Fill gaps using NSE bhavcopy only."""
     rows = fetch_equity_prices_nse([symbol], start_date, end_date)
     if not rows:
-        return {"symbol": normalize_equity_symbol(symbol), "inserted": 0, "status": "no_data"}
+        return {"symbol": canonical_nse_symbol(symbol), "inserted": 0, "status": "no_data"}
     inserted = upsert_prices(session, rows)
-    return {"symbol": normalize_equity_symbol(symbol), "inserted": inserted, "status": "ok"}
+    return {"symbol": canonical_nse_symbol(symbol), "inserted": inserted, "status": "ok"}
 
 
 def _select_market_priced_holdings(
@@ -326,7 +349,7 @@ def nse_normalised_symbols_for_holdings(holdings: list[Holding]) -> list[str]:
             AssetClass.GOLD.value,
         ):
             raw.append(sym)
-    return sorted({normalize_equity_symbol(s) for s in raw})
+    return sorted({canonical_nse_symbol(s) for s in raw})
 
 
 def mf_scheme_codes_for_holdings(holdings: list[Holding]) -> list[str]:
@@ -456,6 +479,24 @@ def _is_amfi_scheme_code(symbol: str | None) -> bool:
     return bool(re.fullmatch(r"\d{4,7}", symbol.strip()))
 
 
+def _latest_close_on_or_before(
+    session: Session, symbol: str, as_of: datetime.date
+) -> tuple[float, datetime.date] | None:
+    """Best prior close in ``prices`` for NSE-style ``symbol`` (already canonical)."""
+    # Select the full row so mypy/SQLAlchemy agree on ``select()`` overloads (scalar
+    # columns are typed as Python float/date on the model, which confuses select()).
+    q = (
+        select(Price)
+        .where(Price.symbol == symbol, Price.date <= as_of)
+        .order_by(col(Price.date).desc())
+        .limit(1)
+    )
+    row = session.exec(q).first()
+    if row is None:
+        return None
+    return (float(row.close_price), row.date)
+
+
 def refresh_all_prices(session: Session, *, user_id: str | None = None) -> dict[str, object]:
     """Refresh last close for every active market-priced holding.
 
@@ -496,7 +537,7 @@ def refresh_all_prices(session: Session, *, user_id: str | None = None) -> dict[
         ):
             nse_symbols.append(sym)
 
-    nse_symbols = list({normalize_equity_symbol(s) for s in nse_symbols})
+    nse_symbols = list({canonical_nse_symbol(s) for s in nse_symbols})
     mf_codes = list(dict.fromkeys(mf_codes))
 
     price_rows: list[Price] = []
@@ -506,14 +547,31 @@ def refresh_all_prices(session: Session, *, user_id: str | None = None) -> dict[
 
     for sym in nse_symbols:
         close = nse_map.get(sym)
+        row_date = d
+        source = "nse"
         if close is None:
-            logger.warning(
-                "No NSE bhav close for %s on %s — holding unchanged until next run",
-                sym,
-                d,
-            )
-            continue
-        price_rows.append(Price(symbol=sym, date=d, close_price=close, source="nse"))
+            fb = _latest_close_on_or_before(session, sym, d)
+            if fb is not None:
+                close, row_date = fb
+                source = "nse_cached"
+                logger.info(
+                    "NSE bhav missing for %s on %s — using cached close %.4f from %s",
+                    sym,
+                    d,
+                    close,
+                    row_date,
+                )
+            else:
+                logger.warning(
+                    "No NSE bhav close for %s on %s and no rows in ``prices`` — "
+                    "holding unchanged until next run",
+                    sym,
+                    d,
+                )
+                continue
+        price_rows.append(
+            Price(symbol=sym, date=row_date, close_price=close, source=source)
+        )
 
     for code in mf_codes:
         price_rows.extend(fetch_mf_navs([code], as_of_date=None))
@@ -551,7 +609,7 @@ def refresh_all_prices(session: Session, *, user_id: str | None = None) -> dict[
         elif h.asset_class == AssetClass.GOLD.value and _is_international_yfinance_symbol(key):
             lookup = key
         else:
-            lookup = normalize_equity_symbol(h.symbol)
+            lookup = canonical_nse_symbol(h.symbol)
         tup = close_by_symbol.get(lookup)
         if not tup:
             continue

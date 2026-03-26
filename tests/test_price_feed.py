@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+from typing import cast
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,10 +16,12 @@ from api.services.price_feed import (
     _bhav_symbol_to_close,
     backfill_prices,
     calendar_start_for_forced_nse_depth,
+    canonical_nse_symbol,
     latest_bhav_target_date,
     mf_scheme_codes_for_holdings,
     normalize_equity_symbol,
     parse_amfi_nav_rows,
+    refresh_all_prices,
     upsert_prices,
 )
 from pipeline.models import AssetClass, LiquidityClass, ValuationMethod
@@ -27,6 +30,12 @@ from pipeline.models import AssetClass, LiquidityClass, ValuationMethod
 def test_normalize_equity_symbol_strips_suffix() -> None:
     assert normalize_equity_symbol("  reliance.ns ") == "RELIANCE"
     assert normalize_equity_symbol("TCS.NSE") == "TCS"
+
+
+def test_canonical_nse_symbol_maps_icici_legacy_codes() -> None:
+    assert canonical_nse_symbol("APOTYR") == "APOLLOTYRE"
+    assert canonical_nse_symbol("indoil") == "IOC"
+    assert canonical_nse_symbol("RELIANCE") == "RELIANCE"
 
 
 def test_latest_bhav_target_date_weekday_unchanged() -> None:
@@ -158,3 +167,55 @@ def test_backfill_prices_calls_fetch_and_upserts(mock_fetch) -> None:
         got = session.exec(select(Price).where(Price.symbol == "INFY")).first()
     assert got is not None
     assert got.close_price == pytest.approx(1500.0)
+
+
+@patch("api.services.price_feed.fetch_equity_closes_from_nse_bhav", return_value={})
+@patch(
+    "api.services.price_feed.latest_bhav_target_date",
+    return_value=datetime.date(2025, 3, 24),
+)
+def test_refresh_all_prices_db_fallback_when_bhav_empty(
+    _mock_target: object, _mock_bhav: object
+) -> None:
+    """If NSE returns no row for the session, use the latest ``prices`` row on or before target."""
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+    d_hist = datetime.date(2025, 3, 20)
+    with Session(engine) as session:
+        session.add(
+            Price(
+                symbol="APOLLOTYRE",
+                date=d_hist,
+                close_price=400.0,
+                source="nse",
+            )
+        )
+        h = Holding(
+            name="Apollo Tyres",
+            account_platform="ICICI Direct",
+            asset_class=AssetClass.EQUITY.value,
+            valuation_method=ValuationMethod.MARKET_PRICE.value,
+            liquidity_class=LiquidityClass.T_PLUS_1.value,
+            symbol="APOTYR",
+            quantity=2.0,
+            user_id="sashank",
+        )
+        session.add(h)
+        session.commit()
+        session.refresh(h)
+        hid = h.id
+
+        out = refresh_all_prices(session, user_id="sashank")
+        session.commit()
+
+    assert int(cast(int, out["holdings_updated"])) >= 1
+    with Session(engine) as session:
+        h2 = session.exec(select(Holding).where(Holding.id == hid)).first()
+        assert h2 is not None
+        assert h2.current_price_per_unit == pytest.approx(400.0)
+        assert h2.last_valued_date == d_hist
+        assert h2.current_value == pytest.approx(800.0)

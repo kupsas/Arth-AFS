@@ -382,9 +382,10 @@ export function HoldingsTable({ userId }: HoldingsTableProps) {
           if (!d) return "—";
           const ar = d.returns.annualized_return;
           if (typeof ar === "number" && Number.isFinite(ar)) {
+            // annualized_return is a decimal fraction (0.075 = 7.5%) — multiply by 100 for display.
             return (
-              <span className="tabular-nums text-sm">
-                {formatPercent(ar)}
+              <span className={`tabular-nums text-sm ${ar >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+                {formatPercent(ar * 100)}
                 <span className="block text-[10px] text-muted-foreground">
                   {d.returns.method}
                 </span>

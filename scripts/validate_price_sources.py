@@ -34,14 +34,14 @@ if str(_ROOT) not in sys.path:
 import yfinance as yf  # noqa: E402
 
 from api.services.price_feed import (  # noqa: E402
+    canonical_nse_symbol,
     fetch_equity_closes_from_nse_bhav,
-    normalize_equity_symbol,
 )
 
 
 def to_yfinance_ticker(symbol: str) -> str:
     """Diagnostic only — Yahoo ``TICKER.NS`` (not used by production ``price_feed``)."""
-    return f"{normalize_equity_symbol(symbol)}.NS"
+    return f"{canonical_nse_symbol(symbol)}.NS"
 
 # Small set that matched well in prior runs (sanity check).
 BASELINE_SYMBOLS = ["TCS", "INFY", "SBIN"]
@@ -100,7 +100,7 @@ def run_batch(
         print(f"=== {d.isoformat()} (weekday {d.weekday()}) ===")
         nse_map = fetch_equity_closes_from_nse_bhav(symbols, d)
         for sym in symbols:
-            key = normalize_equity_symbol(sym)
+            key = canonical_nse_symbol(sym)
             nse_c = nse_map.get(key)
             yf_c = yfinance_close_on(sym, d)
             if nse_c is None and yf_c is None:

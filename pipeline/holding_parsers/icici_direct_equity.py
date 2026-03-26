@@ -23,17 +23,32 @@ from pipeline.models import AssetClass, InvestmentTxnType, LiquidityClass, Valua
 ISIN_TO_NSE_SYMBOL: dict[str, str] = {
     "INE646L01027": "INDIGO",  # InterGlobe Aviation
     "INE040A01034": "HDFCBANK",
-    "INE257A01026": "BHEL",
+    "INE263A01024": "BEL",  # Bharat Electronics (ICICI code BHAELE — not BHEL)
+    "INE257A01026": "BHEL",  # Bharat Heavy Electricals — distinct from BEL
+    "INE438A01022": "APOLLOTYRE",  # Apollo Tyres
+    "INE213A01029": "IOC",  # Indian Oil
+    "INE531A01024": "KANSAINER",  # Kansai Nerolac Paints
+    "INE018A01030": "LT",  # Larsen & Toubro
+    "INE002A01018": "RELIANCE",  # Reliance Industries
+    "INE245A01021": "TATAPOWER",  # Tata Power
     "INE397D01024": "ZENSARTECH",
     "INE528G01035": "MINDACORP",
     "INE383A01012": "STOONE",  # Stone India — halted; symbol kept for identity
 }
 
-# Broker short codes for *exited* names no longer on the latest summary (annual CSV only).
+# Broker short codes (summary + annual trades). Keep keys aligned with
+# ``_ICICI_BROKER_TO_NSE`` in ``api.services.price_feed`` so legacy rows still refresh.
 ICICI_SHORT_TO_NSE: dict[str, str] = {
     "INTAVI": "INDIGO",
     "HDFBAN": "HDFCBANK",
-    "BHAELE": "BHEL",
+    # ICICI uses BHAELE for Bharat *Electronics* (NSE BEL). Do not map to BHEL (Heavy Electricals).
+    "BHAELE": "BEL",
+    "APOTYR": "APOLLOTYRE",
+    "INDOIL": "IOC",
+    "KANNER": "KANSAINER",
+    "LARTOU": "LT",
+    "RELIND": "RELIANCE",
+    "TATPOW": "TATAPOWER",
     "ZENSAR": "ZENSARTECH",
     "MINDAC": "MINDACORP",
     "STOONE": "STOONE",
