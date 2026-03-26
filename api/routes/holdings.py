@@ -129,7 +129,7 @@ class NetWorthHistoryOut(BaseModel):
 class ImportResultOut(BaseModel):
     source: str
     holdings_stats: dict[str, int]
-    investment_txn_stats: dict[str, int]
+    investment_txn_stats: dict[str, Any]
 
 
 def _validate_holding_enums(asset_class: str, valuation_method: str, liquidity_class: str, fund_type: str | None) -> None:
@@ -320,7 +320,12 @@ def import_holdings(
     if skip_investment_txns:
         tstats = {"inserted": 0, "skipped_duplicate": 0, "errors": 0}
     else:
-        tstats = ingest_investment_transactions(session, txns, dry_run=False)
+        tstats = ingest_investment_transactions(
+            session,
+            txns,
+            user_id=user_id.strip() or "sashank",
+            dry_run=False,
+        )
 
     logger.info("API holdings import source=%s user=%s h=%s t=%s", sk, user_id, hstats, tstats)
     return ImportResultOut(source=sk, holdings_stats=hstats, investment_txn_stats=tstats)

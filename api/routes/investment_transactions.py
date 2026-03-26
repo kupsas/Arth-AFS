@@ -62,7 +62,7 @@ class InvestmentTransactionCreate(BaseModel):
 
 class ImportInvTxnResultOut(BaseModel):
     source: str
-    investment_txn_stats: dict[str, int]
+    investment_txn_stats: dict[str, Any]
 
 
 @router.get("", response_model=list[InvestmentTransactionOut])
@@ -155,6 +155,7 @@ def import_investment_transactions(
     *,
     session: Session = Depends(get_session),
     source: str = Form(...),
+    user_id: str = Form(default="sashank"),
     files: list[UploadFile] = File(...),
 ):
     sk = source.strip()
@@ -168,6 +169,11 @@ def import_investment_transactions(
         parser_cls = HOLDING_PARSER_REGISTRY[sk]
         _holdings, txns = parser_cls().parse_path(path)
 
-    stats = ingest_investment_transactions(session, txns, dry_run=False)
+    stats = ingest_investment_transactions(
+        session,
+        txns,
+        user_id=user_id.strip() or "sashank",
+        dry_run=False,
+    )
     logger.info("API investment txn import source=%s stats=%s", sk, stats)
     return ImportInvTxnResultOut(source=sk, investment_txn_stats=stats)

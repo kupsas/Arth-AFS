@@ -20,7 +20,7 @@ from typing import Literal
 from sqlmodel import Session, col, select
 
 from api.models import Holding, Liability, Price
-from api.services.price_feed import normalize_equity_symbol
+from api.services.price_feed import canonical_nse_symbol
 from pipeline.models import AssetClass, ValuationMethod
 
 Granularity = Literal["daily", "weekly", "monthly"]
@@ -88,7 +88,7 @@ def _holding_value(
     elif h.asset_class == AssetClass.GOLD.value:
         lookup = sym
     else:
-        lookup = normalize_equity_symbol(sym)
+        lookup = canonical_nse_symbol(sym)
 
     px = _latest_price_on_or_before(session, lookup, as_of)
     if px is None:

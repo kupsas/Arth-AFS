@@ -54,6 +54,7 @@ def parse_icici_mf_csv(path: Path) -> list[ParsedInvestmentTxn]:
         channel = _row_get(row, "Channel").strip()
         fund = _row_get(row, "Fund Name", "FundName").strip()
         scheme = _row_get(row, "Scheme Name", "SchemeName").strip()
+        scheme_code = _row_get(row, "Scheme Code", "SchemeCode", "SCRIP CODE", "Scrip Code").strip()
         folio = _row_get(row, "Folio No", "FolioNo", "Folio").strip()
         # "Last recorded NAV On" is a date column — do not mix into NAV.
         nav = parse_icici_number(_row_get(row, "Last recorded NAV", "Last recorded NAV "))
@@ -78,10 +79,11 @@ def parse_icici_mf_csv(path: Path) -> list[ParsedInvestmentTxn]:
         if not ppu and qty and total:
             ppu = total / qty
 
+        amfi_meta = scheme_code if scheme_code.isdigit() else None
         out.append(
             ParsedInvestmentTxn(
                 txn_date=dt,
-                symbol=None,
+                symbol=amfi_meta,
                 name=name,
                 txn_type=txn_type,
                 quantity=qty,
@@ -95,6 +97,7 @@ def parse_icici_mf_csv(path: Path) -> list[ParsedInvestmentTxn]:
                     "fund_name": fund,
                     "scheme_name": scheme,
                     "channel": channel,
+                    "amfi_scheme_code": amfi_meta,
                 },
             )
         )
@@ -136,9 +139,16 @@ def derive_mf_holdings(txns: list[ParsedInvestmentTxn]) -> list[ParsedHolding]:
         nav = last_nav or avg_remaining or 0.0
         cur_val = nav * qty_pos
 
+        sch_sym: str | None = None
+        for t in series:
+            raw = (t.metadata or {}).get("amfi_scheme_code") or t.symbol
+            if raw and str(raw).strip().isdigit():
+                sch_sym = str(raw).strip()
+                break
+
         holdings.append(
             ParsedHolding(
-                symbol=None,
+                symbol=sch_sym,
                 name=name,
                 quantity=qty_pos,
                 asset_class=AssetClass.MUTUAL_FUND.value,

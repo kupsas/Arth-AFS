@@ -24,6 +24,10 @@ from api.database import get_engine, init_db
 from api.models import Holding, InvestmentTransaction, Liability
 from pipeline.holding_parsers import HOLDING_PARSER_REGISTRY, parse_bike_loan_txt, parse_term_insurance_pdf
 from pipeline.holding_parsers.base import ParsedHolding, ParsedInvestmentTxn, ParsedLiability
+from pipeline.investment_txn_linking import (
+    find_holding_id_for_parsed_txn,
+    link_unlinked_investment_transactions,
+)
 from pipeline.models import AssetClass, InvestmentTxnType, LiquidityClass, ValuationMethod
 
 logger = logging.getLogger(__name__)
@@ -218,11 +222,16 @@ def ingest_investment_transactions(
     session: Session,
     txns: list[ParsedInvestmentTxn],
     *,
+    user_id: str | None = None,
     dry_run: bool = False,
 ) -> dict[str, int]:
+    """Insert deduped ledger rows. When ``user_id`` is set, resolve ``holding_id`` (MF + equity)."""
     inserted = 0
     skipped = 0
     errors = 0
+    linked_inline = 0
+    uid = user_id.strip() if user_id and str(user_id).strip() else None
+
     for t in txns:
         bad = validate_parsed_inv_txn(t)
         if bad:
@@ -240,6 +249,11 @@ def ingest_investment_transactions(
             notes_parts.append(t.name)
         if t.notes:
             notes_parts.append(t.notes)
+        hid: int | None = None
+        if uid:
+            hid = find_holding_id_for_parsed_txn(session, uid, t)
+            if hid is not None:
+                linked_inline += 1
         it = InvestmentTransaction(
             txn_date=t.txn_date,
             symbol=t.symbol,
@@ -248,14 +262,30 @@ def ingest_investment_transactions(
             price_per_unit=t.price_per_unit,
             total_amount=t.total_amount,
             account_platform=t.account_platform,
+            holding_id=hid,
             notes="\n".join(notes_parts) if notes_parts else None,
         )
         session.add(it)
         inserted += 1
         session.flush()
+
+    orphan_backfill = {"examined": 0, "linked": 0, "still_orphan": 0, "ambiguous": 0}
+    if uid and not dry_run:
+        orphan_backfill = link_unlinked_investment_transactions(
+            session, user_ids=[uid]
+        )
+
     if not dry_run:
         session.commit()
-    return {"inserted": inserted, "skipped_duplicate": skipped, "errors": errors}
+    return {
+        "inserted": inserted,
+        "skipped_duplicate": skipped,
+        "errors": errors,
+        "linked_inline": linked_inline,
+        "orphans_linked": int(orphan_backfill.get("linked", 0)),
+        "orphans_examined": int(orphan_backfill.get("examined", 0)),
+        "orphans_ambiguous": int(orphan_backfill.get("ambiguous", 0)),
+    }
 
 
 def ingest_liabilities(
@@ -347,7 +377,12 @@ def main(argv: list[str] | None = None) -> None:
         if not args.skip_holdings:
             hstats = ingest_holdings(session, holdings, user_id=user_id, dry_run=args.dry_run)
         if not args.skip_txns:
-            tstats = ingest_investment_transactions(session, txns, dry_run=args.dry_run)
+            tstats = ingest_investment_transactions(
+                session,
+                txns,
+                user_id=user_id,
+                dry_run=args.dry_run,
+            )
     logger.info("Holdings: %s  Investment txns: %s", hstats, tstats)
 
 

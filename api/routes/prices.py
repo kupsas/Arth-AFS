@@ -15,7 +15,7 @@ from sqlmodel import Session, col, select
 
 from api.database import get_session
 from api.models import Price
-from api.services.price_feed import normalize_equity_symbol, refresh_all_prices
+from api.services.price_feed import canonical_nse_symbol, normalize_equity_symbol, refresh_all_prices
 
 router = APIRouter()
 
@@ -45,7 +45,11 @@ class RefreshPricesOut(BaseModel):
 
 def _symbol_variants(symbol: str) -> list[str]:
     s = symbol.strip()
-    out = list(dict.fromkeys([s, normalize_equity_symbol(s)]))
+    out = list(
+        dict.fromkeys(
+            [s, normalize_equity_symbol(s), canonical_nse_symbol(s)],
+        )
+    )
     return out
 
 
