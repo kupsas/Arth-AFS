@@ -834,6 +834,14 @@ export interface PortfolioValueTrend {
   points: PortfolioValueTrendPoint[];
 }
 
+/** Query param for GET /api/holdings/portfolio-value-trend — matches FastAPI ``range``. */
+export type PortfolioValueTrendRange = "3M" | "6M" | "12M" | "all";
+
+/** GET /api/holdings/batch-returns — map keyed by holding id string. */
+export interface BatchReturnsResponse {
+  returns: Record<string, Record<string, unknown>>;
+}
+
 /** GET /api/holdings/batch-returns */
 export type BatchHoldingReturnsMap = Record<string, Record<string, unknown>>;
 
