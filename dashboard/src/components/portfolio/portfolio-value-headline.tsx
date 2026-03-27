@@ -41,7 +41,7 @@ export function PortfolioValueHeadline({ userId }: PortfolioValueHeadlineProps) 
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        <p className="text-sm text-muted-foreground">Total portfolio value</p>
+        <p className="text-sm text-muted-foreground">Current total portfolio value</p>
         <Button
           type="button"
           size="xs"

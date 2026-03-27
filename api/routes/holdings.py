@@ -227,6 +227,10 @@ def list_holdings(
     account_platform: str | None = None,
     liquidity_class: str | None = None,
     is_active: bool | None = None,
+    include_inactive: bool = Query(
+        default=False,
+        description="If true, include archived holdings (is_active=false). Default: active only.",
+    ),
 ):
     q = select(Holding).where(Holding.user_id == user_id)
     if asset_class is not None:
@@ -237,10 +241,18 @@ def list_holdings(
         q = q.where(Holding.liquidity_class == liquidity_class)
     if is_active is not None:
         q = q.where(Holding.is_active == is_active)
+    elif not include_inactive:
+        q = q.where(Holding.is_active == True)  # noqa: E712
     q = q.order_by(Holding.name)
     uid = user_id.strip() or "sashank"
-    total_v = total_portfolio_value(session, uid)
     rows = list(session.exec(q).all())
+    # Archived rows are not in total_portfolio_value(); mix active+inactive needs a local denominator.
+    if include_inactive:
+        total_v = sum(holding_value(session, h, None) for h in rows)
+        if total_v <= 0:
+            total_v = total_portfolio_value(session, uid)
+    else:
+        total_v = total_portfolio_value(session, uid)
     return [_holding_out_with_metrics(session, h, total_v) for h in rows]
 
 

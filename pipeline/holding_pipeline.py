@@ -24,6 +24,7 @@ from api.database import get_engine, init_db
 from api.models import Holding, InvestmentTransaction, Liability
 from pipeline.holding_parsers import HOLDING_PARSER_REGISTRY, parse_bike_loan_txt, parse_term_insurance_pdf
 from pipeline.holding_parsers.base import ParsedHolding, ParsedInvestmentTxn, ParsedLiability
+from pipeline.holding_parsers.nps import NPS_CANONICAL_HOLDING_NAME, PLATFORM as NPS_CRA_PLATFORM
 from pipeline.investment_txn_linking import (
     find_holding_id_for_parsed_txn,
     link_unlinked_investment_transactions,
@@ -79,6 +80,32 @@ def find_existing_holding(session: Session, user_id: str, ph: ParsedHolding) -> 
         ).first()
         if row:
             return row
+
+    # One consolidated NPS row per PRAN — upgrades legacy E/C/G rows on re-import.
+    if (
+        ph.asset_class == AssetClass.NPS.value
+        and ph.account_platform == NPS_CRA_PLATFORM
+        and ph.folio_number
+        and str(ph.folio_number).strip()
+    ):
+        pran = str(ph.folio_number).strip()
+        stmt = select(Holding).where(
+            Holding.user_id == user_id,
+            Holding.account_platform == ph.account_platform,
+            Holding.asset_class == AssetClass.NPS.value,
+            Holding.is_active == True,  # noqa: E712
+        )
+        cands = list(session.exec(stmt).all())
+
+        def _pran_match(h: Holding) -> bool:
+            fn = str(h.folio_number_encrypted).strip() if h.folio_number_encrypted else ""
+            ai = str(h.account_identifier_encrypted).strip() if h.account_identifier_encrypted else ""
+            return fn == pran or ai == pran
+
+        hits = [h for h in cands if _pran_match(h)]
+        if hits:
+            pref = [h for h in hits if h.name == NPS_CANONICAL_HOLDING_NAME]
+            return pref[0] if pref else hits[0]
 
     stmt = select(Holding).where(
         Holding.user_id == user_id,

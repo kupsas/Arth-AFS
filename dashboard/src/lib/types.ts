@@ -925,6 +925,8 @@ export interface HoldingsListFilters {
   account_platform?: string;
   liquidity_class?: string;
   is_active?: boolean;
+  /** When true, API returns archived rows (is_active=false). Default false. */
+  include_inactive?: boolean;
 }
 
 export type NetWorthGranularity = "daily" | "weekly" | "monthly";

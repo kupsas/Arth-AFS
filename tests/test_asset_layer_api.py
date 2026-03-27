@@ -115,6 +115,47 @@ def test_list_and_get_holding(client: TestClient, engine):
     assert body["holding"]["weight_pct"] == pytest.approx(100.0)
 
 
+def test_list_holdings_defaults_to_active_only(client: TestClient, engine):
+    with Session(engine) as s:
+        a = Holding(
+            name="Active MF",
+            symbol="111",
+            quantity=1.0,
+            asset_class=AssetClass.MUTUAL_FUND.value,
+            account_platform="ICICI Direct MF",
+            valuation_method=ValuationMethod.MARKET_PRICE.value,
+            liquidity_class=LiquidityClass.T_PLUS_3.value,
+            current_value=100.0,
+            user_id="sashank",
+            is_active=True,
+        )
+        z = Holding(
+            name="Zombie Row",
+            symbol="222",
+            quantity=1.0,
+            asset_class=AssetClass.MUTUAL_FUND.value,
+            account_platform="ICICI Direct MF",
+            valuation_method=ValuationMethod.MARKET_PRICE.value,
+            liquidity_class=LiquidityClass.T_PLUS_3.value,
+            current_value=50.0,
+            user_id="sashank",
+            is_active=False,
+        )
+        s.add(a)
+        s.add(z)
+        s.commit()
+
+    r = client.get("/api/holdings?user_id=sashank")
+    assert r.status_code == 200
+    names = {row["name"] for row in r.json()}
+    assert names == {"Active MF"}
+
+    r2 = client.get("/api/holdings?user_id=sashank&include_inactive=true")
+    assert r2.status_code == 200
+    names2 = {row["name"] for row in r2.json()}
+    assert names2 == {"Active MF", "Zombie Row"}
+
+
 def test_holdings_b3_summary_batch_returns_and_trend(client: TestClient, engine):
     """B3 — extended summary, batch XIRR payload, portfolio value trend (total_assets)."""
     with Session(engine) as s:
