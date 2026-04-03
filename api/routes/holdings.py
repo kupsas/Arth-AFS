@@ -268,7 +268,9 @@ def _holding_out_with_metrics(
         extra["maturity_date"] = mat
 
     if h.asset_class == AssetClass.PPF.value:
-        first_buy = earliest_ppf_contribution_date(session, h.id)
+        first_buy = (
+            earliest_ppf_contribution_date(session, h.id) if h.id is not None else None
+        )
         rate_pct, rate_note = get_ppf_reference_rate_for_projection()
         balance = float(holding_value(session, h, None) or 0.0)
         today = datetime.datetime.now(datetime.UTC).date()

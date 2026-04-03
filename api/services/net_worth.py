@@ -231,6 +231,7 @@ def compute_net_worth(
     debt = sum(float(x.principal_outstanding) for x in liabilities)
     net = assets - debt
 
+    as_of_out: str | None
     if as_of_date is not None:
         as_of_out = as_of_date.isoformat()
     else:

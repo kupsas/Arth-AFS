@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from api.models import InvestmentTransaction
 from pipeline.models import AssetClass, InvestmentTxnType
@@ -19,7 +19,7 @@ def earliest_ppf_contribution_date(session: Session, holding_id: int) -> datetim
             InvestmentTransaction.holding_id == holding_id,
             InvestmentTransaction.txn_type == InvestmentTxnType.BUY.value,
         )
-        .order_by(InvestmentTransaction.txn_date)
+        .order_by(col(InvestmentTransaction.txn_date))
         .limit(1)
     ).first()
     return t.txn_date if t else None
