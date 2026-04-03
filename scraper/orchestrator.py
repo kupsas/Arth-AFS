@@ -174,20 +174,32 @@ def _process_email(
         )
         return "skipped", 0
 
-    # ── Step 2: download HTML body ───────────────────────────────────────────
-    # We only download the body now that we know there's a parser for it.
-    # This avoids paying the API cost for non-transaction emails.
-    html_body = client.get_message_body(msg.id)
+    # ── Step 2: download body or PDF attachments ─────────────────────────────
+    # HTML parsers ("body"): one InstaAlert-style email → one HTML body.
+    # Statement parsers ("attachment"): monthly PDF(s) → many transactions.
+    parse_type = getattr(parser, "parse_type", "body")
+    received_date = msg.received_at.date()
 
-    # ── Step 3: parse HTML → ParsedTransaction list ──────────────────────────
-    parsed_txns: list[ParsedTransaction] = parser.parse(
-        html_body, msg.received_at.date()
-    )
+    if parse_type == "attachment":
+        attachments = client.get_attachments(msg.id)
+        if not attachments:
+            logger.debug(
+                "Parser %s matched subject but no PDF attachments in message %s — skipping",
+                type(parser).__name__,
+                msg.id,
+            )
+            return "skipped", 0
+        parsed_txns: list[ParsedTransaction] = []
+        for _filename, pdf_bytes in attachments:
+            parsed_txns.extend(parser.parse_attachment(pdf_bytes, received_date))
+    else:
+        html_body = client.get_message_body(msg.id)
+        parsed_txns = parser.parse(html_body, received_date)
+
+    # ── Step 3: ParsedTransaction list ready ───────────────────────────────────
 
     if not parsed_txns:
-        # Parser matched the subject but found no transaction in the body.
-        # Examples: E-mandate email (has merchant name but no amount),
-        # card-settings change notification, OTP emails.
+        # Parser matched the subject but produced no rows (empty HTML/attachment).
         logger.debug(
             "Parser %s returned [] for subject='%s' — skipping",
             type(parser).__name__, msg.subject[:80],

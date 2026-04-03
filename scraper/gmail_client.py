@@ -201,11 +201,106 @@ class GmailClient:
 
     # ── Email fetching ──────────────────────────────────────────────────────────
 
+    def search_messages(
+        self,
+        query: str,
+        *,
+        paginate: bool = False,
+        max_results_per_page: int = 100,
+        max_total: int | None = None,
+    ) -> list[GmailMessage]:
+        """Search Gmail with an arbitrary query string (same syntax as the web UI).
+
+        Used by backfill / validation scripts that need subject-based or compound
+        queries. The scraper's :meth:`fetch_emails` delegates here.
+
+        Args:
+            query: Full Gmail search string, e.g.
+                ``from:alerts@hdfcbank.net after:2026/01/01``.
+            paginate: If False (default), only the first ``list()`` page is fetched
+                — fast for interactive scripts. If True, follows ``nextPageToken``
+                until all matching messages are retrieved (historical backfill).
+            max_results_per_page: Page size for each ``messages().list()`` call
+                (max 500 per Gmail API docs; we default to 100).
+            max_total: When paginating, stop after this many messages (``None`` =
+                no cap). Ignored when ``paginate`` is False.
+
+        Returns:
+            Newest-first list of :class:`GmailMessage` (metadata only).
+
+        Raises:
+            RuntimeError: if called before authenticate().
+            HttpError: if the Gmail API returns an error.
+        """
+        self._require_auth()
+        logger.debug("Gmail search_messages query: %s paginate=%s", query, paginate)
+
+        raw_messages: list[dict] = []
+        page_token: str | None = None
+
+        try:
+            while True:
+                request = (
+                    self._service.users()
+                    .messages()
+                    .list(
+                        userId="me",
+                        q=query,
+                        maxResults=max_results_per_page,
+                        pageToken=page_token,
+                    )
+                )
+                response = request.execute()
+                batch = response.get("messages", [])
+                raw_messages.extend(batch)
+
+                if not paginate:
+                    break
+                if max_total is not None and len(raw_messages) >= max_total:
+                    raw_messages = raw_messages[:max_total]
+                    break
+                page_token = response.get("nextPageToken")
+                if not page_token:
+                    break
+        except HttpError as e:
+            logger.error("Gmail API list() failed for query %r: %s", query, e)
+            raise
+
+        if not raw_messages:
+            logger.debug("No emails found for query: %s", query)
+            return []
+
+        logger.info("Found %d email(s) matching query (paginate=%s)", len(raw_messages), paginate)
+
+        result: list[GmailMessage] = []
+        for raw in raw_messages:
+            try:
+                msg = (
+                    self._service.users()
+                    .messages()
+                    .get(
+                        userId="me",
+                        id=raw["id"],
+                        format="metadata",
+                        metadataHeaders=["From", "Subject", "Date"],
+                    )
+                    .execute()
+                )
+                result.append(self._parse_metadata(msg))
+            except HttpError as e:
+                logger.warning("Failed to fetch metadata for message %s: %s", raw["id"], e)
+                continue
+
+        return result
+
     def fetch_emails(
         self,
         sender: str,
         after_date: datetime.date,
         max_results: int = 100,
+        *,
+        paginate: bool = False,
+        max_total: int | None = None,
     ) -> list[GmailMessage]:
         """Search Gmail for emails from a specific sender after a given date.
 
@@ -213,8 +308,13 @@ class GmailClient:
             sender:      Email address to filter by, e.g. "alerts@hdfcbank.net"
             after_date:  Only return emails received on or after this date.
                          Gmail's "after:" filter is inclusive and uses YYYY/MM/DD format.
-            max_results: Cap on how many messages to return (default 100 is plenty
-                         for a 15-minute polling window).
+            max_results: Page size for ``messages().list()`` (default 100). When
+                         ``paginate`` is False, only one page is returned.
+            paginate:    If True, follow ``nextPageToken`` until all pages are read
+                         (needed for multi-year statement backfills). The 15-minute
+                         scraper should keep the default False so each poll stays a
+                         single cheap API round-trip.
+            max_total:   When ``paginate`` is True, optional cap on total messages.
 
         Returns:
             List of GmailMessage objects, ordered newest-first (Gmail default).
@@ -224,54 +324,13 @@ class GmailClient:
             RuntimeError: if called before authenticate().
             HttpError: if the Gmail API returns an error.
         """
-        self._require_auth()
-
-        # Gmail search query syntax — same as the search bar in the browser.
-        # "from:" filters by sender, "after:" filters by date (YYYY/MM/DD).
         query = f"from:{sender} after:{after_date.strftime('%Y/%m/%d')}"
-        logger.debug("Gmail query: %s", query)
-
-        try:
-            # First call: get the list of matching message IDs.
-            # Gmail's list() endpoint only returns IDs + thread IDs, not full messages.
-            response = (
-                self._service.users()
-                .messages()
-                .list(userId="me", q=query, maxResults=max_results)
-                .execute()
-            )
-        except HttpError as e:
-            logger.error("Gmail API list() failed: %s", e)
-            raise
-
-        raw_messages = response.get("messages", [])
-        if not raw_messages:
-            logger.debug("No emails found for query: %s", query)
-            return []
-
-        logger.info(
-            "Found %d email(s) from %s since %s", len(raw_messages), sender, after_date
+        return self.search_messages(
+            query,
+            paginate=paginate,
+            max_results_per_page=max_results,
+            max_total=max_total,
         )
-
-        # Second call (one per message): fetch full metadata for each message.
-        # We use format="metadata" to get headers without downloading the body yet —
-        # we only fetch bodies for emails that pass the dedup check in the orchestrator.
-        result: list[GmailMessage] = []
-        for raw in raw_messages:
-            try:
-                msg = (
-                    self._service.users()
-                    .messages()
-                    .get(userId="me", id=raw["id"], format="metadata",
-                         metadataHeaders=["From", "Subject", "Date"])
-                    .execute()
-                )
-                result.append(self._parse_metadata(msg))
-            except HttpError as e:
-                logger.warning("Failed to fetch metadata for message %s: %s", raw["id"], e)
-                continue
-
-        return result
 
     def _parse_metadata(self, msg: dict) -> GmailMessage:
         """Extract the fields we care about from a raw Gmail API message dict."""
@@ -290,6 +349,108 @@ class GmailClient:
             subject=headers.get("Subject", ""),
             received_at=received_at,
         )
+
+    # ── Attachment extraction ───────────────────────────────────────────────────
+
+    def get_attachments(self, message_id: str) -> list[tuple[str, bytes]]:
+        """Download all PDF parts from a message and return ``(filename, raw_bytes)`` pairs.
+
+        Walks the MIME tree (including nested multiparts), decodes inline bodies, and
+        uses the Gmail ``attachments.get`` API for large parts that only expose an
+        ``attachmentId``.
+
+        Non-PDF parts are skipped. Filenames default to ``attachment.pdf`` when the
+        MIME part has no name.
+
+        Args:
+            message_id: Gmail message id (same as :attr:`GmailMessage.id`).
+
+        Returns:
+            A list in document order; may be empty if there are no PDF attachments.
+
+        Raises:
+            RuntimeError: if called before authenticate().
+            HttpError: if the Gmail API returns an error.
+        """
+        self._require_auth()
+
+        try:
+            msg = (
+                self._service.users()
+                .messages()
+                .get(userId="me", id=message_id, format="full")
+                .execute()
+            )
+        except HttpError as e:
+            logger.error("Failed to fetch full message %s for attachments: %s", message_id, e)
+            raise
+
+        out: list[tuple[str, bytes]] = []
+        self._walk_payload_for_pdfs(msg.get("payload") or {}, message_id, out)
+        logger.debug(
+            "get_attachments(%s): %d PDF part(s)", message_id, len(out),
+        )
+        return out
+
+    def _walk_payload_for_pdfs(
+        self,
+        payload: dict,
+        message_id: str,
+        out: list[tuple[str, bytes]],
+    ) -> None:
+        """Recursively collect PDF leaf parts (same MIME walk idea as HTML extraction)."""
+        parts = payload.get("parts")
+        if parts:
+            for part in parts:
+                self._walk_payload_for_pdfs(part, message_id, out)
+            return
+
+        mime_type = payload.get("mimeType", "")
+        filename = (payload.get("filename") or "").strip()
+        is_pdf = mime_type == "application/pdf" or filename.lower().endswith(".pdf")
+        if not is_pdf:
+            return
+
+        raw = self._download_mime_part_bytes(message_id, payload)
+        if not raw:
+            logger.warning(
+                "PDF MIME part present but no bytes for message %s (%s)",
+                message_id,
+                filename or mime_type,
+            )
+            return
+        out.append((filename or "attachment.pdf", raw))
+
+    def _download_mime_part_bytes(self, message_id: str, part: dict) -> bytes:
+        """Decode inline base64 body or fetch by attachmentId."""
+        body = part.get("body") or {}
+        attachment_id = body.get("attachmentId")
+        if attachment_id:
+            try:
+                att = (
+                    self._service.users()
+                    .messages()
+                    .attachments()
+                    .get(userId="me", messageId=message_id, id=attachment_id)
+                    .execute()
+            )
+            except HttpError as e:
+                logger.error(
+                    "attachments.get failed for message %s id %s: %s",
+                    message_id,
+                    attachment_id,
+                    e,
+                )
+                raise
+            data = att.get("data", "")
+            if not data:
+                return b""
+            return base64.urlsafe_b64decode(data + "==")
+
+        inline = body.get("data")
+        if inline:
+            return base64.urlsafe_b64decode(inline + "==")
+        return b""
 
     # ── Body extraction ─────────────────────────────────────────────────────────
 

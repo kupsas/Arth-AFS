@@ -12,6 +12,7 @@ is the most generic — CC and UPI alerts have more specific subject lines.
 
 from scraper.config import BANK_SENDERS
 from scraper.email_parsers.base import BaseEmailParser
+from scraper.email_parsers.base_statement import BaseStatementEmailParser
 from scraper.email_parsers.hdfc_bank import (
     HDFCAccountUpdateParser,
     HDFCCreditCardAlertParser,
@@ -44,4 +45,4 @@ EMAIL_PARSER_REGISTRY: dict[str, list[BaseEmailParser]] = {
     ],
 }
 
-__all__ = ["EMAIL_PARSER_REGISTRY"]
+__all__ = ["EMAIL_PARSER_REGISTRY", "BaseStatementEmailParser"]

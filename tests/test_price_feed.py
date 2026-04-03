@@ -35,6 +35,9 @@ def test_normalize_equity_symbol_strips_suffix() -> None:
 
 def test_canonical_nse_symbol_maps_icici_legacy_codes() -> None:
     assert canonical_nse_symbol("APOTYR") == "APOLLOTYRE"
+    assert canonical_nse_symbol("INTAVI") == "INDIGO"
+    assert canonical_nse_symbol("HDFBAN") == "HDFCBANK"
+    assert canonical_nse_symbol("BHAELE") == "BEL"
     assert canonical_nse_symbol("indoil") == "IOC"
     assert canonical_nse_symbol("RELIANCE") == "RELIANCE"
 

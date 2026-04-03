@@ -88,6 +88,10 @@ def normalize_equity_symbol(symbol: str) -> str:
 # Keep in sync with ``ICICI_SHORT_TO_NSE`` in ``pipeline.holding_parsers.icici_direct_equity``.
 _ICICI_BROKER_TO_NSE: dict[str, str] = {
     "APOTYR": "APOLLOTYRE",
+    "INTAVI": "INDIGO",
+    "HDFBAN": "HDFCBANK",
+    # ICICI uses BHAELE for Bharat Electronics (NSE BEL), not BHEL.
+    "BHAELE": "BEL",
     "BAFINS": "BAJAJFINSV",
     "BANMAH": "MAHABANK",
     "BHAWIR": "BHARTIARTL",
@@ -116,6 +120,9 @@ _ICICI_BROKER_TO_NSE: dict[str, str] = {
     "TATPOW": "TATAPOWER",
     "VEDLIM": "VEDL",
     "WHIIND": "WHIRLPOOL",
+    "ZENSAR": "ZENSARTECH",
+    "MINDAC": "MINDACORP",
+    "STOONE": "STOONE",
 }
 
 
