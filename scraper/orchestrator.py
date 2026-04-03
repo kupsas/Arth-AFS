@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
 from dataclasses import dataclass, field
 
 from sqlmodel import Session, select
@@ -32,6 +33,7 @@ from sqlmodel import Session, select
 from api.models import ProcessedEmail
 from pipeline import config as pipeline_config
 from pipeline.db_writer import write_to_db
+from pipeline.holding_pipeline import ingest_holdings, ingest_investment_transactions
 from pipeline.llm_classifier import classify_llm
 from pipeline.models import ParsedTransaction
 from pipeline.rules_classifier import classify_rules
@@ -180,6 +182,9 @@ def _process_email(
     parse_type = getattr(parser, "parse_type", "body")
     received_date = msg.received_at.date()
 
+    attachment_holdings: list = []
+    attachment_inv_txns: list = []
+
     if parse_type == "attachment":
         attachments = client.get_attachments(msg.id)
         if not attachments:
@@ -191,18 +196,34 @@ def _process_email(
             return "skipped", 0
         parsed_txns: list[ParsedTransaction] = []
         for _filename, pdf_bytes in attachments:
-            parsed_txns.extend(parser.parse_attachment(pdf_bytes, received_date))
+            parsed_txns.extend(
+                parser.parse_attachment(
+                    pdf_bytes,
+                    received_date,
+                    email_sender=_normalise_sender(msg.sender),
+                    email_subject=msg.subject or "",
+                )
+            )
+            inv_fn = getattr(parser, "attachment_investment_outputs", None)
+            if callable(inv_fn):
+                h, t = inv_fn()
+                attachment_holdings.extend(h)
+                attachment_inv_txns.extend(t)
     else:
         html_body = client.get_message_body(msg.id)
         parsed_txns = parser.parse(html_body, received_date)
 
-    # ── Step 3: ParsedTransaction list ready ───────────────────────────────────
+    # ── Step 3: ParsedTransaction list ready (+ optional PPF / holdings from PDF) ─
 
-    if not parsed_txns:
-        # Parser matched the subject but produced no rows (empty HTML/attachment).
+    if (
+        not parsed_txns
+        and not attachment_inv_txns
+        and not attachment_holdings
+    ):
         logger.debug(
-            "Parser %s returned [] for subject='%s' — skipping",
-            type(parser).__name__, msg.subject[:80],
+            "Parser %s returned no bank rows and no investment rows for subject='%s' — skipping",
+            type(parser).__name__,
+            msg.subject[:80],
         )
         return "skipped", 0
 
@@ -252,6 +273,22 @@ def _process_email(
         logger.debug(
             "    %s: %d new / %d backfilled / %d total canonical rows",
             account_id, run.new_count, run.updated_count, run.txn_count,
+        )
+
+    # ── Annual ICICI PDF: PPF → holdings + investment_transactions ────────────
+    if attachment_holdings or attachment_inv_txns:
+        uid = (os.environ.get("ARTH_USER_ID") or "sashank").strip() or "sashank"
+        hr = ingest_holdings(session, attachment_holdings, user_id=uid)
+        tr = ingest_investment_transactions(
+            session, attachment_inv_txns, user_id=uid
+        )
+        total_new += int(hr.get("inserted", 0)) + int(tr.get("inserted", 0))
+        logger.debug(
+            "    investment: holdings upsert=%s/%s inv_txns inserted=%s skipped_dup=%s",
+            hr.get("inserted"),
+            hr.get("updated"),
+            tr.get("inserted"),
+            tr.get("skipped_duplicate"),
         )
 
     return "processed", total_new

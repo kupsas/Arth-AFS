@@ -48,6 +48,14 @@ GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 # The "last_4_digits" key is what appears in the email body (card/account number).
 # Parsers use this lookup to stamp the correct account_id on each ParsedTransaction.
 
+# ICICI savings — shared account map for InstaAlerts (.bank.in) and statement PDFs.
+_ICICI_STATEMENT_ACCOUNTS: dict[str, dict] = {
+    "6118": {
+        "account_id": "ICICI_SAV_6118",
+        "source_key": "icici_savings",
+    },
+}
+
 # HDFC InstaAlerts historically used @hdfcbank.net; many alerts now come from
 # @hdfcbank.bank.in ("HDFC Bank InstaAlerts <...>"). Same parsers/accounts.
 _HDFC_BANK_ACCOUNTS: dict[str, dict] = {
@@ -78,12 +86,17 @@ BANK_SENDERS: dict[str, dict] = {
     # customercare@icicibank.com sends MAB reminders and marketing — not transaction alerts.
     "customernotification@icici.bank.in": {
         "parser_key": "icici_bank",
-        "accounts": {
-            "6118": {
-                "account_id": "ICICI_SAV_6118",
-                "source_key": "icici_savings",
-            },
-        },
+        "accounts": _ICICI_STATEMENT_ACCOUNTS,
+    },
+    # ICICI savings statement PDFs (password-protected attachment — not InstaAlerts).
+    # Monthly (current + legacy): often estatement@icicibank.com; annual FY: .com below.
+    "estatement@icicibank.com": {
+        "parser_key": "icici_statement",
+        "accounts": _ICICI_STATEMENT_ACCOUNTS,
+    },
+    "customernotification@icicibank.com": {
+        "parser_key": "icici_statement",
+        "accounts": _ICICI_STATEMENT_ACCOUNTS,
     },
 }
 

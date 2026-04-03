@@ -3,7 +3,7 @@ Base class for parsers that read **PDF attachments** (monthly statements), not H
 
 HTML alert parsers subclass :class:`~scraper.email_parsers.base.BaseEmailParser` and
 implement ``parse(html, date)``. Statement parsers subclass *this* class and implement
-``parse_attachment(pdf_bytes, date)`` instead.
+``parse_attachment(pdf_bytes, date, email_sender=…, email_subject=…)`` instead.
 
 The orchestrator checks ``parse_type``:
   - ``"body"`` (default) → download HTML via ``get_message_body``, then ``parse``.
@@ -29,7 +29,12 @@ class BaseStatementEmailParser(BaseEmailParser):
 
     @abstractmethod
     def parse_attachment(
-        self, pdf_bytes: bytes, received_date: datetime.date
+        self,
+        pdf_bytes: bytes,
+        received_date: datetime.date,
+        *,
+        email_sender: str = "",
+        email_subject: str = "",
     ) -> list[ParsedTransaction]:
         """Parse one PDF attachment into parsed transactions.
 
@@ -40,6 +45,8 @@ class BaseStatementEmailParser(BaseEmailParser):
         Args:
             pdf_bytes: Raw bytes of a single ``.pdf`` file.
             received_date: Date Gmail received the email (for fallbacks).
+            email_sender: Normalised or raw ``From`` address (password/routing for ICICI).
+            email_subject: Subject line (same — e.g. monthly vs annual statement).
 
         Returns:
             Zero or more :class:`~pipeline.models.ParsedTransaction` rows.
