@@ -1,9 +1,15 @@
 """
 Parser for the ICICI savings account statement (PDF export).
 
-Format: 7-column table across 4 pages.
-  S No. | Transaction Date | Cheque Number | Transaction Remarks |
-  Withdrawal Amount (INR) | Deposit Amount (INR) | Balance (INR)
+Two layouts exist:
+
+**Legacy (manual export / older PDFs)** — 7-column table across several pages:
+  S No. | Transaction Date (DD.MM.YYYY) | Cheque | Remarks |
+  Withdrawal | Deposit | Balance
+
+**Combined email statement (current)** — grid:
+  DATE (DD-MM-YYYY) | MODE | PARTICULARS | DEPOSITS | WITHDRAWALS | BALANCE
+  Same word-level strategy; different x-bands and date format.
 
 Parsing strategy: pdfplumber word-level extraction with bounding boxes.
 
@@ -62,8 +68,78 @@ _X_DEPOSIT_MIN = 465
 _X_DEPOSIT_MAX = 520   # balance starts at ~x=530; deposits observed at x=483-495
 _X_BALANCE_MIN = 520   # all observed balance values are x=530+ (header at x=532)
 
-# Regex for the DD.MM.YYYY date pattern used in the data column
+# Regex for the DD.MM.YYYY date pattern used in the legacy data column
 _DATE_RE = re.compile(r"^\d{2}\.\d{2}\.\d{4}$")
+
+# Combined-statement layout (emailed PDFs): DD-MM-YYYY, often at x0≈35
+_COMBINED_DATE_PREFIX_MAX = 58
+_COMBINED_PARTICULARS_MIN = 95
+_COMBINED_PARTICULARS_MAX = 370
+# Amount columns drift slightly between statement years — use wide bands.
+_COMBINED_DEPOSIT_X = (340, 432)
+_COMBINED_WITHDRAWAL_X = (432, 515)
+# Balance column — we parse for sanity but do not emit as txn amount.
+_COMBINED_BALANCE_X_MIN = 515
+
+
+def _line_rows_from_page(page: Any) -> list[tuple[float, str, list[dict]]]:
+    """Sorted (y-bucket, joined text, line_words) for section detection."""
+    words = page.extract_words()
+    y_groups: dict[int, list[dict]] = defaultdict(list)
+    for word in words:
+        bucket = round(word["top"] / _Y_BUCKET_PX) * _Y_BUCKET_PX
+        y_groups[bucket].append(word)
+    out: list[tuple[float, str, list[dict]]] = []
+    for y in sorted(y_groups.keys()):
+        line_words = sorted(y_groups[y], key=lambda w: w["x0"])
+        txt = " ".join(w["text"] for w in line_words)
+        out.append((float(y), txt, line_words))
+    return out
+
+
+def _annual_pdf_has_ppf_block(pdf: Any) -> bool:
+    """Annual multi-account PDF: summary lists PPF and body has two statement sections."""
+    if len(pdf.pages) < 1:
+        return False
+    t = pdf.pages[0].extract_text() or ""
+    return (
+        "PPF A/c" in t
+        and "Statement of Transactions in Savings Account" in t
+        and "Statement of Transactions in Account Number:" in t
+    )
+
+
+def _combined_savings_y_window(
+    pdf: Any,
+    page: Any,
+    page_num: int,
+    annual_ppf: bool,
+) -> tuple[float | None, float | None]:
+    """On annual page 1, savings rows start at the 'Savings Account' statement header line."""
+    if not annual_ppf or page_num != 1:
+        return (None, None)
+    for y, txt, _ in _line_rows_from_page(page):
+        if "Statement of Transactions in Savings Account" in txt:
+            return (y, None)
+    return (None, None)
+
+
+def combined_ppf_y_window_page1(page: Any) -> tuple[float, float] | None:
+    """Vertical span of the PPF transaction table on annual page 1 (for PPF PDF parser)."""
+    y_ppf: float | None = None
+    y_sav: float | None = None
+    for y, txt, _ in _line_rows_from_page(page):
+        if (
+            "Statement of Transactions in Account Number:" in txt
+            and "Savings" not in txt
+        ):
+            y_ppf = y
+        if "Statement of Transactions in Savings Account" in txt:
+            y_sav = y
+            break
+    if y_ppf is None or y_sav is None:
+        return None
+    return (y_ppf, y_sav)
 
 # y-bucketing tolerance: words within 4px of each other are on the same "line"
 _Y_BUCKET_PX = 4
@@ -109,9 +185,19 @@ class ICICISavingsParser(BaseParser):
         rows: list[ParsedTransaction] = []
 
         with pdfplumber.open(file_path) as pdf:
+            use_combined = self._pdf_uses_combined_statement_layout(pdf)
+            annual_ppf = _annual_pdf_has_ppf_block(pdf)
             for page_num, page in enumerate(pdf.pages, start=1):
                 try:
-                    page_rows = self._parse_page(page, page_num)
+                    if use_combined:
+                        y_min, y_max = _combined_savings_y_window(
+                            pdf, page, page_num, annual_ppf
+                        )
+                        page_rows = self._parse_page_combined(
+                            page, page_num, y_min=y_min, y_max=y_max
+                        )
+                    else:
+                        page_rows = self._parse_page(page, page_num)
                     rows.extend(page_rows)
                 except Exception as exc:
                     warnings.warn(
@@ -121,6 +207,13 @@ class ICICISavingsParser(BaseParser):
                     )
 
         return rows
+
+    def _pdf_uses_combined_statement_layout(self, pdf: Any) -> bool:
+        """Emailed ICICI PDFs use DD-MM-YYYY + PARTICULARS; legacy uses S.No. + DD.MM.YYYY."""
+        if not pdf.pages:
+            return False
+        text = pdf.pages[0].extract_text() or ""
+        return "Statement of Transactions" in text and "PARTICULARS" in text
 
     # ------------------------------------------------------------------
     # Per-page parsing
@@ -172,6 +265,197 @@ class ICICISavingsParser(BaseParser):
 
         # ── Assign continuation lines to their anchor transactions ────────
         return self._build_transactions(anchors, continuations)
+
+    # ------------------------------------------------------------------
+    # Combined email-statement layout (DATE | PARTICULARS | DEPOSITS | …)
+    # ------------------------------------------------------------------
+
+    def _parse_page_combined(
+        self,
+        page: Any,
+        page_num: int,
+        *,
+        y_min: float | None = None,
+        y_max: float | None = None,
+    ) -> list[ParsedTransaction]:
+        """Parse one page of the DD-MM-YYYY emailed combined statement.
+
+        ``y_min`` / ``y_max`` restrict which horizontal bands to include (annual PDF:
+        savings-only or PPF-only band on page 1).
+        """
+        words = page.extract_words()
+        y_groups: dict[int, list[dict]] = defaultdict(list)
+        for word in words:
+            bucket = round(word["top"] / _Y_BUCKET_PX) * _Y_BUCKET_PX
+            y_groups[bucket].append(word)
+
+        anchors: list[dict] = []
+        continuations: list[dict] = []
+
+        for y in sorted(y_groups.keys()):
+            if y_min is not None and y < y_min:
+                continue
+            if y_max is not None and y >= y_max:
+                continue
+            line_words = sorted(y_groups[y], key=lambda w: w["x0"])
+            joined = " ".join(w["text"] for w in line_words)
+            jl = joined.lower()
+            if "legends" in jl and "statement" in jl:
+                break
+            if "reward points summary" in jl:
+                break
+
+            classified = self._combined_classify_line(line_words)
+            if classified is None:
+                continue
+            kind, payload = classified
+            if kind == "stop":
+                break
+            if kind == "anchor":
+                payload["y"] = y
+                anchors.append(payload)
+            elif kind == "continuation":
+                continuations.append({"y": y, "text": payload})
+
+        return self._build_combined_transactions(anchors, continuations)
+
+    def _combined_classify_line(
+        self, line_words: list[dict]
+    ) -> tuple[str, Any] | None:
+        """Return ('anchor', dict), ('continuation', str), ('stop', None), or None."""
+        joined = " ".join(w["text"] for w in line_words)
+        jl = joined.lower()
+        for w in line_words:
+            low = w["text"].strip().lower()
+            if low.startswith("total:") or low == "total:":
+                return ("stop", None)
+        if "date" in jl and "particulars" in jl and "withdrawals" in jl:
+            return None
+
+        # Anchor: DD-MM-YYYY in the left column (may be glued to MODE text).
+        date_val: datetime.date | None = None
+        extra_from_date = ""
+        for w in line_words:
+            if w["x0"] >= _COMBINED_DATE_PREFIX_MAX:
+                break
+            text = w["text"].strip()
+            m = re.match(r"^(\d{2}-\d{2}-\d{4})(.*)$", text)
+            if not m:
+                continue
+            ds, rest = m.group(1), m.group(2).strip()
+            date_val = self._parse_date_dmy(ds)
+            if rest:
+                extra_from_date = rest
+            break
+
+        remark_parts: list[tuple[float, str]] = []
+        for w in line_words:
+            x = w["x0"]
+            if _COMBINED_PARTICULARS_MIN <= x < _COMBINED_PARTICULARS_MAX:
+                remark_parts.append((x, w["text"]))
+
+        inline = " ".join(t for _, t in sorted(remark_parts))
+        if extra_from_date:
+            inline = f"{extra_from_date} {inline}".strip()
+
+        deposit: Decimal | None = None
+        withdrawal: Decimal | None = None
+        for w in line_words:
+            x = w["x0"]
+            if x >= _COMBINED_BALANCE_X_MIN:
+                continue
+            amt = self._parse_amount(w["text"])
+            if amt is None:
+                continue
+            lo, hi = _COMBINED_DEPOSIT_X
+            if lo <= x < hi:
+                deposit = amt
+            lo2, hi2 = _COMBINED_WITHDRAWAL_X
+            if lo2 <= x < hi2:
+                withdrawal = amt
+
+        if date_val is not None:
+            skip = inline.strip().upper() in {"B/F", "B/F*"} or (
+                deposit is None and withdrawal is None
+            )
+            return (
+                "anchor",
+                {
+                    "date": date_val,
+                    "inline_remarks": inline,
+                    "withdrawal": withdrawal,
+                    "deposit": deposit,
+                    "skip": skip,
+                },
+            )
+
+        # Continuation: particulars only (no date column).
+        if remark_parts:
+            return ("continuation", inline.strip())
+        return None
+
+    def _build_combined_transactions(
+        self,
+        anchors: list[dict],
+        continuations: list[dict],
+    ) -> list[ParsedTransaction]:
+        """Stitch combined-layout anchors + continuation lines (same midpoint idea as legacy)."""
+        results: list[ParsedTransaction] = []
+
+        for i, anchor in enumerate(anchors):
+            if anchor.get("skip"):
+                continue
+            ya = anchor["y"]
+            prev_y = anchors[i - 1]["y"] if i > 0 else 0
+            next_y = anchors[i + 1]["y"] if i + 1 < len(anchors) else float("inf")
+            prev_mid = (prev_y + ya) / 2
+            next_mid = (ya + next_y) / 2
+
+            prefix_parts = [
+                c["text"]
+                for c in continuations
+                if prev_mid < c["y"] < ya
+            ]
+            suffix_parts = [
+                c["text"]
+                for c in continuations
+                if ya < c["y"] < next_mid
+            ]
+            full_description = " ".join(
+                filter(None, prefix_parts + [anchor["inline_remarks"]] + suffix_parts)
+            ).strip()
+
+            if not full_description:
+                continue
+
+            withdrawal = anchor.get("withdrawal")
+            deposit = anchor.get("deposit")
+            if withdrawal is None and deposit is None:
+                continue
+
+            debit_amount = withdrawal if withdrawal is not None else Decimal("0")
+            credit_amount = deposit if deposit is not None else Decimal("0")
+            if debit_amount == 0 and credit_amount == 0:
+                continue
+
+            try:
+                results.append(
+                    ParsedTransaction(
+                        txn_date=anchor["date"],
+                        raw_description=full_description,
+                        debit_amount=debit_amount,
+                        credit_amount=credit_amount,
+                        closing_balance=None,
+                        metadata={},
+                    )
+                )
+            except Exception as exc:
+                warnings.warn(
+                    f"[icici_savings combined] row skipped: {exc}",
+                    stacklevel=2,
+                )
+
+        return results
 
     # ------------------------------------------------------------------
     # Line classification
@@ -361,6 +645,14 @@ class ICICISavingsParser(BaseParser):
         """Parse DD.MM.YYYY into a date. Returns None on failure."""
         try:
             return datetime.datetime.strptime(s.strip(), "%d.%m.%Y").date()
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _parse_date_dmy(s: str) -> datetime.date | None:
+        """Parse DD-MM-YYYY (combined email-statement layout)."""
+        try:
+            return datetime.datetime.strptime(s.strip(), "%d-%m-%Y").date()
         except ValueError:
             return None
 

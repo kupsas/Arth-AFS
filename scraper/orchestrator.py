@@ -25,22 +25,38 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
 from dataclasses import dataclass, field
+from typing import Protocol, cast
 
 from sqlmodel import Session, select
 
 from api.models import ProcessedEmail
 from pipeline import config as pipeline_config
 from pipeline.db_writer import write_to_db
+from pipeline.holding_pipeline import ingest_holdings, ingest_investment_transactions
 from pipeline.llm_classifier import classify_llm
 from pipeline.models import ParsedTransaction
 from pipeline.rules_classifier import classify_rules
 from pipeline.transformer import transform
-from scraper.config import ALL_SENDERS, SCRAPER_LOOKBACK_DAYS
+from scraper.config import ALL_SENDERS, BANK_SENDERS, SCRAPER_LOOKBACK_DAYS
 from scraper.email_router import _normalise_sender, find_parser
 from scraper.gmail_client import GmailClient, GmailMessage
 
 logger = logging.getLogger(__name__)
+
+
+class _AttachmentEmailParser(Protocol):
+    """Parsers with ``parse_type == "attachment"`` implement this (not :class:`BaseEmailParser` alone)."""
+
+    def parse_attachment(
+        self,
+        pdf_bytes: bytes,
+        received_date: datetime.date,
+        *,
+        email_sender: str,
+        email_subject: str,
+    ) -> list[ParsedTransaction]: ...
 
 
 # ─── Result dataclass ──────────────────────────────────────────────────────────
@@ -93,8 +109,17 @@ def _get_lookback_date(session: Session, sender: str) -> datetime.date:
         # Subtract 1 day to catch any email from the same day we last processed.
         return (latest.received_at - datetime.timedelta(days=1)).date()
 
-    # First run — look back a fixed window to bootstrap the history.
-    return datetime.date.today() - datetime.timedelta(days=SCRAPER_LOOKBACK_DAYS)
+    # First run — look back a fixed window to bootstrap the history.  Statement
+    # senders (monthly PDFs) can override with ``first_run_lookback_days`` in
+    # :data:`scraper.config.BANK_SENDERS` so the first poll is not shorter than a
+    # typical billing cycle.
+    days = SCRAPER_LOOKBACK_DAYS
+    for raw_addr, cfg in BANK_SENDERS.items():
+        if _normalise_sender(raw_addr) == sender:
+            days = int(cfg.get("first_run_lookback_days", days))
+            break
+
+    return datetime.date.today() - datetime.timedelta(days=days)
 
 
 def _get_processed_ids(session: Session) -> set[str]:
@@ -174,23 +199,61 @@ def _process_email(
         )
         return "skipped", 0
 
-    # ── Step 2: download HTML body ───────────────────────────────────────────
-    # We only download the body now that we know there's a parser for it.
-    # This avoids paying the API cost for non-transaction emails.
-    html_body = client.get_message_body(msg.id)
+    # ── Step 2: download body or PDF attachments ─────────────────────────────
+    # HTML parsers ("body"): one InstaAlert-style email → one HTML body.
+    # Statement parsers ("attachment"): monthly PDF(s) → many transactions.
+    parse_type = getattr(parser, "parse_type", "body")
+    received_date = msg.received_at.date()
 
-    # ── Step 3: parse HTML → ParsedTransaction list ──────────────────────────
-    parsed_txns: list[ParsedTransaction] = parser.parse(
-        html_body, msg.received_at.date()
-    )
+    attachment_holdings: list = []
+    attachment_inv_txns: list = []
 
-    if not parsed_txns:
-        # Parser matched the subject but found no transaction in the body.
-        # Examples: E-mandate email (has merchant name but no amount),
-        # card-settings change notification, OTP emails.
+    if parse_type == "attachment":
+        attachments = client.get_attachments(msg.id)
+        if not attachments:
+            logger.debug(
+                "Parser %s matched subject but no PDF attachments in message %s — skipping",
+                type(parser).__name__,
+                msg.id,
+            )
+            return "skipped", 0
+        # Multi-PDF emails: parsers may accumulate holdings / inv_txns per file — reset once per message.
+        reset_fn = getattr(parser, "reset_attachment_outputs", None)
+        if callable(reset_fn):
+            reset_fn()
+        parsed_txns: list[ParsedTransaction] = []
+        stmt_parser = cast(_AttachmentEmailParser, parser)
+        for _filename, pdf_bytes in attachments:
+            parsed_txns.extend(
+                stmt_parser.parse_attachment(
+                    pdf_bytes,
+                    received_date,
+                    email_sender=_normalise_sender(msg.sender),
+                    email_subject=msg.subject or "",
+                )
+            )
+        # Call once after all PDFs — parsers accumulate PPF / trade legs in ``parse_attachment``;
+        # calling :meth:`attachment_investment_outputs` inside the loop duplicated rows on multi-PDF emails.
+        inv_fn = getattr(parser, "attachment_investment_outputs", None)
+        if callable(inv_fn):
+            h, t = inv_fn()
+            attachment_holdings.extend(h)
+            attachment_inv_txns.extend(t)
+    else:
+        html_body = client.get_message_body(msg.id)
+        parsed_txns = parser.parse(html_body, received_date)
+
+    # ── Step 3: ParsedTransaction list ready (+ optional PPF / holdings from PDF) ─
+
+    if (
+        not parsed_txns
+        and not attachment_inv_txns
+        and not attachment_holdings
+    ):
         logger.debug(
-            "Parser %s returned [] for subject='%s' — skipping",
-            type(parser).__name__, msg.subject[:80],
+            "Parser %s returned no bank rows and no investment rows for subject='%s' — skipping",
+            type(parser).__name__,
+            msg.subject[:80],
         )
         return "skipped", 0
 
@@ -240,6 +303,26 @@ def _process_email(
         logger.debug(
             "    %s: %d new / %d backfilled / %d total canonical rows",
             account_id, run.new_count, run.updated_count, run.txn_count,
+        )
+
+    # ── Annual ICICI PDF: PPF → holdings + investment_transactions ────────────
+    if attachment_holdings or attachment_inv_txns:
+        uid = (os.environ.get("ARTH_USER_ID") or "sashank").strip() or "sashank"
+        hr = ingest_holdings(session, attachment_holdings, user_id=uid)
+        tr = ingest_investment_transactions(
+            session,
+            attachment_inv_txns,
+            user_id=uid,
+            source_type="email",
+            gmail_message_id=msg.id,
+        )
+        total_new += int(hr.get("inserted", 0)) + int(tr.get("inserted", 0))
+        logger.debug(
+            "    investment: holdings upsert=%s/%s inv_txns inserted=%s skipped_dup=%s",
+            hr.get("inserted"),
+            hr.get("updated"),
+            tr.get("inserted"),
+            tr.get("skipped_duplicate"),
         )
 
     return "processed", total_new

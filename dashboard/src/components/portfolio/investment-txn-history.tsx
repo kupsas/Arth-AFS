@@ -43,7 +43,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useInvestmentTransactions } from "@/hooks/use-portfolio";
+import { useHoldings, useInvestmentTransactions } from "@/hooks/use-portfolio";
 import type { InvestmentLedgerTxnType, InvestmentTxn } from "@/lib/types";
 import { cn, formatCurrency, formatDate } from "@/lib/utils";
 
@@ -120,20 +120,28 @@ export function InvestmentTxnHistory({ userId }: InvestmentTxnHistoryProps) {
     setPage(1);
   }, [txnType, debouncedSymbol, dateFrom, dateTo]);
 
-  const offset = (page - 1) * PAGE_SIZE;
-
   const { data, isLoading } = useInvestmentTransactions({
     user_id: userId,
     txn_type: txnType || undefined,
     symbol: debouncedSymbol || undefined,
     date_from: dateFrom || undefined,
     date_to: dateTo || undefined,
-    limit: PAGE_SIZE,
-    offset,
+    page,
+    page_size: PAGE_SIZE,
   });
 
-  const rows = data ?? [];
-  const hasMore = rows.length === PAGE_SIZE;
+  const { data: holdings } = useHoldings({ user_id: userId });
+  const holdingNameById = React.useMemo(() => {
+    const m = new Map<number, string>();
+    for (const h of holdings ?? []) {
+      if (h.id != null) m.set(h.id, h.name);
+    }
+    return m;
+  }, [holdings]);
+
+  const rows = data?.items ?? [];
+  const totalPages = data?.total_pages ?? 1;
+  const hasMore = page < totalPages;
   const hasPrev = page > 1;
 
   const toggleSort = React.useCallback((columnId: string) => {
@@ -236,6 +244,31 @@ export function InvestmentTxnHistory({ userId }: InvestmentTxnHistoryProps) {
         ),
       }),
       invTxnCol.display({
+        id: "holding",
+        header: "Linked holding",
+        cell: ({ row }) => {
+          const hid = row.original.holding_id;
+          if (hid == null) {
+            return (
+              <span className="text-xs text-amber-600 dark:text-amber-500" title="Not linked">
+                Unlinked
+              </span>
+            );
+          }
+          const label = holdingNameById.get(hid) ?? `Holding #${hid}`;
+          return (
+            <Link
+              href="/portfolio"
+              className="block max-w-[160px] truncate text-xs text-primary underline-offset-2 hover:underline"
+              title={`${label} (id ${hid})`}
+            >
+              {label}
+              <span className="ml-1 font-mono text-[10px] text-muted-foreground">#{hid}</span>
+            </Link>
+          );
+        },
+      }),
+      invTxnCol.display({
         id: "bank",
         header: "Bank link",
         cell: ({ row }) => {
@@ -255,7 +288,7 @@ export function InvestmentTxnHistory({ userId }: InvestmentTxnHistoryProps) {
         },
       }),
     ],
-    [sorting, toggleSort],
+    [sorting, toggleSort, holdingNameById],
   );
 
   const table = useReactTable({
@@ -364,8 +397,10 @@ export function InvestmentTxnHistory({ userId }: InvestmentTxnHistoryProps) {
 
         <div className="flex items-center justify-between gap-2">
           <p className="text-xs text-muted-foreground">
-            Page {page}
-            {hasMore ? " · more rows may exist" : ""}
+            Page {page} of {totalPages}
+            {data?.total != null
+              ? ` · ${data.total.toLocaleString()} total`
+              : ""}
           </p>
           <div className="flex gap-2">
             <Button

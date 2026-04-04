@@ -18,10 +18,13 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from sqlmodel import Session, select
 
 from api.database import get_engine, init_db
+from api.services.holding_enrichment import enrich_single_equity_classification
+from api.services.holdings_sync import ensure_holding_for_transaction, sync_holding_from_transactions
 from api.models import Holding, HoldingValueSnapshot, InvestmentTransaction, Liability
 from pipeline.holding_parsers import HOLDING_PARSER_REGISTRY, parse_bike_loan_txt, parse_term_insurance_pdf
 from pipeline.holding_parsers.base import ParsedHolding, ParsedInvestmentTxn, ParsedLiability
@@ -236,6 +239,7 @@ def ingest_holdings(
             inserted += 0 if existing else 1
             updated += 1 if existing else 0
             continue
+        is_new_holding = existing is None
         if existing:
             _apply_parsed_holding_to_row(existing, ph, user_id)
             session.add(existing)
@@ -289,6 +293,8 @@ def ingest_holdings(
                     ),
                     source_file=str(ph.metadata.get("source_file") or "").strip() or None,
                 )
+                if is_new_holding:
+                    enrich_single_equity_classification(session, target_row)
     if not dry_run:
         session.commit()
     return {"inserted": inserted, "updated": updated, "errors": errors}
@@ -300,13 +306,21 @@ def ingest_investment_transactions(
     *,
     user_id: str | None = None,
     dry_run: bool = False,
-) -> dict[str, int]:
-    """Insert deduped ledger rows. When ``user_id`` is set, resolve ``holding_id`` (MF + equity)."""
+    source_type: str | None = None,
+    gmail_message_id: str | None = None,
+) -> dict[str, Any]:
+    """Insert deduped ledger rows. When ``user_id`` is set, resolve ``holding_id`` (MF + equity).
+
+    When ``source_type=\"email\"`` (Gmail scraper / statement PDF attachment path), new rows
+    get ``is_reviewed=False`` so they surface on the investment review queue — same rule as
+    :func:`pipeline.db_writer.write_to_db` for bank transactions.
+    """
     inserted = 0
     skipped = 0
     errors = 0
     linked_inline = 0
     uid = user_id.strip() if user_id and str(user_id).strip() else None
+    inserted_rows: list[InvestmentTransaction] = []
 
     for t in txns:
         bad = validate_parsed_inv_txn(t)
@@ -330,6 +344,8 @@ def ingest_investment_transactions(
             hid = find_holding_id_for_parsed_txn(session, uid, t)
             if hid is not None:
                 linked_inline += 1
+        # File/CLI imports omit source_type → reviewed. Email path passes source_type="email".
+        is_reviewed_default = source_type != "email"
         it = InvestmentTransaction(
             txn_date=t.txn_date,
             symbol=t.symbol,
@@ -340,16 +356,33 @@ def ingest_investment_transactions(
             account_platform=t.account_platform,
             holding_id=hid,
             notes="\n".join(notes_parts) if notes_parts else None,
+            is_reviewed=is_reviewed_default,
+            source_type=source_type,
+            gmail_message_id=gmail_message_id,
         )
         session.add(it)
         inserted += 1
         session.flush()
+        inserted_rows.append(it)
 
     orphan_backfill = {"examined": 0, "linked": 0, "still_orphan": 0, "ambiguous": 0}
     if uid and not dry_run:
         orphan_backfill = link_unlinked_investment_transactions(
             session, user_ids=[uid]
         )
+
+    holdings_synced = 0
+    if uid and not dry_run and inserted_rows:
+        for it in inserted_rows:
+            if it.holding_id is None:
+                ensure_holding_for_transaction(session, it, user_id=uid)
+        to_sync: set[int] = set()
+        for it in inserted_rows:
+            if it.holding_id is not None:
+                to_sync.add(it.holding_id)
+        for hid in sorted(to_sync):
+            sync_holding_from_transactions(session, hid)
+            holdings_synced += 1
 
     if not dry_run:
         session.commit()
@@ -361,6 +394,7 @@ def ingest_investment_transactions(
         "orphans_linked": int(orphan_backfill.get("linked", 0)),
         "orphans_examined": int(orphan_backfill.get("examined", 0)),
         "orphans_ambiguous": int(orphan_backfill.get("ambiguous", 0)),
+        "holdings_synced": holdings_synced,
     }
 
 

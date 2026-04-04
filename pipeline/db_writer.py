@@ -26,11 +26,14 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import logging
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from api.models import PipelineRun, Transaction
 from pipeline.models import CanonicalTransaction
+
+logger = logging.getLogger(__name__)
 
 
 def compute_content_hash(txn: CanonicalTransaction) -> str:
@@ -67,6 +70,112 @@ def _resolve_value(txn: CanonicalTransaction, attr: str) -> str | None:
     if val is None:
         return None
     return val.value if hasattr(val, "value") else str(val)
+
+
+def _find_statement_match_for_email(
+    session: Session,
+    txn: CanonicalTransaction,
+    account_id: str,
+) -> Transaction | None:
+    """If a CSV/statement row already represents this spend, skip inserting an email PDF duplicate.
+
+    Same core idea as :func:`_find_email_match`, inverted: email ingest checks for an
+    existing **statement** or **reconciled** row with the same account, amount,
+    direction, and txn_date within ±1 day.  Narration differs (PDF vs export), so
+    :func:`compute_content_hash` will not dedupe.
+
+    **Matching order (important):**
+
+    1. **Exact calendar date** — if exactly one statement row matches, return it.
+       This fixes recurring identical amounts on **consecutive days** (e.g. ₹1,000
+       UPI-Lite): a ±1-day window alone can match **two** statement rows (yesterday +
+       today), so ``len == 2`` and we used to fall through and **insert** a duplicate
+       email PDF row for each.
+
+    2. **±1 day window** — only if step 1 finds zero rows: then if exactly one
+       statement row falls in the window (typical value-date / midnight cutoff),
+       return it.
+
+    3. Otherwise return ``None`` (ambiguous or no match — insert the email row).
+
+    If **more than one** row matches on the **same** calendar date (two Swiggy orders),
+    returns ``None`` — safer than dropping a real second charge.
+    """
+    base = (
+        select(Transaction)
+        .where(Transaction.account_id == account_id)
+        .where(Transaction.amount == float(txn.amount))
+        .where(Transaction.direction == txn.direction.value)
+        .where(col(Transaction.source_type).in_(["statement", "reconciled"]))
+    )
+    exact = list(
+        session.exec(base.where(Transaction.txn_date == txn.txn_date)).all()
+    )
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        return None
+
+    one_day = datetime.timedelta(days=1)
+    window = list(
+        session.exec(
+            base.where(Transaction.txn_date >= txn.txn_date - one_day)
+            .where(Transaction.txn_date <= txn.txn_date + one_day)
+        ).all()
+    )
+    if len(window) == 1:
+        return window[0]
+    return None
+
+
+def _find_prior_email_alert_match_for_pdf(
+    session: Session,
+    txn: CanonicalTransaction,
+    account_id: str,
+    *,
+    exclude_gmail_message_id: str | None,
+) -> Transaction | None:
+    """If an **InstaAlert** (or other) email row already captured this spend, skip PDF duplicate.
+
+    Path B2 / :func:`_find_statement_match_for_email` only compares against
+    ``statement`` / ``reconciled`` rows.  Monthly statement PDFs often duplicate
+    transactions that arrived earlier as **per-txn HTML emails** (same
+    ``source_type='email'`` but different ``gmail_message_id`` and narration).
+
+    Uses the same **exact date first, then ±1 day** rule as statement matching.
+    Rows whose ``gmail_message_id`` equals ``exclude_gmail_message_id`` are ignored
+    so two different lines **inside the same PDF email** (e.g. two ₹500 charges the
+    same day) do not suppress each other.
+    """
+    if not exclude_gmail_message_id:
+        return None
+
+    base = (
+        select(Transaction)
+        .where(Transaction.account_id == account_id)
+        .where(Transaction.amount == float(txn.amount))
+        .where(Transaction.direction == txn.direction.value)
+        .where(Transaction.source_type == "email")
+        .where(Transaction.gmail_message_id != exclude_gmail_message_id)
+    )
+    exact = list(
+        session.exec(base.where(Transaction.txn_date == txn.txn_date)).all()
+    )
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        return None
+
+    one_day = datetime.timedelta(days=1)
+    window = list(
+        session.exec(
+            base.where(Transaction.txn_date >= txn.txn_date - one_day)
+            .where(Transaction.txn_date <= txn.txn_date + one_day)
+        ).all()
+    )
+    if len(window) == 1:
+        return window[0]
+    return None
 
 
 def _find_email_match(
@@ -175,6 +284,14 @@ def write_to_db(
         *upgraded* with the richer statement data instead of inserting a duplicate.
         This is the mechanism that prevents statement uploads from creating ghost
         duplicates of transactions the email scraper already captured.
+
+    Email path (inverse):
+        Before inserting email-sourced rows we check (1) statement/reconciled match
+        (:func:`_find_statement_match_for_email`) and (2) a prior **InstaAlert** email
+        row for the same spend (:func:`_find_prior_email_alert_match_for_pdf`).
+        :func:`compute_content_hash` uses ``txn_date | raw_description | amount |
+        account_id`` only — **not** ``ref_number`` — so PDF vs alert dedup relies on
+        these paths, not Path A.  ``processed_emails`` is unchanged.
     """
     # Create the audit-trail row first so we can link transactions to it.
     run = PipelineRun(
@@ -240,6 +357,40 @@ def write_to_db(
                     date_min = txn.txn_date
                 if date_max is None or txn.txn_date > date_max:
                     date_max = txn.txn_date
+                continue
+
+        # ── Path B2: email → skip if a statement row already captured this txn ───
+        if source_type == "email":
+            account_id = txn.account_id
+            statement_dup = _find_statement_match_for_email(session, txn, account_id)
+            if statement_dup is not None:
+                logger.debug(
+                    "Skipping email insert (statement already exists): "
+                    "existing_id=%s account=%s amt=%s date=%s",
+                    statement_dup.id,
+                    account_id,
+                    txn.amount,
+                    txn.txn_date,
+                )
+                continue
+
+            # ── Path B2b: PDF email → skip if an InstaAlert email row already exists ─
+            # Same (date, amount, direction), different narration & different Gmail id.
+            alert_dup = _find_prior_email_alert_match_for_pdf(
+                session,
+                txn,
+                account_id,
+                exclude_gmail_message_id=gmail_message_id,
+            )
+            if alert_dup is not None:
+                logger.debug(
+                    "Skipping email insert (prior email alert exists): "
+                    "existing_id=%s account=%s amt=%s date=%s",
+                    alert_dup.id,
+                    account_id,
+                    txn.amount,
+                    txn.txn_date,
+                )
                 continue
 
         # ── Path C: brand-new row ────────────────────────────────────────────
