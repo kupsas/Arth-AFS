@@ -254,6 +254,27 @@ def _apply_sqlite_patches() -> None:
                 )
             )
 
+        # Sub-Plan B — recurring patterns scoped per user (surplus / goals).
+        if not _column_exists(conn, "recurring_patterns", "user_id"):
+            conn.execute(
+                text(
+                    "ALTER TABLE recurring_patterns ADD COLUMN user_id TEXT NOT NULL DEFAULT 'sashank'"
+                )
+            )
+        conn.execute(
+            text(
+                "UPDATE recurring_patterns SET user_id = 'sashank' "
+                "WHERE user_id IS NULL OR TRIM(user_id) = ''"
+            )
+        )
+        if not _index_exists(conn, "uq_recurring_pattern_user_cp_dir_freq"):
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_recurring_pattern_user_cp_dir_freq "
+                    "ON recurring_patterns (user_id, counterparty, direction, frequency)"
+                )
+            )
+
 
 def _chmod_owner_rw_only(path: Path) -> None:
     """Best-effort ``0o600`` (owner read/write only). No-op if missing or OS rejects chmod."""

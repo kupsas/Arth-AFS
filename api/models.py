@@ -192,7 +192,7 @@ class ProcessedEmail(SQLModel, table=True):
 class RecurringPattern(SQLModel, table=True):
     """A recurring transaction pattern detected by the detection algorithm.
 
-    One row per unique (counterparty, direction, frequency) combination.
+    One row per unique (user_id, counterparty, direction, frequency) combination.
     The algorithm runs a statistical analysis on transaction history to find
     groups with consistent intervals (std dev < 25% of median interval).
 
@@ -201,8 +201,20 @@ class RecurringPattern(SQLModel, table=True):
     """
 
     __tablename__ = "recurring_patterns"
+    __table_args__ = (
+        Index(
+            "uq_recurring_pattern_user_cp_dir_freq",
+            "user_id",
+            "counterparty",
+            "direction",
+            "frequency",
+            unique=True,
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
+
+    user_id: str = Field(default="sashank", index=True)  # "sashank" | "aditi" — inferred from txns
 
     counterparty: str = Field(index=True)
     counterparty_category: str | None = None

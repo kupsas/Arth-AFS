@@ -123,7 +123,7 @@ def expense_limit_sum_for_chart_key(
 ) -> float:
     """Sum OUTFLOW amounts for EXPENSE_LIMIT goals tied to chart_key (metrics filters)."""
     # Late import: metrics imports this module; avoid circular import at load time.
-    from api.routes.metrics import _analytics_only, _date_where, _expense_where
+    from api.services.query_helpers import _analytics_only, _date_where, _expense_where
 
     if chart_key == CHART_KEY_EXPENSE_NEED_WANT_STACK:
         base = _expense_where(

@@ -31,6 +31,7 @@ router = APIRouter()
 
 class RecurringPatternOut(BaseModel):
     id: int
+    user_id: str
     counterparty: str
     counterparty_category: str | None
     direction: str
@@ -134,6 +135,7 @@ def list_patterns(
     direction: str | None = Query(None, description="INFLOW or OUTFLOW"),
     frequency: str | None = Query(None, description="WEEKLY, MONTHLY, QUARTERLY, YEARLY"),
     is_active: bool | None = Query(None),
+    user_id: str | None = Query(None, description="If set, only patterns for this user"),
     *,
     session: Session = Depends(get_session),
 ) -> list[RecurringPatternOut]:
@@ -142,6 +144,8 @@ def list_patterns(
 
     if direction is not None:
         query = query.where(RecurringPattern.direction == direction)
+    if user_id is not None:
+        query = query.where(RecurringPattern.user_id == user_id)
     if frequency is not None:
         query = query.where(RecurringPattern.frequency == frequency)
     if is_active is not None:
@@ -223,6 +227,7 @@ def update_pattern(
 def _pattern_out(p: RecurringPattern) -> RecurringPatternOut:
     return RecurringPatternOut(
         id=p.id or 0,
+        user_id=getattr(p, "user_id", None) or "sashank",
         counterparty=p.counterparty,
         counterparty_category=p.counterparty_category,
         direction=p.direction,

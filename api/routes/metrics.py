@@ -31,6 +31,15 @@ from api.models import Goal, Transaction
 from api.routes.transactions import _txn_to_dict
 from api.services.chart_metrics import category_trend_condition
 from api.services.goal_evaluator import expense_limit_spent_for_goal
+from api.services.query_helpers import (
+    _analytics_only,
+    _current_month_range,
+    _date_where,
+    _expense_where,
+    _generate_month_labels,
+    _income_where,
+    _month_start_end,
+)
 
 router = APIRouter()
 
@@ -38,12 +47,6 @@ router = APIRouter()
 # ───────────────────────────────────────────────────────────────────────────
 # Business-logic constants
 # ───────────────────────────────────────────────────────────────────────────
-
-# txn_types excluded from income totals (these inflows aren't real income)
-_INCOME_EXCLUSIONS: tuple[str, ...] = ("SELF_TRANSFER",)
-
-# txn_types excluded from expense totals (these outflows aren't real spending)
-_EXPENSE_EXCLUSIONS: tuple[str, ...] = ("CARD_PAYMENT", "SELF_TRANSFER")
 
 # counterparty_category values that count as "savings" (money invested).
 # Asset Markets = equities, MFs via ICICI Direct. Add others if needed
@@ -111,14 +114,8 @@ class NegativeSurplusResponse(BaseModel):
 
 
 # ───────────────────────────────────────────────────────────────────────────
-# Internal helpers
+# Internal helpers (metrics-specific; shared filters live in query_helpers)
 # ───────────────────────────────────────────────────────────────────────────
-
-def _current_month_range() -> tuple[datetime.date, datetime.date]:
-    """Return (first day of current month, today)."""
-    today = datetime.date.today()
-    return today.replace(day=1), today
-
 
 def _savings_rate(income: float, total_savings: float) -> float:
     """
@@ -142,71 +139,9 @@ def _savings_where(q):
     )
 
 
-def _income_where(q):
-    """
-    Narrow a query to real income transactions.
-
-    The IS NULL branch matters: SQLite evaluates `NULL NOT IN (...)` as NULL
-    (not TRUE), which would silently drop unclassified transactions. We want
-    to INCLUDE them — if it's an INFLOW and not explicitly SELF_TRANSFER,
-    we treat it as income.
-    """
-    return q.where(Transaction.direction == "INFLOW").where(
-        col(Transaction.txn_type).is_(None)
-        | col(Transaction.txn_type).not_in(_INCOME_EXCLUSIONS)
-    )
-
-
-def _expense_where(q):
-    """Narrow a query to real expense transactions (same NULL-safe logic)."""
-    return q.where(Transaction.direction == "OUTFLOW").where(
-        col(Transaction.txn_type).is_(None)
-        | col(Transaction.txn_type).not_in(_EXPENSE_EXCLUSIONS)
-    )
-
-
-def _date_where(q, date_from: datetime.date, date_to: datetime.date):
-    """Add an inclusive date range filter."""
-    return q.where(
-        Transaction.txn_date >= date_from,
-        Transaction.txn_date <= date_to,
-    )
-
-
-def _analytics_only(q):
-    """Exclude rows the user marked as ignored for analytics."""
-    return q.where(
-        or_(
-            col(Transaction.exclude_from_analytics).is_(None),
-            col(Transaction.exclude_from_analytics).is_(False),
-        )
-    )
-
-
 # Investment flow types (purchases = OUTFLOW, sales = INFLOW proceeds)
 _PURCHASE_TXN_TYPES: tuple[str, ...] = ("EQUITY_PURCHASE", "MF_PURCHASE")
 _SALE_TXN_TYPES: tuple[str, ...] = ("EQUITY_SALE", "MF_SALE")
-
-
-def _generate_month_labels(n: int) -> list[str]:
-    """
-    Generate a list of 'YYYY-MM' strings for the last n months (oldest first).
-
-    Example: if today is March 2026 and n=3 → ['2026-01', '2026-02', '2026-03']
-
-    We compute entirely with integer arithmetic to avoid dateutil dependency.
-    'total_months' is the 0-based count of months since year 0:
-        total_months = year * 12 + (month - 1)
-    Going back i months: subtract i, then recover year and month via divmod.
-    """
-    today = datetime.date.today()
-    base = today.year * 12 + (today.month - 1)  # 0-based month count
-    labels = []
-    for i in range(n - 1, -1, -1):
-        total = base - i
-        year, mo = divmod(total, 12)
-        labels.append(f"{year:04d}-{mo + 1:02d}")
-    return labels
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -679,22 +614,6 @@ def metrics_by_spend_category(
 # ───────────────────────────────────────────────────────────────────────────
 # Dashboard V2 — goal progress, trends, drill-down
 # ───────────────────────────────────────────────────────────────────────────
-
-
-def _last_day_of_calendar_month(year: int, month: int) -> datetime.date:
-    if month == 12:
-        return datetime.date(year, 12, 31)
-    return datetime.date(year, month + 1, 1) - datetime.timedelta(days=1)
-
-
-def _month_start_end(ym: str) -> tuple[datetime.date, datetime.date]:
-    y, m = map(int, ym.split("-"))
-    start = datetime.date(y, m, 1)
-    end = _last_day_of_calendar_month(y, m)
-    today = datetime.date.today()
-    if end > today:
-        end = today
-    return start, end
 
 
 def _adherence_month_labels(n: int = 4) -> list[str]:

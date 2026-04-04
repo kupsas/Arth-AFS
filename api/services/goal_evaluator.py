@@ -46,7 +46,7 @@ def expense_limit_spent_for_goal(
             session, goal.chart_key, date_from, date_to
         )
     if goal.linked_category:
-        from api.routes.metrics import _analytics_only, _date_where, _expense_where
+        from api.services.query_helpers import _analytics_only, _date_where, _expense_where
 
         base = _expense_where(
             select(func.coalesce(func.sum(Transaction.amount), 0.0))
