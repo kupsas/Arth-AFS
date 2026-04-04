@@ -18,6 +18,7 @@ from sqlmodel import Session, col, select
 
 from api.models import Holding, InvestmentTransaction
 from api.services.holding_enrichment import enrich_single_equity_classification
+from api.services.liquidity_service import compute_earliest_liquidity_date
 from api.services.price_feed import canonical_nse_symbol
 from pipeline.investment_txn_linking import extract_amfi_scheme_code
 from pipeline.models import AssetClass, InvestmentTxnType, LiquidityClass, ValuationMethod
@@ -279,6 +280,9 @@ def ensure_holding_for_transaction(
         session.flush()
         if h.id is None:
             return None
+        _today = datetime.datetime.now(datetime.UTC).date()
+        h.earliest_liquidity_date = compute_earliest_liquidity_date(session, h, _today)
+        session.add(h)
         enrich_single_equity_classification(session, h)
         txn.holding_id = h.id
         session.add(txn)
@@ -314,6 +318,9 @@ def ensure_holding_for_transaction(
         session.flush()
         if h.id is None:
             return None
+        _today = datetime.datetime.now(datetime.UTC).date()
+        h.earliest_liquidity_date = compute_earliest_liquidity_date(session, h, _today)
+        session.add(h)
         txn.holding_id = h.id
         session.add(txn)
         return h.id

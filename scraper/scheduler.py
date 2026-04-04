@@ -7,6 +7,8 @@ Responsibilities:
   - Run **daily price refresh** at **18:30 Asia/Kolkata** (after Indian cash
     market close): NSE/AMFI/yfinance via ``refresh_all_prices`` (Phase A.4.1).
     This job is **always** scheduled so portfolio marks work without Gmail.
+  - After prices commit, run **holding liquidity refresh** (Sub-Plan C): updates
+    stored ``earliest_liquidity_date`` for all users so T+2 sleeves track the calendar.
   - Provide start / stop / trigger / reschedule / status controls used by
     the /api/scraper/* endpoints (Step 8)
   - If Gmail hasn't been authenticated yet, the **email** job is omitted;
@@ -41,6 +43,7 @@ from api.database import get_engine
 from pipeline.config import LLM_MODEL  # noqa: F401 — imported for context; not used directly here
 from scraper.config import GMAIL_TOKEN_PATH, POLL_INTERVAL_MINUTES
 from scraper.gmail_client import GmailClient, GmailReauthRequiredError
+from api.services.liquidity_service import refresh_all_users_liquidity_dates
 from api.services.price_feed import (
     backfill_nse_portfolio_gaps,
     refresh_all_prices,
@@ -221,6 +224,20 @@ def _run_daily_price_job() -> None:
             backfill_summary = backfill_nse_portfolio_gaps(session)
             refresh_summary = refresh_all_prices(session)
             session.commit()
+
+        # Sub-Plan C — equity/MF T+2 dates track calendar days; cheap, no network.
+        try:
+            with Session(get_engine()) as liq_session:
+                liq_result = refresh_all_users_liquidity_dates(liq_session)
+                liq_session.commit()
+            logger.info(
+                "Daily liquidity refresh — users=%d, updated_rows=%d, unchanged_rows=%d",
+                liq_result.user_count,
+                liq_result.total_updated,
+                liq_result.total_unchanged,
+            )
+        except Exception:
+            logger.exception("Daily liquidity refresh failed — will retry on next schedule")
 
         now = datetime.datetime.now(datetime.timezone.utc)
         with _price_status_lock:
