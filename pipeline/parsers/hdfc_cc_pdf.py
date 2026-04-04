@@ -57,6 +57,9 @@ _INR_AMOUNT = re.compile(r"(\+)?\s*C\s*([\d,]+\.\d{2})")
 # Legacy: ``16/04/2025 DESCRIPTION... 760.00`` or ``... 944.08Cr`` (no ``|``).
 _LEGACY_DATE_LINE = re.compile(r"^(\d{2}/\d{2}/\d{4})\s+(.+)$")
 
+# PDF section headings — must match :func:`_parse_unified_line` ``section`` parameter.
+_CC_SECTION = Literal["domestic", "international"]
+
 
 class HDFCCreditCardPdfParser(BaseParser):
     """Parse one monthly HDFC CC statement PDF into :class:`ParsedTransaction` rows."""
@@ -129,10 +132,10 @@ def _is_noise_line_legacy(t: str) -> bool:
     return False
 
 
-def _extract_legacy_txn_lines(pdf_path: Path) -> list[tuple[str, str, str]]:
+def _extract_legacy_txn_lines(pdf_path: Path) -> list[tuple[_CC_SECTION, str, str]]:
     """Older PDFs: ``DD/MM/YYYY MERCHANT … 1,234.56`` or ``… 99.00Cr`` (no pipe column)."""
-    section: Literal["domestic", "international"] = "domestic"
-    out: list[tuple[str, str, str]] = []
+    section: _CC_SECTION = "domestic"
+    out: list[tuple[_CC_SECTION, str, str]] = []
     prefix_lines: list[str] = []
     seen_column_header = False
 
@@ -289,7 +292,7 @@ def _parse_legacy_line(
     )
 
 
-def _extract_txn_lines(pdf_path: Path) -> list[tuple[str, str, str]]:
+def _extract_txn_lines(pdf_path: Path) -> list[tuple[_CC_SECTION, str, str]]:
     """Walk the PDF in page order, track Domestic vs International.
 
     Returns:
@@ -301,8 +304,8 @@ def _extract_txn_lines(pdf_path: Path) -> list[tuple[str, str, str]]:
     We use :meth:`pdfplumber.Page.extract_text` (not ``extract_tables``) because HDFC
     sometimes merges cells; line-based regex is more stable than fragile table grids.
     """
-    section: Literal["domestic", "international"] = "domestic"
-    out: list[tuple[str, str, str]] = []
+    section: _CC_SECTION = "domestic"
+    out: list[tuple[_CC_SECTION, str, str]] = []
     prefix_lines: list[str] = []
     # Ignore the address / summary block at the top of each page until we see the
     # real column header — otherwise the first txn would inherit your mailing address.

@@ -127,7 +127,7 @@ def _inv_txn_user_id_for_sync(session: Session, row: InvestmentTransaction) -> s
         h = session.get(Holding, row.holding_id)
         if h:
             return h.user_id
-    return _default_user_id_for_sync()
+    return _default_user_id_for_inv_sync()
 
 
 def _validate_inv_update(body: InvestmentTransactionUpdate, *, session: Session | None = None) -> None:

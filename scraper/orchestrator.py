@@ -27,6 +27,7 @@ import datetime
 import logging
 import os
 from dataclasses import dataclass, field
+from typing import Protocol, cast
 
 from sqlmodel import Session, select
 
@@ -43,6 +44,19 @@ from scraper.email_router import _normalise_sender, find_parser
 from scraper.gmail_client import GmailClient, GmailMessage
 
 logger = logging.getLogger(__name__)
+
+
+class _AttachmentEmailParser(Protocol):
+    """Parsers with ``parse_type == "attachment"`` implement this (not :class:`BaseEmailParser` alone)."""
+
+    def parse_attachment(
+        self,
+        pdf_bytes: bytes,
+        received_date: datetime.date,
+        *,
+        email_sender: str,
+        email_subject: str,
+    ) -> list[ParsedTransaction]: ...
 
 
 # ─── Result dataclass ──────────────────────────────────────────────────────────
@@ -208,9 +222,10 @@ def _process_email(
         if callable(reset_fn):
             reset_fn()
         parsed_txns: list[ParsedTransaction] = []
+        stmt_parser = cast(_AttachmentEmailParser, parser)
         for _filename, pdf_bytes in attachments:
             parsed_txns.extend(
-                parser.parse_attachment(
+                stmt_parser.parse_attachment(
                     pdf_bytes,
                     received_date,
                     email_sender=_normalise_sender(msg.sender),
