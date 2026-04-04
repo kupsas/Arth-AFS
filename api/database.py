@@ -191,6 +191,35 @@ def _apply_sqlite_patches() -> None:
         if not _column_exists(conn, "holdings", "fund_house"):
             conn.execute(text("ALTER TABLE holdings ADD COLUMN fund_house TEXT"))
 
+        # Goals architecture V2 — classification, recurrence, inflation, priority (Sub-Plan A).
+        if not _column_exists(conn, "goals", "goal_class"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN goal_class TEXT"))
+        if not _column_exists(conn, "goals", "recurrence_amount"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN recurrence_amount REAL"))
+        if not _column_exists(conn, "goals", "recurrence_frequency"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN recurrence_frequency TEXT"))
+        if not _column_exists(conn, "goals", "recurrence_start"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN recurrence_start TEXT"))
+        if not _column_exists(conn, "goals", "recurrence_end"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN recurrence_end TEXT"))
+        if not _column_exists(conn, "goals", "goal_specific_inflation_rate"):
+            conn.execute(
+                text("ALTER TABLE goals ADD COLUMN goal_specific_inflation_rate REAL")
+            )
+        if not _column_exists(conn, "goals", "expected_return_rate"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN expected_return_rate REAL"))
+        if not _column_exists(conn, "goals", "starting_balance"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN starting_balance REAL"))
+        if not _column_exists(conn, "goals", "system_priority_score"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN system_priority_score REAL"))
+        if not _column_exists(conn, "goals", "goal_subtype"):
+            conn.execute(text("ALTER TABLE goals ADD COLUMN goal_subtype TEXT"))
+
+        if not _column_exists(conn, "holdings", "earliest_liquidity_date"):
+            conn.execute(
+                text("ALTER TABLE holdings ADD COLUMN earliest_liquidity_date TEXT")
+            )
+
         # Phase 5 — investment txn review queue (same semantics as Transaction.is_reviewed).
         if not _column_exists(conn, "investment_transactions", "is_reviewed"):
             conn.execute(

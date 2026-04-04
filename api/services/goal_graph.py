@@ -43,9 +43,18 @@ from api.models import Goal, GoalLink
 # Internal constants
 # ---------------------------------------------------------------------------
 
-# The four recognised tier values.  Checked case-insensitively; any other
-# value (including None) maps to the "untiered" bucket in get_goal_tree.
-_VALID_TIERS = {"VISION", "STRATEGY", "TACTIC", "OPERATIONAL"}
+# L1–L4 replace legacy VISION/STRATEGY/TACTIC/OPERATIONAL (Goals architecture V2).
+# Both spellings are accepted when bucketing; API normalises legacy → L* on write.
+_TIER_TO_BUCKET: dict[str, str] = {
+    "L1": "l1",
+    "L2": "l2",
+    "L3": "l3",
+    "L4": "l4",
+    "VISION": "l1",
+    "STRATEGY": "l2",
+    "TACTIC": "l3",
+    "OPERATIONAL": "l4",
+}
 
 # Type aliases — purely for documentation, not enforced at runtime.
 GoalsById   = dict[int, Goal]
@@ -114,6 +123,19 @@ def _goal_to_dict(goal: Goal) -> dict:
         "allocation_priority": goal.allocation_priority,
         "interruptible": goal.interruptible,
         "sensitivity_to_returns": goal.sensitivity_to_returns,
+        # Goals architecture V2
+        "goal_class": goal.goal_class,
+        "recurrence_amount": goal.recurrence_amount,
+        "recurrence_frequency": goal.recurrence_frequency,
+        "recurrence_start": goal.recurrence_start.isoformat()
+        if goal.recurrence_start
+        else None,
+        "recurrence_end": goal.recurrence_end.isoformat() if goal.recurrence_end else None,
+        "goal_specific_inflation_rate": goal.goal_specific_inflation_rate,
+        "expected_return_rate": goal.expected_return_rate,
+        "starting_balance": goal.starting_balance,
+        "system_priority_score": goal.system_priority_score,
+        "goal_subtype": goal.goal_subtype,
         # Core goal fields
         "target_amount": goal.target_amount,
         "target_date": goal.target_date.isoformat() if goal.target_date else None,
@@ -230,12 +252,12 @@ def get_goal_tree(session: Session, user_id: str) -> dict:
 
     Response shape:
         {
-            "vision":      [goal_dict, ...],
-            "strategy":    [goal_dict, ...],
-            "tactic":      [goal_dict, ...],
-            "operational": [goal_dict, ...],
-            "untiered":    [goal_dict, ...],   # goals whose tier field is None or unknown
-            "links":       [link_dict, ...],
+            "l1":       [goal_dict, ...],
+            "l2":       [goal_dict, ...],
+            "l3":       [goal_dict, ...],
+            "l4":       [goal_dict, ...],
+            "untiered": [goal_dict, ...],   # tier None or unknown (not L1–L4 / legacy)
+            "links":    [link_dict, ...],
         }
 
     Goals within each bucket are sorted by:
@@ -248,20 +270,17 @@ def get_goal_tree(session: Session, user_id: str) -> dict:
     """
     goals_by_id, links, _, _ = _load_graph(session, user_id)
 
-    # Initialise empty buckets; tier names are lowercased to match JSON convention.
     buckets: dict[str, list[dict]] = {
-        "vision": [],
-        "strategy": [],
-        "tactic": [],
-        "operational": [],
+        "l1": [],
+        "l2": [],
+        "l3": [],
+        "l4": [],
         "untiered": [],
     }
 
     for goal in goals_by_id.values():
         tier_upper = (goal.tier or "").strip().upper()
-        # Map the stored tier value → bucket key.  Anything not in the known
-        # set (including blank / None) falls into "untiered".
-        bucket_key = tier_upper.lower() if tier_upper in _VALID_TIERS else "untiered"
+        bucket_key = _TIER_TO_BUCKET.get(tier_upper, "untiered")
         buckets[bucket_key].append(_goal_to_dict(goal))
 
     # Sort each bucket for a stable, priority-ordered display.

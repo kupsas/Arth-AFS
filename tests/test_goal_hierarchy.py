@@ -616,10 +616,10 @@ class TestGetGoalTree:
     def test_empty_user_returns_empty_buckets(self, session):
         """No goals → all tier buckets are empty lists, links is empty."""
         tree = get_goal_tree(session, "nobody")
-        assert tree["vision"] == []
-        assert tree["strategy"] == []
-        assert tree["tactic"] == []
-        assert tree["operational"] == []
+        assert tree["l1"] == []
+        assert tree["l2"] == []
+        assert tree["l3"] == []
+        assert tree["l4"] == []
         assert tree["untiered"] == []
         assert tree["links"] == []
 
@@ -633,10 +633,10 @@ class TestGetGoalTree:
         session.commit()
 
         tree = get_goal_tree(session, "tester")
-        assert len(tree["vision"]) == 1
-        assert len(tree["strategy"]) == 1
-        assert len(tree["tactic"]) == 1
-        assert len(tree["operational"]) == 1
+        assert len(tree["l1"]) == 1
+        assert len(tree["l2"]) == 1
+        assert len(tree["l3"]) == 1
+        assert len(tree["l4"]) == 1
         assert len(tree["untiered"]) == 1
 
     def test_links_included_in_tree(self, session):
@@ -659,8 +659,8 @@ class TestGetGoalTree:
 
         tree = get_goal_tree(session, "tester")
         all_goals = (
-            tree["vision"] + tree["strategy"] + tree["tactic"] +
-            tree["operational"] + tree["untiered"]
+            tree["l1"] + tree["l2"] + tree["l3"] +
+            tree["l4"] + tree["untiered"]
         )
         assert all(g["user_id"] == "tester" for g in all_goals)
 
@@ -672,11 +672,11 @@ class TestGetGoalTree:
         session.commit()
 
         tree = get_goal_tree(session, "tester")
-        strategy = tree["strategy"]
+        l2 = tree["l2"]
         # Priority 1 first, then 3, then null
-        assert strategy[0]["name"] == "Prio1"
-        assert strategy[1]["name"] == "Prio3"
-        assert strategy[2]["name"] == "PrioNull"
+        assert l2[0]["name"] == "Prio1"
+        assert l2[1]["name"] == "Prio3"
+        assert l2[2]["name"] == "PrioNull"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

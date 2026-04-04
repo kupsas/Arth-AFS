@@ -166,6 +166,35 @@ class MutualFundType(str, Enum):
 
 
 # ---------------------------------------------------------------------------
+# Goals architecture (Sub-Plan A) — stored as strings in SQLite
+# ---------------------------------------------------------------------------
+
+
+class GoalClass(str, Enum):
+    POINT_IN_TIME = "POINT_IN_TIME"
+    RECURRING_CASH_FLOW = "RECURRING_CASH_FLOW"
+    GROWTH = "GROWTH"
+
+
+class GoalSubtype(str, Enum):
+    HOME_PURCHASE = "HOME_PURCHASE"
+    VEHICLE = "VEHICLE"
+    WEDDING = "WEDDING"
+    RETIREMENT = "RETIREMENT"
+    CHILD_EDUCATION = "CHILD_EDUCATION"
+    EMERGENCY_FUND = "EMERGENCY_FUND"
+    TRAVEL = "TRAVEL"
+    LOAN_PAYOFF = "LOAN_PAYOFF"
+    CUSTOM = "CUSTOM"
+
+
+class RecurrenceFrequency(str, Enum):
+    MONTHLY = "MONTHLY"
+    QUARTERLY = "QUARTERLY"
+    ANNUAL = "ANNUAL"
+
+
+# ---------------------------------------------------------------------------
 # ParsedTransaction  (intermediate — what every parser produces)
 # ---------------------------------------------------------------------------
 

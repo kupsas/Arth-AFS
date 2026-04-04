@@ -373,7 +373,16 @@ export type ProgressCadence = "MONTHLY" | "ANNUAL";
 /**
  * Goal pyramid tier (Phase B). Stored uppercase on the API; list filter uses same values.
  */
-export type GoalTier = "VISION" | "STRATEGY" | "TACTIC" | "OPERATIONAL";
+/** L1–L4 replace legacy VISION…OPERATIONAL; API may still accept legacy on write. */
+export type GoalTier =
+  | "L1"
+  | "L2"
+  | "L3"
+  | "L4"
+  | "VISION"
+  | "STRATEGY"
+  | "TACTIC"
+  | "OPERATIONAL";
 
 export type GoalTimeHorizon =
   | "MONTHLY"
@@ -427,6 +436,17 @@ export interface Goal {
   allocation_priority?: number | null;
   interruptible?: boolean | null;
   sensitivity_to_returns?: string | null;
+  /** Goals architecture V2 — optional until backfilled */
+  goal_class?: string | null;
+  recurrence_amount?: number | null;
+  recurrence_frequency?: string | null;
+  recurrence_start?: string | null;
+  recurrence_end?: string | null;
+  goal_specific_inflation_rate?: number | null;
+  expected_return_rate?: number | null;
+  starting_balance?: number | null;
+  system_priority_score?: number | null;
+  goal_subtype?: string | null;
   // Computed progress (live from DB)
   computed_current_value: number;
   computed_percentage: number;     // 0–100+
@@ -505,14 +525,14 @@ export interface GoalLinkCreate {
 }
 
 /**
- * GET /api/goals/tree — goals grouped by tier (lowercase keys) plus all links.
+ * GET /api/goals/tree — goals grouped by tier bucket (l1…l4) plus untiered and links.
  * Each goal includes the same fields as GET /api/goals (including computed progress).
  */
 export interface GoalTree {
-  vision: Goal[];
-  strategy: Goal[];
-  tactic: Goal[];
-  operational: Goal[];
+  l1: Goal[];
+  l2: Goal[];
+  l3: Goal[];
+  l4: Goal[];
   untiered: Goal[];
   links: GoalLink[];
 }
@@ -761,6 +781,8 @@ export interface Holding {
   market_cap_class?: string | null;
   fund_category?: string | null;
   fund_house?: string | null;
+  /** Earliest date value is accessible (Goals V2 / liquidity). */
+  earliest_liquidity_date?: string | null;
   user_id: string;
   is_active: boolean;
   notes: string | null;
@@ -810,6 +832,7 @@ export interface HoldingValueUpdate {
   current_value?: number | null;
   last_valued_date?: string | null;
   notes?: string | null;
+  earliest_liquidity_date?: string | null;
 }
 
 /** Snapshot inside GET /api/holdings/summary → ``net_worth``. */

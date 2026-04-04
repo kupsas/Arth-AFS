@@ -128,14 +128,14 @@ const DASHBOARD_CATEGORY_SERIES: { id: DashboardCategorySeries; label: string }[
 
 /** Maps each API tier bucket to a short label and a left-border accent (Tailwind). */
 const TIER_PANELS: {
-  treeKey: keyof Pick<GoalTree, "vision" | "strategy" | "tactic" | "operational" | "untiered">
+  treeKey: keyof Pick<GoalTree, "l1" | "l2" | "l3" | "l4" | "untiered">
   label: string
   borderClass: string
 }[] = [
-  { treeKey: "vision", label: "Vision", borderClass: "border-l-violet-500" },
-  { treeKey: "strategy", label: "Strategy", borderClass: "border-l-blue-500" },
-  { treeKey: "tactic", label: "Tactic", borderClass: "border-l-emerald-600" },
-  { treeKey: "operational", label: "Operational", borderClass: "border-l-amber-500" },
+  { treeKey: "l1", label: "L1 · Vision", borderClass: "border-l-violet-500" },
+  { treeKey: "l2", label: "L2 · Strategy", borderClass: "border-l-blue-500" },
+  { treeKey: "l3", label: "L3 · Tactic", borderClass: "border-l-emerald-600" },
+  { treeKey: "l4", label: "L4 · Operational", borderClass: "border-l-amber-500" },
   { treeKey: "untiered", label: "Untiered", borderClass: "border-l-muted-foreground" },
 ]
 
@@ -153,7 +153,7 @@ const ACTIVATION_STATUS_STYLES: Record<string, string> = {
   PAUSED: "border-muted-foreground/40 bg-muted text-muted-foreground",
 }
 
-const GOAL_TIERS: GoalTier[] = ["VISION", "STRATEGY", "TACTIC", "OPERATIONAL"]
+const GOAL_TIERS: GoalTier[] = ["L1", "L2", "L3", "L4"]
 const GOAL_TIME_HORIZONS = [
   "MONTHLY",
   "QUARTERLY",
@@ -178,10 +178,10 @@ const SENSITIVITY_OPTIONS: SensitivityToReturns[] = ["LOW", "MEDIUM", "HIGH"]
 /** Build id → goal for every node returned in GET /api/goals/tree. */
 function goalsByIdFromTree(tree: GoalTree): Map<number, Goal> {
   const m = new Map<number, Goal>()
-  for (const g of tree.vision) m.set(g.id, g)
-  for (const g of tree.strategy) m.set(g.id, g)
-  for (const g of tree.tactic) m.set(g.id, g)
-  for (const g of tree.operational) m.set(g.id, g)
+  for (const g of tree.l1) m.set(g.id, g)
+  for (const g of tree.l2) m.set(g.id, g)
+  for (const g of tree.l3) m.set(g.id, g)
+  for (const g of tree.l4) m.set(g.id, g)
   for (const g of tree.untiered) m.set(g.id, g)
   return m
 }

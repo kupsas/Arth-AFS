@@ -78,6 +78,16 @@ class GoalCreate(BaseModel):
     allocation_priority: int | None = Field(default=None, ge=1, le=100)
     interruptible: bool | None = None
     sensitivity_to_returns: str | None = Field(default=None, max_length=16)
+    # Goals architecture V2 (simulation / surplus) — optional on create
+    goal_class: str | None = Field(default=None, max_length=32)
+    recurrence_amount: float | None = Field(default=None, ge=0)
+    recurrence_frequency: str | None = Field(default=None, max_length=16)
+    recurrence_start: str | None = None
+    recurrence_end: str | None = None
+    goal_specific_inflation_rate: float | None = Field(default=None, ge=0, le=50)
+    expected_return_rate: float | None = Field(default=None, ge=0, le=50)
+    starting_balance: float | None = Field(default=None, ge=0)
+    goal_subtype: str | None = Field(default=None, max_length=64)
 
 
 class GoalUpdate(BaseModel):
@@ -102,6 +112,15 @@ class GoalUpdate(BaseModel):
     allocation_priority: int | None = Field(default=None, ge=1, le=100)
     interruptible: bool | None = None
     sensitivity_to_returns: str | None = Field(default=None, max_length=16)
+    goal_class: str | None = Field(default=None, max_length=32)
+    recurrence_amount: float | None = Field(default=None, ge=0)
+    recurrence_frequency: str | None = Field(default=None, max_length=16)
+    recurrence_start: str | None = None
+    recurrence_end: str | None = None
+    goal_specific_inflation_rate: float | None = Field(default=None, ge=0, le=50)
+    expected_return_rate: float | None = Field(default=None, ge=0, le=50)
+    starting_balance: float | None = Field(default=None, ge=0)
+    goal_subtype: str | None = Field(default=None, max_length=64)
 
 
 _VALID_GOAL_TYPES = {
@@ -113,13 +132,80 @@ _VALID_STATUSES = {"ON_TRACK", "AT_RISK", "BEHIND", "ACHIEVED", "PAUSED"}
 
 _VALID_PROGRESS_CADENCE = {"MONTHLY", "ANNUAL"}
 
-_VALID_TIERS = frozenset({"VISION", "STRATEGY", "TACTIC", "OPERATIONAL"})
 _VALID_TIME_HORIZON = frozenset(
     {"MONTHLY", "QUARTERLY", "ANNUAL", "MULTI_YEAR", "DECADE"}
 )
 _VALID_FUNDING_MODE = frozenset({"ACCUMULATION", "CONSTRAINT", "EVENT", "MAINTENANCE"})
 _VALID_ACTIVATION_STATUS = frozenset({"PENDING", "ACTIVE", "COMPLETED", "PAUSED"})
 _VALID_SENSITIVITY = frozenset({"LOW", "MEDIUM", "HIGH"})
+
+# L1–L4 plus legacy labels (normalised to L* on write).
+_VALID_TIERS = frozenset(
+    {"L1", "L2", "L3", "L4", "VISION", "STRATEGY", "TACTIC", "OPERATIONAL"}
+)
+_VALID_GOAL_CLASSES = frozenset({"POINT_IN_TIME", "RECURRING_CASH_FLOW", "GROWTH"})
+_VALID_GOAL_SUBTYPES = frozenset(
+    {
+        "HOME_PURCHASE",
+        "VEHICLE",
+        "WEDDING",
+        "RETIREMENT",
+        "CHILD_EDUCATION",
+        "EMERGENCY_FUND",
+        "TRAVEL",
+        "LOAN_PAYOFF",
+        "CUSTOM",
+    }
+)
+_VALID_RECURRENCE_FREQUENCY = frozenset({"MONTHLY", "QUARTERLY", "ANNUAL"})
+
+_LEGACY_TIER_TO_L = {
+    "VISION": "L1",
+    "STRATEGY": "L2",
+    "TACTIC": "L3",
+    "OPERATIONAL": "L4",
+}
+
+
+def _normalize_tier_value(tier: str | None) -> str | None:
+    """Persist legacy VISION…OPERATIONAL as L1…L4."""
+    if tier is None:
+        return None
+    return _LEGACY_TIER_TO_L.get(tier, tier)
+
+
+def _warn_goal_class_recurrence_consistency(
+    goal_class: str | None,
+    recurrence_amount: float | None,
+    recurrence_frequency: str | None,
+    *,
+    recurrence_start: datetime.date | None = None,
+    recurrence_end: datetime.date | None = None,
+) -> None:
+    """Log soft warnings when recurrence fields disagree with goal_class (V2)."""
+    if goal_class == "RECURRING_CASH_FLOW":
+        if recurrence_amount is None or recurrence_frequency is None:
+            logger.warning(
+                "RECURRING_CASH_FLOW goal missing recurrence_amount or "
+                "recurrence_frequency (amount=%r, frequency=%r).",
+                recurrence_amount,
+                recurrence_frequency,
+            )
+    elif goal_class is not None and goal_class != "RECURRING_CASH_FLOW":
+        if any(
+            x is not None
+            for x in (
+                recurrence_amount,
+                recurrence_frequency,
+                recurrence_start,
+                recurrence_end,
+            )
+        ):
+            logger.warning(
+                "goal_class=%r but recurrence fields are set — expected only for "
+                "RECURRING_CASH_FLOW.",
+                goal_class,
+            )
 
 
 def _validate_progress_cadence(goal_type: str, cadence: str | None) -> str:
@@ -258,7 +344,8 @@ def create_goal(
 
     pc = _validate_progress_cadence(body.goal_type, body.progress_cadence)
 
-    tier = _validate_optional_enum("tier", body.tier, _VALID_TIERS)
+    tier_raw = _validate_optional_enum("tier", body.tier, _VALID_TIERS)
+    tier = _normalize_tier_value(tier_raw)
     time_horizon = _validate_optional_enum(
         "time_horizon", body.time_horizon, _VALID_TIME_HORIZON
     )
@@ -280,6 +367,52 @@ def create_goal(
 
     _validate_activation_condition_or_400(body.activation_condition)
     _ensure_pyramid_id_unique(session, current_user, body.pyramid_id)
+
+    goal_class = _validate_optional_enum(
+        "goal_class", body.goal_class, _VALID_GOAL_CLASSES
+    )
+    goal_subtype = _validate_optional_enum(
+        "goal_subtype", body.goal_subtype, _VALID_GOAL_SUBTYPES
+    )
+    recurrence_frequency = _validate_optional_enum(
+        "recurrence_frequency",
+        body.recurrence_frequency,
+        _VALID_RECURRENCE_FREQUENCY,
+    )
+
+    recurrence_start = None
+    if body.recurrence_start:
+        try:
+            recurrence_start = datetime.date.fromisoformat(body.recurrence_start)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Invalid recurrence_start format: "
+                    f"{body.recurrence_start!r}. Use YYYY-MM-DD."
+                ),
+            ) from None
+
+    recurrence_end = None
+    if body.recurrence_end:
+        try:
+            recurrence_end = datetime.date.fromisoformat(body.recurrence_end)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Invalid recurrence_end format: "
+                    f"{body.recurrence_end!r}. Use YYYY-MM-DD."
+                ),
+            ) from None
+
+    _warn_goal_class_recurrence_consistency(
+        goal_class,
+        body.recurrence_amount,
+        recurrence_frequency,
+        recurrence_start=recurrence_start,
+        recurrence_end=recurrence_end,
+    )
 
     goal = Goal(
         name=body.name,
@@ -305,6 +438,15 @@ def create_goal(
         allocation_priority=body.allocation_priority,
         interruptible=True if body.interruptible is None else body.interruptible,
         sensitivity_to_returns=sensitivity,
+        goal_class=goal_class,
+        recurrence_amount=body.recurrence_amount,
+        recurrence_frequency=recurrence_frequency,
+        recurrence_start=recurrence_start,
+        recurrence_end=recurrence_end,
+        goal_specific_inflation_rate=body.goal_specific_inflation_rate,
+        expected_return_rate=body.expected_return_rate,
+        starting_balance=body.starting_balance,
+        goal_subtype=goal_subtype,
     )
     session.add(goal)
     session.commit()
@@ -445,9 +587,8 @@ def update_goal(
         update_data["pyramid_id"] = normalized_pyramid
 
     if "tier" in update_data:
-        update_data["tier"] = _validate_optional_enum(
-            "tier", update_data["tier"], _VALID_TIERS
-        )
+        tr = _validate_optional_enum("tier", update_data["tier"], _VALID_TIERS)
+        update_data["tier"] = _normalize_tier_value(tr)
     if "time_horizon" in update_data:
         update_data["time_horizon"] = _validate_optional_enum(
             "time_horizon", update_data["time_horizon"], _VALID_TIME_HORIZON
@@ -473,6 +614,78 @@ def update_goal(
             update_data["sensitivity_to_returns"],
             _VALID_SENSITIVITY,
         )
+
+    if "goal_class" in update_data:
+        update_data["goal_class"] = _validate_optional_enum(
+            "goal_class", update_data["goal_class"], _VALID_GOAL_CLASSES
+        )
+    if "goal_subtype" in update_data:
+        update_data["goal_subtype"] = _validate_optional_enum(
+            "goal_subtype", update_data["goal_subtype"], _VALID_GOAL_SUBTYPES
+        )
+    if "recurrence_frequency" in update_data:
+        update_data["recurrence_frequency"] = _validate_optional_enum(
+            "recurrence_frequency",
+            update_data["recurrence_frequency"],
+            _VALID_RECURRENCE_FREQUENCY,
+        )
+
+    if "recurrence_start" in update_data:
+        rs = update_data["recurrence_start"]
+        if rs is None:
+            update_data["recurrence_start"] = None
+        else:
+            try:
+                update_data["recurrence_start"] = datetime.date.fromisoformat(str(rs))
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid recurrence_start format. Use YYYY-MM-DD.",
+                ) from None
+
+    if "recurrence_end" in update_data:
+        re_end = update_data["recurrence_end"]
+        if re_end is None:
+            update_data["recurrence_end"] = None
+        else:
+            try:
+                update_data["recurrence_end"] = datetime.date.fromisoformat(str(re_end))
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid recurrence_end format. Use YYYY-MM-DD.",
+                ) from None
+
+    eff_class = (
+        update_data["goal_class"] if "goal_class" in update_data else goal.goal_class
+    )
+    eff_ra = (
+        update_data["recurrence_amount"]
+        if "recurrence_amount" in update_data
+        else goal.recurrence_amount
+    )
+    eff_rf = (
+        update_data["recurrence_frequency"]
+        if "recurrence_frequency" in update_data
+        else goal.recurrence_frequency
+    )
+    eff_rs = (
+        update_data["recurrence_start"]
+        if "recurrence_start" in update_data
+        else goal.recurrence_start
+    )
+    eff_re = (
+        update_data["recurrence_end"]
+        if "recurrence_end" in update_data
+        else goal.recurrence_end
+    )
+    _warn_goal_class_recurrence_consistency(
+        eff_class,
+        eff_ra,
+        eff_rf,
+        recurrence_start=eff_rs,
+        recurrence_end=eff_re,
+    )
 
     for field, value in update_data.items():
         setattr(goal, field, value)
@@ -541,6 +754,18 @@ def _goal_to_dict(goal: Goal, progress: dict) -> dict:
         "allocation_priority": goal.allocation_priority,
         "interruptible": goal.interruptible,
         "sensitivity_to_returns": goal.sensitivity_to_returns,
+        "goal_class": goal.goal_class,
+        "recurrence_amount": goal.recurrence_amount,
+        "recurrence_frequency": goal.recurrence_frequency,
+        "recurrence_start": goal.recurrence_start.isoformat()
+        if goal.recurrence_start
+        else None,
+        "recurrence_end": goal.recurrence_end.isoformat() if goal.recurrence_end else None,
+        "goal_specific_inflation_rate": goal.goal_specific_inflation_rate,
+        "expected_return_rate": goal.expected_return_rate,
+        "starting_balance": goal.starting_balance,
+        "system_priority_score": goal.system_priority_score,
+        "goal_subtype": goal.goal_subtype,
         # Computed progress fields (progress ``status`` is separate from activation_status)
         "computed_current_value": progress["current_value"],
         "computed_percentage": progress["percentage"],

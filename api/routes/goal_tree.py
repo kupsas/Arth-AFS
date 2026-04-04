@@ -44,7 +44,7 @@ def _enrich_goal_dicts(session: Session, goal_dicts: list[dict]) -> list[dict]:
 
 
 def _enrich_tree(session: Session, tree: dict) -> dict:
-    keys = ("vision", "strategy", "tactic", "operational", "untiered")
+    keys = ("l1", "l2", "l3", "l4", "untiered")
     result = {k: _enrich_goal_dicts(session, tree[k]) for k in keys}
     result["links"] = tree["links"]
     return result
