@@ -1,0 +1,186 @@
+"""
+Simulation API — Sub-Plan G.
+
+``POST`` endpoints accept full sandbox state as JSON; no DB reads except
+``/from-current``, which hydrates :class:`SimulationParams` from the logged-in
+user's goals + surplus + inflation.
+"""
+
+from __future__ import annotations
+
+import datetime
+from typing import Any
+
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
+from sqlmodel import Session, select
+
+from api.auth import get_current_user
+from api.database import get_session
+from api.models import Goal
+from api.services.inflation_service import cpi_general_yoy_ema_pct, get_goal_inflation_rate
+from api.services.priority_scorer import _effective_goal_class, compute_priority_scores
+from api.services.simulation import (
+    SimulationGoal,
+    SimulationParams,
+    SimulationResult,
+    allocate_surplus,
+    compare_scenarios,
+    simulate,
+)
+from api.services.surplus_calculator import compute_surplus
+
+router = APIRouter()
+
+
+class AllocateRequest(BaseModel):
+    """Body for ``POST /allocate``."""
+
+    goals: list[SimulationGoal]
+    surplus: float = Field(..., description="Monthly INR to allocate")
+    as_of_date: datetime.date | None = Field(
+        default=None,
+        description="Reference month for recurring windows (defaults to today)",
+    )
+
+
+class CompareRequest(BaseModel):
+    """Body for ``POST /compare``."""
+
+    base: SimulationParams
+    variants: list[SimulationParams] = Field(default_factory=list)
+
+
+def _goal_to_simulation_goal(
+    session: Session,
+    goal: Goal,
+    rank_by_goal_id: dict[int, int],
+) -> SimulationGoal:
+    """Map a persisted :class:`Goal` to API simulation input."""
+    gclass = _effective_goal_class(goal)
+    alloc = goal.allocation_priority
+    if alloc is None or alloc <= 0:
+        alloc = rank_by_goal_id.get(goal.id or 0, 99)
+
+    infl = get_goal_inflation_rate(session, goal)
+    exp_ret = goal.expected_return_rate
+    if exp_ret is None:
+        exp_ret = 10.0
+
+    start_bal = goal.starting_balance
+    if start_bal is None:
+        start_bal = float(goal.current_value or 0.0)
+
+    return SimulationGoal(
+        id=goal.id,
+        name=goal.name,
+        goal_class=gclass,
+        target_amount=goal.target_amount,
+        target_date=goal.target_date,
+        starting_balance=float(start_bal),
+        allocation_priority=int(alloc),
+        expected_return_rate=float(exp_ret),
+        inflation_rate=float(infl),
+        recurrence_amount=goal.recurrence_amount,
+        recurrence_frequency=goal.recurrence_frequency,
+        recurrence_start=goal.recurrence_start,
+        recurrence_end=goal.recurrence_end,
+        goal_subtype=goal.goal_subtype,
+    )
+
+
+def build_simulation_params_from_db(
+    session: Session,
+    user_id: str,
+    *,
+    simulation_months: int = 240,
+    surplus_trailing_months: int = 6,
+    as_of_date: datetime.date | None = None,
+) -> tuple[SimulationParams, dict[str, Any]]:
+    """Hydrate :class:`SimulationParams` from DB state for the sandbox page."""
+
+    surplus_res = compute_surplus(session, user_id, months=surplus_trailing_months)
+    pri = compute_priority_scores(session, user_id, persist=False)
+    rank_by_goal_id = {p.goal_id: p.suggested_rank for p in pri.priorities}
+
+    stmt = select(Goal).where(
+        Goal.user_id == user_id,
+        Goal.activation_status == "ACTIVE",
+    )
+    rows = list(session.exec(stmt).all())
+
+    sim_goals = [_goal_to_simulation_goal(session, g, rank_by_goal_id) for g in rows]
+
+    general_ema = cpi_general_yoy_ema_pct(session)
+
+    meta: dict[str, Any] = {
+        "user_id": user_id,
+        "monthly_surplus_source": surplus_res.computation_method,
+        "priority_computed_at": pri.computed_at.isoformat(),
+        "simulation_inflation_ema_pct": general_ema,
+        "active_goals_loaded": len(sim_goals),
+    }
+
+    params = SimulationParams(
+        goals=sim_goals,
+        monthly_surplus=float(surplus_res.monthly_surplus),
+        general_inflation_rate=float(general_ema),
+        simulation_months=simulation_months,
+        as_of_date=as_of_date or datetime.date.today(),
+    )
+    return params, meta
+
+
+@router.post("", response_model=SimulationResult)
+def post_simulate(body: SimulationParams) -> SimulationResult:
+    """Run a full month-by-month simulation from JSON state (no DB)."""
+    return simulate(body)
+
+
+@router.post("/compare")
+def post_compare(body: CompareRequest) -> list[dict[str, Any]]:
+    """Compare base params to one or more variants."""
+    results = compare_scenarios(body.base, body.variants)
+    return [r.model_dump() for r in results]
+
+
+@router.post("/allocate")
+def post_allocate(body: AllocateRequest) -> dict[str, float]:
+    """Priority waterfall allocation for one month (no full projection)."""
+    return allocate_surplus(
+        body.goals,
+        body.surplus,
+        today=body.as_of_date,
+    )
+
+
+class FromCurrentBody(BaseModel):
+    """Optional overrides for ``POST /from-current``."""
+
+    simulation_months: int = Field(default=240, ge=1, le=600)
+    surplus_trailing_months: int = Field(default=6, ge=3, le=12)
+    as_of_date: datetime.date | None = None
+
+
+@router.post("/from-current")
+def post_simulate_from_current(
+    body: FromCurrentBody | None = None,
+    *,
+    session: Session = Depends(get_session),
+    user_id: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Load ACTIVE goals + surplus + inflation, then run :func:`simulate`."""
+    opts = body or FromCurrentBody()
+    params, meta = build_simulation_params_from_db(
+        session,
+        user_id,
+        simulation_months=opts.simulation_months,
+        surplus_trailing_months=opts.surplus_trailing_months,
+        as_of_date=opts.as_of_date,
+    )
+    result = simulate(params)
+    return {
+        "params": params.model_dump(),
+        "meta": meta,
+        "result": result.model_dump(),
+    }

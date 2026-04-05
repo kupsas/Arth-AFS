@@ -38,6 +38,7 @@ from api.routes.surplus import router as surplus_router
 from api.routes.liquidity import router as liquidity_router
 from api.routes.goal_suggestions import router as goal_suggestions_router
 from api.routes.inflation import router as inflation_router
+from api.routes.simulate import router as simulate_router
 from api.routes.scraper import router as scraper_router
 from pipeline.logging_config import setup_logging
 from scraper.scheduler import shutdown_scheduler, start_scheduler
@@ -183,6 +184,7 @@ app.include_router(surplus_router,      prefix="/api/surplus",       tags=["Surp
 app.include_router(liquidity_router,    prefix="/api/liquidity",     tags=["Liquidity"],     dependencies=_auth)
 app.include_router(goal_suggestions_router, prefix="/api/goal-suggestions", tags=["Goal suggestions"], dependencies=_auth)
 app.include_router(inflation_router,   prefix="/api/inflation",     tags=["Inflation"],     dependencies=_auth)
+app.include_router(simulate_router,    prefix="/api/simulate",      tags=["Simulation"],    dependencies=_auth)
 # goal_tree_router first: static paths /tree and /allocation must not hit /{goal_id}.
 app.include_router(goal_tree_router,   prefix="/api/goals",         tags=["Goals"],         dependencies=_auth)
 app.include_router(goals_router,        prefix="/api/goals",         tags=["Goals"],         dependencies=_auth)
