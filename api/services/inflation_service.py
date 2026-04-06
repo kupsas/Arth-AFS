@@ -13,9 +13,10 @@ Sync runs:
 
 Other categories stay ``INFLATION_DEFAULTS`` until another source exists.
 
-Goal decomposition uses :func:`cpi_general_yoy_ema_pct` — an **exponential** moving
-average of monthly YoY (``span`` months, ``α = 2/(span+1)``), smoother than a plain
-mean and heavier on recent prints. Same value for all subtypes until sector series exist.
+Goal decomposition uses :func:`cpi_general_yoy_ema_pct` for **CPI_GENERAL**-mapped
+subtypes — an **exponential** moving average of monthly YoY (``span`` months,
+``α = 2/(span+1)``). Other subtypes use :data:`GOAL_INFLATION_MAP` →
+:data:`INFLATION_DEFAULTS` / DB category rows (see :func:`resolve_goal_inflation`).
 
 Attribution: IMF data — see https://data.imf.org/ and IMF terms of use.
 """
@@ -57,6 +58,16 @@ GOAL_INFLATION_MAP: dict[str, str | None] = {
     "CUSTOM": "CPI_GENERAL",
 }
 
+# Short labels for API/UI — not the same as DB category keys
+INFLATION_CATEGORY_LABELS: dict[str, str] = {
+    "CPI_GENERAL": "headline India CPI",
+    "REAL_ESTATE": "real estate / housing",
+    "EDUCATION": "education",
+    "HEALTHCARE": "healthcare",
+    "TRAVEL_INTERNATIONAL": "international travel",
+    "TRAVEL_DOMESTIC": "domestic travel",
+}
+
 CACHE_STALE_DAYS = 30
 CACHE_EXPIRED_DAYS = 90
 
@@ -72,7 +83,7 @@ MIN_STORED_CPI_PERIOD = "2019-01"
 
 # Goal decomposition: EMA span (months) for monthly YoY series — α = 2/(span+1).
 # Override via ``INFLATION_SIMULATION_EMA_SPAN`` (``INFLATION_SIMULATION_MA_MONTHS`` still read for compatibility).
-_DEFAULT_SIMULATION_EMA_SPAN = 12
+_DEFAULT_SIMULATION_EMA_SPAN = 84
 
 # YoY % sanity bounds (IMF/IFS can spike on revisions)
 _YOY_MIN = -10.0
@@ -353,8 +364,8 @@ def cpi_general_yoy_ema_pct(session: Session) -> float:
     months influence the result more than a simple mean. If there is no history,
     falls back to ``INFLATION_DEFAULTS['CPI_GENERAL']``.
 
-    Until sector-specific series exist, the same blended rate is used for every
-    goal subtype — see :func:`get_goal_inflation_rate`.
+    For goals mapped to ``CPI_GENERAL`` only; other subtypes use sector defaults
+    or DB rows — see :func:`resolve_goal_inflation`.
     """
     _ensure_fresh_cpi_general(session)
     n = _simulation_ema_span()
@@ -413,21 +424,83 @@ def get_inflation_rate(session: Session, category: str) -> float:
     return float(INFLATION_DEFAULTS.get(cat, INFLATION_DEFAULTS["CPI_GENERAL"]))
 
 
-def get_goal_inflation_rate(session: Session, goal: Goal) -> float:
-    """Resolve annual inflation % for simulation / decomposition for this goal.
+def _cpi_general_ema_or_default(session: Session) -> float:
+    """EMA of IMF monthly YoY for ``CPI_GENERAL``; on failure, ``INFLATION_DEFAULTS['CPI_GENERAL']``."""
+    try:
+        return float(cpi_general_yoy_ema_pct(session))
+    except Exception as e:
+        logger.warning(
+            "cpi_general_yoy_ema_pct failed (%s) — using default %s%%",
+            e,
+            INFLATION_DEFAULTS["CPI_GENERAL"],
+        )
+        return float(INFLATION_DEFAULTS["CPI_GENERAL"])
+
+
+def resolve_goal_inflation(session: Session, goal: Goal) -> dict[str, Any]:
+    """Resolve annual inflation % + metadata for simulation, UI, and decomposition.
 
     Priority:
-      1. ``goal_specific_inflation_rate`` when set.
-      2. ``0`` for loan-payoff style goals (no price-level adjustment).
-      3. Otherwise an **EMA of IMF monthly CPI YoY** (same value for all subtypes
-         until sector indices are wired — see :func:`cpi_general_yoy_ema_pct`).
+      1. ``goal_specific_inflation_rate`` when set (user override).
+      2. ``0`` for ``LOAN_PAYOFF`` (no price-level adjustment).
+      3. ``CPI_GENERAL`` subtype bucket → :func:`_cpi_general_ema_or_default` (not a static 6%).
+      4. Any other mapped category → :func:`get_inflation_rate` (DB row or
+         :data:`INFLATION_DEFAULTS` e.g. REAL_ESTATE 8%%).
     """
-    if goal.goal_specific_inflation_rate is not None:
-        return float(goal.goal_specific_inflation_rate)
     st = (goal.goal_subtype or "CUSTOM").strip().upper()
-    if GOAL_INFLATION_MAP.get(st, "CPI_GENERAL") is None:
-        return 0.0
-    return cpi_general_yoy_ema_pct(session)
+    mapped: str | None = GOAL_INFLATION_MAP.get(st, "CPI_GENERAL")
+
+    if goal.goal_specific_inflation_rate is not None:
+        pct = float(goal.goal_specific_inflation_rate)
+        label = INFLATION_CATEGORY_LABELS.get(mapped or "CPI_GENERAL", "mapped category")
+        return {
+            "annual_pct": pct,
+            "category": mapped,
+            "method": "user_override",
+            "label": label,
+            "detail": "You set this goal’s inflation % manually.",
+        }
+
+    if mapped is None:
+        return {
+            "annual_pct": 0.0,
+            "category": None,
+            "method": "loan_zero",
+            "label": "loan payoff",
+            "detail": "No price-level adjustment (loan / fixed cash flows).",
+        }
+
+    if mapped == "CPI_GENERAL":
+        pct = _cpi_general_ema_or_default(session)
+        span = simulation_inflation_ema_span()
+        return {
+            "annual_pct": round(pct, 2),
+            "category": "CPI_GENERAL",
+            "method": "cpi_general_ema",
+            "label": INFLATION_CATEGORY_LABELS["CPI_GENERAL"],
+            "detail": (
+                f"Headline CPI: exponential moving average of the last {span} "
+                "monthly India YoY prints (IMF series)."
+            ),
+        }
+
+    pct = float(get_inflation_rate(session, mapped))
+    cat_label = INFLATION_CATEGORY_LABELS.get(mapped, mapped.replace("_", " ").lower())
+    return {
+        "annual_pct": round(pct, 2),
+        "category": mapped,
+        "method": "category_default",
+        "label": cat_label,
+        "detail": (
+            f"Nominal {cat_label} inflation (cached series or default for this category — "
+            "not the generic CPI EMA)."
+        ),
+    }
+
+
+def get_goal_inflation_rate(session: Session, goal: Goal) -> float:
+    """Annual inflation % for this goal — see :func:`resolve_goal_inflation`."""
+    return float(resolve_goal_inflation(session, goal)["annual_pct"])
 
 
 def merge_rates_from_db(session: Session) -> dict[str, float]:

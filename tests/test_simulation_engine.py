@@ -9,13 +9,17 @@ import time
 
 import pytest
 
+from api.services import simulation as sim_mod
 from api.services.simulation import (
     GC_GROWTH,
     GC_POINT,
     GC_RECURRING,
+    MANDATORY_RECURRING_SUBTYPES,
+    MIN_MONTHLY_GOAL_CONTRIBUTION_INR,
     OneTimeEvent,
     SimulationGoal,
     SimulationParams,
+    _simulate_inner,
     allocate_surplus,
     compare_scenarios,
     compute_target_at_month,
@@ -114,6 +118,7 @@ def test_recurring_emi_within_window():
         id=1,
         name="Loan EMI",
         goal_class=GC_RECURRING,
+        goal_subtype="LOAN_PAYOFF",
         allocation_priority=1,
         recurrence_amount=55_000.0,
         recurrence_frequency="MONTHLY",
@@ -132,6 +137,132 @@ def test_recurring_emi_within_window():
     emi_p = next(x for x in r.projections if x.goal_name == "Loan EMI")
     # Average allocation to EMI should be substantial (capped by surplus after growth split)
     assert emi_p.monthly_allocation > 40_000.0
+
+
+def test_mandatory_recurring_subtypes_constant():
+    assert "LOAN_PAYOFF" in MANDATORY_RECURRING_SUBTYPES
+    assert "EMERGENCY_FUND" in MANDATORY_RECURRING_SUBTYPES
+    assert "CHILD_EDUCATION" in MANDATORY_RECURRING_SUBTYPES
+
+
+def test_minimum_monthly_floor_zeros_small_allocation_and_redistributes_to_overflow():
+    """Sub-₹5k/mo flows become 0; freed cash goes to the overflow sink (e.g. GROWTH)."""
+    assert MIN_MONTHLY_GOAL_CONTRIBUTION_INR == 5000.0
+    today = datetime.date(2026, 1, 1)
+    travel = SimulationGoal(
+        id=1,
+        name="Small travel",
+        goal_class=GC_RECURRING,
+        goal_subtype="TRAVEL",
+        allocation_priority=3,
+        recurrence_amount=3_000.0,
+        recurrence_frequency="MONTHLY",
+        recurrence_start=today,
+        expected_return_rate=0.0,
+    )
+    growth = SimulationGoal(
+        id=2,
+        name="Growth",
+        goal_class=GC_GROWTH,
+        allocation_priority=2,
+    )
+    p = SimulationParams(
+        goals=[travel, growth],
+        monthly_surplus=10_000.0,
+        simulation_months=3,
+        as_of_date=today,
+    )
+    r = simulate(p)
+    travel_p = next(x for x in r.projections if x.goal_name == "Small travel")
+    growth_p = next(x for x in r.projections if x.goal_name == "Growth")
+    assert travel_p.monthly_trajectory[0].monthly_contribution == 0.0
+    assert growth_p.monthly_trajectory[0].monthly_contribution == pytest.approx(10_000.0)
+    assert travel_p.monthly_allocation == 0.0
+
+
+def test_allocate_surplus_applies_same_minimum_floor():
+    tiny = SimulationGoal(
+        id=1,
+        name="Tiny bill",
+        goal_class=GC_RECURRING,
+        goal_subtype="CUSTOM",
+        allocation_priority=2,
+        recurrence_amount=3_000.0,
+        recurrence_frequency="MONTHLY",
+        recurrence_start=datetime.date(2026, 1, 1),
+        expected_return_rate=0.0,
+    )
+    growth = SimulationGoal(id=2, name="Growth", goal_class=GC_GROWTH, allocation_priority=3)
+    out = allocate_surplus([tiny, growth], 10_000.0, datetime.date(2026, 1, 1))
+    assert out.get("Tiny bill", 0.0) == 0.0
+    assert out.get("Growth", 0.0) == pytest.approx(10_000.0)
+
+
+def test_discretionary_recurring_competes_with_pit_not_before():
+    """TRAVEL/CUSTOM recurring no longer eats surplus before higher-priority PIT."""
+    today = datetime.date(2026, 1, 1)
+    house = _pit(
+        "House",
+        tid=1,
+        target=15_000_000.0,
+        target_date=datetime.date(2031, 7, 1),
+        priority=1,
+        ret=10.0,
+        infl=6.0,
+    )
+    travel = SimulationGoal(
+        id=2,
+        name="Domestic travel",
+        goal_class=GC_RECURRING,
+        goal_subtype="TRAVEL",
+        allocation_priority=2,
+        recurrence_amount=100_000.0,
+        recurrence_frequency="ANNUAL",
+        recurrence_start=today,
+        expected_return_rate=0.0,
+    )
+    p = SimulationParams(
+        goals=[house, travel],
+        monthly_surplus=50_000.0,
+        simulation_months=12,
+        as_of_date=today,
+        general_inflation_rate=6.0,
+    )
+    r = simulate(p)
+    house_p = next(x for x in r.projections if x.goal_name == "House")
+    travel_p = next(x for x in r.projections if x.goal_name == "Domestic travel")
+    assert house_p.monthly_allocation > travel_p.monthly_allocation
+    assert travel_p.monthly_allocation < 15_000.0
+
+
+def test_allocate_surplus_discretionary_recurring_after_pit():
+    house = _pit(
+        "House",
+        tid=1,
+        target=15_000_000.0,
+        target_date=datetime.date(2031, 7, 1),
+        priority=1,
+        ret=10.0,
+        infl=6.0,
+    )
+    travel = SimulationGoal(
+        id=2,
+        name="Travel",
+        goal_class=GC_RECURRING,
+        goal_subtype="TRAVEL",
+        allocation_priority=2,
+        recurrence_amount=100_000.0,
+        recurrence_frequency="ANNUAL",
+        recurrence_start=datetime.date(2026, 1, 1),
+        expected_return_rate=0.0,
+    )
+    out = allocate_surplus(
+        [house, travel],
+        50_000.0,
+        today=datetime.date(2026, 1, 1),
+        general_inflation_rate=6.0,
+    )
+    assert out["House"] >= out["Travel"]
 
 
 def test_growth_absorbs_remainder():
@@ -252,6 +383,82 @@ def test_allocate_surplus_sums_to_surplus_when_growth_present():
     assert abs(sum(out.values()) - 80_000.0) < 1.0
 
 
+def test_allocate_surplus_overflow_to_top_priority_among_pit_and_growth():
+    """After minimums, leftover surplus goes to priority-1 PIT, not the GROWTH bucket."""
+    g1 = _pit(
+        "House",
+        tid=1,
+        target=2_000_000.0,
+        target_date=datetime.date(2035, 6, 1),
+        priority=1,
+        ret=10.0,
+        infl=0.0,
+    )
+    g2 = _pit(
+        "FIRE",
+        tid=2,
+        target=5_000_000.0,
+        target_date=datetime.date(2040, 6, 1),
+        priority=2,
+        ret=10.0,
+        infl=0.0,
+    )
+    gr = SimulationGoal(id=3, name="Invest", goal_class=GC_GROWTH, allocation_priority=3)
+    out = allocate_surplus(
+        [g1, g2, gr],
+        200_000.0,
+        today=datetime.date(2026, 1, 1),
+        general_inflation_rate=6.0,
+    )
+    assert abs(sum(out.values()) - 200_000.0) < 1.0
+    assert out["House"] > out["FIRE"]
+    assert out["House"] > out["Invest"]
+
+
+def test_allocate_surplus_single_goal_no_growth_funnels_all_surplus():
+    """Amortized need can be < surplus; the only active pot should take the rest."""
+    g = _pit(
+        "FIRE",
+        tid=1,
+        target=40_000_000.0,
+        target_date=datetime.date(2046, 7, 1),
+        priority=1,
+        ret=10.0,
+        infl=4.2,
+    )
+    out = allocate_surplus(
+        [g],
+        160_000.0,
+        today=datetime.date(2026, 4, 1),
+        general_inflation_rate=4.2,
+    )
+    assert abs(sum(out.values()) - 160_000.0) < 1.0
+
+
+def test_simulate_single_pit_no_growth_no_false_unallocated():
+    """While the sole goal is still active, surplus must not sit idle (horizon ends before FIRE completes)."""
+    today = datetime.date(2026, 4, 1)
+    g = _pit(
+        "FIRE",
+        tid=1,
+        target=40_000_000.0,
+        target_date=datetime.date(2046, 7, 29),
+        priority=1,
+        ret=10.0,
+        infl=4.2,
+    )
+    p = SimulationParams(
+        goals=[g],
+        monthly_surplus=160_000.0,
+        salary_growth_rate=5.0,
+        general_inflation_rate=4.2,
+        simulation_months=120,
+        as_of_date=today,
+    )
+    r = simulate(p)
+    assert r.unallocated_surplus < 1.0
+
+
 def test_compare_scenarios_delta():
     today = datetime.date(2026, 1, 1)
     g = _pit("X", tid=1, target=800_000.0, target_date=datetime.date(2032, 1, 1), priority=1)
@@ -261,6 +468,54 @@ def test_compare_scenarios_delta():
     comps = compare_scenarios(base, [var])
     assert len(comps) == 1
     assert "monthly_surplus" in comps[0].changes_from_base
+
+
+def test_growing_annuity_first_payment_below_level_when_salary_growth_positive():
+    """Growing PMT assumes larger later contributions → lower first payment than level PMT."""
+    gap = 5_000_000.0
+    n = 240
+    ret = 10.0
+    level = sim_mod._pmt_needed(gap, n, ret, annual_salary_growth_pct=0.0)
+    growing = sim_mod._pmt_needed(gap, n, ret, annual_salary_growth_pct=5.0)
+    assert growing < level
+    assert growing > 0
+
+
+def test_near_deadline_goal_gets_overflow_from_higher_priority_long_horizon():
+    """When priority-1 PIT absorbs overflow but priority-2 has unmet PMT, rebalance moves cash."""
+    today = datetime.date(2026, 4, 1)
+    fire = _pit(
+        "FIRE",
+        tid=1,
+        target=40_000_000.0,
+        target_date=datetime.date(2046, 7, 1),
+        priority=1,
+        ret=10.0,
+        infl=4.2,
+    )
+    house = _pit(
+        "House",
+        tid=2,
+        target=10_000_000.0,
+        target_date=datetime.date(2031, 7, 1),
+        priority=2,
+        ret=10.0,
+        infl=6.0,
+    )
+    p = SimulationParams(
+        goals=[fire, house],
+        monthly_surplus=200_000.0,
+        salary_growth_rate=5.0,
+        general_inflation_rate=4.2,
+        simulation_months=80,
+        as_of_date=today,
+    )
+    r = simulate(p)
+    house_p = next(x for x in r.projections if x.goal_name == "House")
+    fire_p = next(x for x in r.projections if x.goal_name == "FIRE")
+    # House should receive more of the early-month budget than if FIRE kept all overflow forever.
+    assert house_p.monthly_allocation > 0
+    assert fire_p.monthly_allocation > 0
 
 
 def test_compute_target_at_month():
@@ -278,6 +533,7 @@ def test_compute_target_at_month():
 
 
 def test_performance_ten_goals_twenty_years():
+    """Cascade refinement runs up to 5 passes; keep total wall time reasonable."""
     today = datetime.date(2026, 1, 1)
     goals: list[SimulationGoal] = []
     for i in range(10):
@@ -294,4 +550,102 @@ def test_performance_ten_goals_twenty_years():
     t0 = time.perf_counter()
     simulate(p)
     elapsed = time.perf_counter() - t0
-    assert elapsed < 0.1, f"took {elapsed:.3f}s, expected <100ms"
+    assert elapsed < 0.5, f"took {elapsed:.3f}s, expected <500ms"
+
+
+def _avg_contrib_first_n(trajectory: list, n: int) -> float:
+    if not trajectory:
+        return 0.0
+    k = min(n, len(trajectory))
+    return sum(s.monthly_contribution for s in trajectory[:k]) / k
+
+
+def test_refinement_reduces_lower_priority_early_allocation():
+    """Lower-priority PIT gets an observation-based cap; FIRE clash-window avg drops vs raw.
+
+    Compare the **early clash window** (first 36 months), not 60 — after refinement House may
+    complete sooner and FIRE can spike post-cascade in months 50–59, raising a 60-month average
+    even when early-month FIRE is lower.
+    """
+    today = datetime.date(2026, 4, 1)
+    house = _pit(
+        "House",
+        tid=1,
+        target=10_000_000.0,
+        target_date=datetime.date(2031, 7, 1),
+        priority=1,
+        ret=10.0,
+        infl=6.0,
+    )
+    fire = _pit(
+        "FIRE",
+        tid=2,
+        target=5_000_000.0,
+        target_date=datetime.date(2046, 7, 1),
+        priority=2,
+        ret=10.0,
+        infl=4.2,
+    )
+    p = SimulationParams(
+        goals=[house, fire],
+        monthly_surplus=200_000.0,
+        salary_growth_rate=5.0,
+        general_inflation_rate=4.2,
+        simulation_months=240,
+        as_of_date=today,
+    )
+    raw = _simulate_inner(p, None)
+    refined = simulate(p)
+    fire_raw = next(x for x in raw.projections if x.goal_name == "FIRE")
+    fire_ref = next(x for x in refined.projections if x.goal_name == "FIRE")
+    early_n = 36
+    a_early_raw = _avg_contrib_first_n(fire_raw.monthly_trajectory, early_n)
+    a_early_ref = _avg_contrib_first_n(fire_ref.monthly_trajectory, early_n)
+    assert a_early_ref < a_early_raw - 200.0
+
+
+def test_simulate_matches_inner_when_goal_never_achieves():
+    """No ACHIEVED+early completion → no ceilings; refined result matches single inner pass."""
+    today = datetime.date(2026, 1, 1)
+    g = _pit(
+        "Big",
+        tid=1,
+        target=900_000_000.0,
+        target_date=datetime.date(2050, 1, 1),
+        priority=1,
+        ret=8.0,
+        infl=6.0,
+    )
+    p = SimulationParams(goals=[g], monthly_surplus=5_000.0, simulation_months=120, as_of_date=today)
+    inner = _simulate_inner(p, None)
+    out = simulate(p)
+    assert abs(inner.projections[0].projected_final_amount - out.projections[0].projected_final_amount) < 1.0
+
+
+def test_refinement_preserves_mandatory_recurring_totals():
+    """PMT caps apply to PIT only; mandatory recurring average unchanged when no PIT refinement."""
+    today = datetime.date(2026, 1, 1)
+    emi = SimulationGoal(
+        id=1,
+        name="Loan EMI",
+        goal_class=GC_RECURRING,
+        goal_subtype="LOAN_PAYOFF",
+        allocation_priority=1,
+        recurrence_amount=55_000.0,
+        recurrence_frequency="MONTHLY",
+        recurrence_start=datetime.date(2026, 1, 1),
+        recurrence_end=datetime.date(2046, 1, 1),
+        expected_return_rate=0.0,
+    )
+    growth = SimulationGoal(id=2, name="Rest", goal_class=GC_GROWTH, allocation_priority=2)
+    p = SimulationParams(
+        goals=[emi, growth],
+        monthly_surplus=100_000.0,
+        simulation_months=24,
+        as_of_date=today,
+    )
+    inner = _simulate_inner(p, None)
+    out = simulate(p)
+    e0 = next(x for x in inner.projections if x.goal_name == "Loan EMI")
+    e1 = next(x for x in out.projections if x.goal_name == "Loan EMI")
+    assert abs(e0.monthly_allocation - e1.monthly_allocation) < 0.01

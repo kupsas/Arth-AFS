@@ -56,7 +56,7 @@ export function diffGoalRow(
   }
   if ((base.target_amount ?? null) !== (draft.target_amount ?? null)) {
     changes.push({
-      label: "Target amount",
+      label: "Target (today's ₹)",
       from: fmt(base.target_amount ?? null),
       to: fmt(draft.target_amount ?? null),
     });

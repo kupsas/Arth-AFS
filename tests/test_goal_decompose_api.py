@@ -66,7 +66,7 @@ def test_decompose_preview_returns_json(client: TestClient, engine):
     assert data["decomposition"]["monthly_required"] > 0
     sim = data.get("simulation_inflation")
     assert sim is not None
-    assert sim["method"] == "ema_of_imf_cpi_monthly_yoy"
+    assert sim["method"] == "cpi_general_ema"
     assert sim["ema_span"] >= 1
     assert "annual_pct" in sim
 

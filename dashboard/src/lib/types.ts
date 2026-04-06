@@ -407,6 +407,15 @@ export type SensitivityToReturns = "LOW" | "MEDIUM" | "HIGH";
 
 export type GoalLinkType = "DECOMPOSES_INTO" | "DEPENDS_ON" | "CONTRIBUTES_TO";
 
+/** From `resolve_goal_inflation` — category vs headline CPI EMA. */
+export interface GoalInflationResolution {
+  annual_pct: number;
+  category?: string | null;
+  method?: string;
+  label?: string;
+  detail?: string;
+}
+
 /** Mirrors the goal dict returned by api/routes/goals.py */
 export interface Goal {
   id: number;
@@ -447,6 +456,8 @@ export interface Goal {
   starting_balance?: number | null;
   system_priority_score?: number | null;
   goal_subtype?: string | null;
+  /** Present when goal was loaded with session (GET list/detail). */
+  inflation_resolution?: GoalInflationResolution | null;
   // Computed progress (live from DB)
   computed_current_value: number;
   computed_percentage: number;     // 0–100+
@@ -520,7 +531,6 @@ export interface GoalUpdate {
   goal_specific_inflation_rate?: number | null;
   expected_return_rate?: number | null;
   starting_balance?: number | null;
-  goal_subtype?: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -550,6 +560,11 @@ export interface OneTimeEvent {
 /** Sandbox goal row — mirrors SimulationGoal (JSON uses ISO dates). */
 export interface SimulationGoal {
   id?: number | null;
+  /**
+   * Stable React list key for hypothetical rows (`id == null`). Never sent to the engine
+   * (API ignores extra fields); avoids remounting the row when `name` or sort order changes.
+   */
+  client_row_id?: string;
   name: string;
   goal_class: SimulationGoalClass | string;
   target_amount?: number | null;
@@ -557,8 +572,11 @@ export interface SimulationGoal {
   starting_balance?: number;
   allocation_priority?: number;
   expected_return_rate?: number;
-  /** Annual %; null → use general_inflation_rate on params */
+  /** Annual %; null → resolve from goal_subtype + map (same as API) */
   inflation_rate?: number | null;
+  inflation_category?: string | null;
+  inflation_method?: string | null;
+  inflation_label?: string | null;
   recurrence_amount?: number | null;
   recurrence_frequency?: string | null;
   recurrence_start?: string | null;

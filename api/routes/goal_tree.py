@@ -39,7 +39,7 @@ def _enrich_goal_dicts(session: Session, goal_dicts: list[dict]) -> list[dict]:
         if goal is None:
             continue
         prog = compute_progress(goal, session)
-        out.append(_goal_to_dict(goal, prog))
+        out.append(_goal_to_dict(goal, prog, session=session))
     return out
 
 
@@ -77,7 +77,9 @@ def goal_ancestors(
     current_user: str = Depends(get_current_user),
 ) -> list[dict]:
     goals = get_ancestors(session, goal_id, current_user)
-    return [_goal_to_dict(g, compute_progress(g, session)) for g in goals]
+    return [
+        _goal_to_dict(g, compute_progress(g, session), session=session) for g in goals
+    ]
 
 
 @router.get("/{goal_id}/descendants")
@@ -88,7 +90,9 @@ def goal_descendants(
     current_user: str = Depends(get_current_user),
 ) -> list[dict]:
     goals = get_descendants(session, goal_id, current_user)
-    return [_goal_to_dict(g, compute_progress(g, session)) for g in goals]
+    return [
+        _goal_to_dict(g, compute_progress(g, session), session=session) for g in goals
+    ]
 
 
 @router.get("/{goal_id}/impact")
@@ -107,7 +111,7 @@ def goal_impact(
         if goal is None:
             continue
         enriched.append({
-            "goal": _goal_to_dict(goal, compute_progress(goal, session)),
+            "goal": _goal_to_dict(goal, compute_progress(goal, session), session=session),
             "direction": row["direction"],
             "distance": row["distance"],
             "link_type": row["link_type"],

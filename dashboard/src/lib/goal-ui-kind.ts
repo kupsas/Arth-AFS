@@ -70,6 +70,8 @@ export function defaultAddGoalForm(): AddGoalFormState {
     linked_layer: 3,
     recurrence_frequency: "MONTHLY",
     progress_cadence: "MONTHLY",
+    /** Drives default inflation bucket (REAL_ESTATE, TRAVEL_DOMESTIC, …) — set at create only. */
+    goal_subtype: "CUSTOM",
   }
 }
 
@@ -135,14 +137,13 @@ export function addGoalFormToCreatePayload(form: AddGoalFormState): GoalCreate {
         starting_balance: form.starting_balance,
         goal_specific_inflation_rate: form.goal_specific_inflation_rate,
         current_value: form.starting_balance,
+        goal_subtype: form.goal_subtype || "CUSTOM",
       }
     case "RECURRING_CASH_FLOW":
       return {
         ...base,
         goal_type: "DEBT_PAYOFF",
         goal_class: "RECURRING_CASH_FLOW",
-        target_amount: form.target_amount,
-        target_date: form.target_date || undefined,
         recurrence_amount: form.recurrence_amount,
         recurrence_frequency: form.recurrence_frequency,
         recurrence_start: form.recurrence_start || undefined,
@@ -161,6 +162,7 @@ export function addGoalFormToCreatePayload(form: AddGoalFormState): GoalCreate {
         goal_specific_inflation_rate: form.goal_specific_inflation_rate,
         current_value: form.starting_balance,
         chart_key: CHART_KEY_INVESTMENT_NET,
+        goal_subtype: form.goal_subtype || "CUSTOM",
       }
   }
 }

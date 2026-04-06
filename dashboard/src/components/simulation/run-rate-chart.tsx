@@ -180,10 +180,10 @@ export function RunRateChart({
                 <span className="font-medium text-foreground">{title}</span>
                 <span className="block text-muted-foreground">
                   Glide path: hypothetical balance if the steady monthly amount were fully
-                  invested each month (one-time targets). Simulated balance: what you actually
-                  accumulated after surplus limits and priority. A gap means you are behind
+                  invested each month (one-time targets). <br /> Simulated balance: what you actually
+                  accumulated after surplus limits and priority. <br /> A gap means you are behind
                   that ideal funding path; compare simulated balance at the target month to
-                  your inflated target to see if the down payment is funded.
+                  your inflated target to see if the down payment is funded. <br />
                   {targetCutoffLabel ? (
                     <span className="mt-1 block">
                       Chart ends at your target ({targetCutoffLabel}), not the full simulation

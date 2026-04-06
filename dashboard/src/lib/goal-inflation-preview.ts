@@ -1,0 +1,131 @@
+/**
+ * Mirrors api/services/inflation_service.GOAL_INFLATION_MAP + INFLATION_DEFAULTS
+ * for client-side previews when the API has not yet returned inflation_resolution
+ * (e.g. new goal form) or when SimulationGoal.inflation_rate is null (use slider +
+ * subtype to estimate).
+ */
+
+/** Subtype → InflationRate category key (null = no price adjustment). */
+export const GOAL_SUBTYPE_INFLATION_CATEGORY: Record<string, string | null> = {
+  HOME_PURCHASE: "REAL_ESTATE",
+  VEHICLE: "CPI_GENERAL",
+  WEDDING: "CPI_GENERAL",
+  CHILD_EDUCATION: "EDUCATION",
+  RETIREMENT: "CPI_GENERAL",
+  TRAVEL: "TRAVEL_DOMESTIC",
+  EMERGENCY_FUND: "CPI_GENERAL",
+  LOAN_PAYOFF: null,
+  CUSTOM: "CPI_GENERAL",
+}
+
+/** Static fallbacks — same numeric keys as api/services/inflation_service.INFLATION_DEFAULTS */
+export const CATEGORY_INFLATION_DEFAULTS_PCT: Record<string, number> = {
+  CPI_GENERAL: 6,
+  REAL_ESTATE: 8,
+  EDUCATION: 10,
+  HEALTHCARE: 10,
+  TRAVEL_INTERNATIONAL: 8,
+  TRAVEL_DOMESTIC: 6,
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  CPI_GENERAL: "headline India CPI",
+  REAL_ESTATE: "real estate / housing",
+  EDUCATION: "education",
+  HEALTHCARE: "healthcare",
+  TRAVEL_INTERNATIONAL: "international travel",
+  TRAVEL_DOMESTIC: "domestic travel",
+}
+
+/**
+ * Rough annual % for planning copy when the server has not computed resolution:
+ * CPI_GENERAL → headlineEma (typically from slider / IMF EMA); else category default.
+ */
+export function estimatedAnnualInflationForSubtype(
+  goalSubtype: string | null | undefined,
+  headlineCpiEma: number,
+): number {
+  const st = (goalSubtype || "CUSTOM").trim().toUpperCase()
+  const cat = GOAL_SUBTYPE_INFLATION_CATEGORY[st] ?? "CPI_GENERAL"
+  if (cat === null) return 0
+  if (cat === "CPI_GENERAL") return headlineCpiEma
+  return CATEGORY_INFLATION_DEFAULTS_PCT[cat] ?? headlineCpiEma
+}
+
+export function categoryLabelForInflationKey(category: string | null | undefined): string {
+  if (!category) return "category"
+  return CATEGORY_LABELS[category] ?? category.replace(/_/g, " ").toLowerCase()
+}
+
+/** Shape matches `InflationResolutionLike` in goal-target-money — for add-goal preview only. */
+export function previewInflationResolutionForForm(
+  goalSubtype: string | null | undefined,
+  headlineCpiEma: number,
+): {
+  annual_pct: number
+  category: string | null
+  method: string
+  label: string
+} | null {
+  const st = (goalSubtype || "CUSTOM").trim().toUpperCase()
+  const cat = GOAL_SUBTYPE_INFLATION_CATEGORY[st] ?? "CPI_GENERAL"
+  if (cat === null) {
+    return {
+      annual_pct: 0,
+      category: null,
+      method: "loan_zero",
+      label: "loan payoff",
+    }
+  }
+  const pct = estimatedAnnualInflationForSubtype(goalSubtype, headlineCpiEma)
+  if (cat === "CPI_GENERAL") {
+    return {
+      annual_pct: pct,
+      category: "CPI_GENERAL",
+      method: "cpi_general_ema",
+      label: CATEGORY_LABELS["CPI_GENERAL"],
+    }
+  }
+  return {
+    annual_pct: pct,
+    category: cat,
+    method: "category_default",
+    label: categoryLabelForInflationKey(cat),
+  }
+}
+
+/** Merge server-hydrated metadata with live card edits for hints. */
+export function simulationInflationResolutionFromGoal(
+  goal: {
+    goal_subtype?: string | null
+    inflation_rate?: number | null
+    inflation_method?: string | null
+    inflation_category?: string | null
+    inflation_label?: string | null
+  },
+  generalInflationRate: number,
+): {
+  annual_pct: number
+  category?: string | null
+  method: string
+  label?: string
+} {
+  if (goal.inflation_rate != null && goal.inflation_rate !== undefined) {
+    return {
+      annual_pct: goal.inflation_rate,
+      method: goal.inflation_method ?? "user_override",
+      category: goal.inflation_category ?? undefined,
+      label: goal.inflation_label ?? undefined,
+    }
+  }
+  const p = previewInflationResolutionForForm(goal.goal_subtype, generalInflationRate)
+  if (!p) {
+    return {
+      annual_pct: generalInflationRate,
+      method: "cpi_general_ema",
+      category: "CPI_GENERAL",
+      label: CATEGORY_LABELS["CPI_GENERAL"],
+    }
+  }
+  return p
+}

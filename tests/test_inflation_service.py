@@ -22,6 +22,7 @@ from api.services.inflation_service import (
     fetch_and_cache_inflation,
     get_goal_inflation_rate,
     get_inflation_rate,
+    resolve_goal_inflation,
     simulation_inflation_ema_span,
 )
 
@@ -88,7 +89,8 @@ def test_cpi_ema_from_db(session: Session, monkeypatch: pytest.MonkeyPatch):
     assert cpi_general_yoy_ema_pct(session) == 4.5
 
 
-def test_get_goal_inflation_rate_uses_ema(session: Session, monkeypatch):
+def test_get_goal_inflation_rate_cpi_general_uses_ema(session: Session, monkeypatch):
+    """CUSTOM → CPI_GENERAL bucket → IMF YoY EMA (not sector default)."""
     monkeypatch.setenv("INFLATION_SIMULATION_EMA_SPAN", "2")
     now = datetime.datetime.now(datetime.UTC)
     for period, rate in [("2025-11", 10.0), ("2025-12", 20.0)]:
@@ -104,14 +106,50 @@ def test_get_goal_inflation_rate_uses_ema(session: Session, monkeypatch):
         )
     session.commit()
     g = Goal(
-        name="edu",
+        name="generic",
+        goal_type="SAVINGS",
+        user_id="u",
+        goal_subtype="CUSTOM",
+        goal_specific_inflation_rate=None,
+    )
+    # α=2/3: 10 → 20*(2/3)+10*(1/3) = 16.67
+    assert get_goal_inflation_rate(session, g) == 16.67
+
+
+def test_get_goal_inflation_rate_education_uses_category_default(session: Session):
+    g = Goal(
+        name="school",
         goal_type="SAVINGS",
         user_id="u",
         goal_subtype="CHILD_EDUCATION",
         goal_specific_inflation_rate=None,
     )
-    # α=2/3: 10 → 20*(2/3)+10*(1/3) = 16.67
-    assert get_goal_inflation_rate(session, g) == 16.67
+    assert get_goal_inflation_rate(session, g) == INFLATION_DEFAULTS["EDUCATION"]
+
+
+def test_get_goal_inflation_rate_home_uses_real_estate_default(session: Session):
+    g = Goal(
+        name="flat",
+        goal_type="SAVINGS",
+        user_id="u",
+        goal_subtype="HOME_PURCHASE",
+        goal_specific_inflation_rate=None,
+    )
+    assert get_goal_inflation_rate(session, g) == INFLATION_DEFAULTS["REAL_ESTATE"]
+
+
+def test_resolve_goal_inflation_travel_domestic(session: Session):
+    g = Goal(
+        name="trips",
+        goal_type="SAVINGS",
+        user_id="u",
+        goal_subtype="TRAVEL",
+        goal_specific_inflation_rate=None,
+    )
+    r = resolve_goal_inflation(session, g)
+    assert r["category"] == "TRAVEL_DOMESTIC"
+    assert r["method"] == "category_default"
+    assert r["annual_pct"] == INFLATION_DEFAULTS["TRAVEL_DOMESTIC"]
 
 
 def test_get_goal_inflation_rate_override_and_loan_payoff(session: Session):

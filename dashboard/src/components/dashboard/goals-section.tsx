@@ -56,6 +56,16 @@ import {
   type AddGoalFormState,
   type GoalUiKind,
 } from "@/lib/goal-ui-kind"
+import {
+  GoalTargetMoneyCardLine,
+  GoalTargetMoneyHint,
+} from "@/components/goal-target-money-hint"
+import { previewInflationResolutionForForm } from "@/lib/goal-inflation-preview"
+import {
+  DEFAULT_HEADLINE_INFLATION_PCT,
+  MIN_MONTHLY_GOAL_CONTRIBUTION_INR,
+  recurrenceAmountToMonthlyInr,
+} from "@/lib/goal-target-money"
 import { formatCurrency, cn } from "@/lib/utils"
 import type { Goal, GoalStatus, GoalUpdate } from "@/lib/types"
 
@@ -72,6 +82,18 @@ const GOAL_SUBTYPE_OPTIONS = [
   { value: "TRAVEL", label: "Travel" },
   { value: "CUSTOM", label: "Custom" },
 ] as const
+
+/** Subtypes used for inflation mapping on create (one-time & growth) — no “none”; defaults to CUSTOM. */
+const GOAL_SUBTYPE_OPTIONS_INFLATION = GOAL_SUBTYPE_OPTIONS.filter((o) => o.value !== "") as {
+  value: string
+  label: string
+}[]
+
+function labelForStoredGoalSubtype(goalSubtype: string | null | undefined): string {
+  const key = (goalSubtype ?? "").trim().toUpperCase() || "CUSTOM"
+  const hit = GOAL_SUBTYPE_OPTIONS_INFLATION.find((o) => o.value === key)
+  return hit?.label ?? key.replace(/_/g, " ").toLowerCase()
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Status helpers
@@ -99,6 +121,7 @@ const STATUS_LABELS: Record<GoalStatus, string> = {
 
 function EditGoalSheet({ goal }: { goal: Goal }) {
   const [open, setOpen] = React.useState(false)
+  const [recurringAmountError, setRecurringAmountError] = React.useState<string | null>(null)
   const { mutate: patchGoal, isPending } = useUpdateGoal()
   const uiKind = inferGoalUiKind(goal)
 
@@ -125,7 +148,6 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
   )
   const [recurrenceStart, setRecurrenceStart] = React.useState(goal.recurrence_start ?? "")
   const [recurrenceEnd, setRecurrenceEnd] = React.useState(goal.recurrence_end ?? "")
-  const [goalSubtype, setGoalSubtype] = React.useState(goal.goal_subtype ?? "")
   const [progressCadence, setProgressCadence] = React.useState(
     (goal.progress_cadence as "MONTHLY" | "ANNUAL") ?? "MONTHLY",
   )
@@ -147,7 +169,6 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
     )
     setRecurrenceStart(goal.recurrence_start ?? "")
     setRecurrenceEnd(goal.recurrence_end ?? "")
-    setGoalSubtype(goal.goal_subtype ?? "")
     setProgressCadence((goal.progress_cadence as "MONTHLY" | "ANNUAL") ?? "MONTHLY")
   }, [open, goal])
 
@@ -164,17 +185,36 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
     e.preventDefault()
     if (!name.trim()) return
 
+    setRecurringAmountError(null)
+
+    if (uiKind === "RECURRING_CASH_FLOW") {
+      const ra = parseOptFloat(recurrenceAmount)
+      if (ra == null || ra <= 0) {
+        setRecurringAmountError("Enter a positive amount per period.")
+        return
+      }
+      const monthly = recurrenceAmountToMonthlyInr(ra, recurrenceFrequency)
+      if (monthly < MIN_MONTHLY_GOAL_CONTRIBUTION_INR) {
+        setRecurringAmountError(
+          `Monthly cash flow must be at least ₹${MIN_MONTHLY_GOAL_CONTRIBUTION_INR.toLocaleString("en-IN")} in today's money (or the simulator treats it as zero).`,
+        )
+        return
+      }
+    }
+
     const update: GoalUpdate = {
       name: name.trim(),
-      target_date: targetDate.trim() ? targetDate.trim() : null,
       notes: notes.trim() ? notes.trim() : null,
     }
 
-    if (targetAmount.trim() === "") {
-      update.target_amount = null
-    } else {
-      const n = parseFloat(targetAmount)
-      if (!Number.isNaN(n)) update.target_amount = n
+    if (uiKind !== "RECURRING_CASH_FLOW") {
+      update.target_date = targetDate.trim() ? targetDate.trim() : null
+      if (targetAmount.trim() === "") {
+        update.target_amount = null
+      } else {
+        const n = parseFloat(targetAmount)
+        if (!Number.isNaN(n)) update.target_amount = n
+      }
     }
 
     if (uiKind === "POINT_IN_TIME") {
@@ -200,7 +240,6 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
       update.recurrence_frequency = recurrenceFrequency
       update.recurrence_start = recurrenceStart.trim() ? recurrenceStart.trim() : null
       update.recurrence_end = recurrenceEnd.trim() ? recurrenceEnd.trim() : null
-      update.goal_subtype = goalSubtype.trim() ? goalSubtype.trim() : null
     }
     if (uiKind === "EXPENSE_LIMIT") {
       update.progress_cadence = progressCadence
@@ -232,7 +271,7 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
           <SheetHeader className="shrink-0 space-y-2 p-0 pr-12 pb-4">
             <SheetTitle>Edit goal</SheetTitle>
             <SheetDescription>
-              Kind:{" "}
+              {" "}
               <span className="font-medium text-foreground">
                 {labelGoalUiKind(uiKind)}
               </span>
@@ -251,31 +290,53 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor={`edit-goal-target-${goal.id}`}>
-                  {isExpenseLimit ? "Cap / limit (₹)" : "Target amount (₹)"}
-                </Label>
-                <Input
-                  id={`edit-goal-target-${goal.id}`}
-                  type="number"
-                  placeholder="e.g. 10000"
-                  value={targetAmount}
-                  onChange={(e) => setTargetAmount(e.target.value)}
-                />
+            {(uiKind === "POINT_IN_TIME" ||
+              uiKind === "GROWTH" ||
+              uiKind === "RECURRING_CASH_FLOW") && (
+              <div className="flex flex-col gap-1.5 rounded-md border border-border bg-muted/20 px-3 py-2.5">
+                <p className="text-xs font-medium text-foreground">Category (inflation)</p>
+                <p className="text-sm text-muted-foreground">{labelForStoredGoalSubtype(goal.goal_subtype)}</p>
+                <p className="text-[11px] text-muted-foreground leading-snug">
+                  This was chosen when the goal was created. It cannot be changed so inflation stays
+                  consistent over time.
+                </p>
               </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor={`edit-goal-date-${goal.id}`}>
-                  {uiKind === "RECURRING_CASH_FLOW" ? "End-by date (optional)" : "Deadline (optional)"}
-                </Label>
-                <Input
-                  id={`edit-goal-date-${goal.id}`}
-                  type="date"
-                  value={targetDate}
-                  onChange={(e) => setTargetDate(e.target.value)}
-                />
+            )}
+
+            {uiKind !== "RECURRING_CASH_FLOW" ? (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor={`edit-goal-target-${goal.id}`}>
+                    {isExpenseLimit ? "Cap / limit (₹)" : "Target (₹, today's money)"}
+                  </Label>
+                  <Input
+                    id={`edit-goal-target-${goal.id}`}
+                    type="number"
+                    placeholder="e.g. 10000"
+                    value={targetAmount}
+                    onChange={(e) => setTargetAmount(e.target.value)}
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor={`edit-goal-date-${goal.id}`}>Deadline (optional)</Label>
+                  <Input
+                    id={`edit-goal-date-${goal.id}`}
+                    type="date"
+                    value={targetDate}
+                    onChange={(e) => setTargetDate(e.target.value)}
+                  />
+                </div>
               </div>
-            </div>
+            ) : null}
+
+            {(uiKind === "POINT_IN_TIME" || uiKind === "GROWTH") && !isExpenseLimit ? (
+              <GoalTargetMoneyHint
+                rawTargetInput={targetAmount}
+                targetDate={targetDate}
+                goalSpecificInflationInput={goalInflation}
+                inflationResolution={goal.inflation_resolution ?? null}
+              />
+            ) : null}
 
             {uiKind === "POINT_IN_TIME" && (
               <div className="grid grid-cols-2 gap-4">
@@ -345,14 +406,25 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
               <>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="flex flex-col gap-2">
-                    <Label htmlFor={`edit-ramt-${goal.id}`}>Amount per period (₹)</Label>
+                    <Label htmlFor={`edit-ramt-${goal.id}`}>
+                      {"Amount per period (₹, today's money)"}
+                    </Label>
                     <Input
                       id={`edit-ramt-${goal.id}`}
                       type="number"
                       required
+                      aria-invalid={recurringAmountError ? true : undefined}
                       value={recurrenceAmount}
-                      onChange={(e) => setRecurrenceAmount(e.target.value)}
+                      onChange={(e) => {
+                        setRecurrenceAmount(e.target.value)
+                        setRecurringAmountError(null)
+                      }}
                     />
+                    {recurringAmountError ? (
+                      <p className="text-xs text-destructive" role="alert">
+                        {recurringAmountError}
+                      </p>
+                    ) : null}
                   </div>
                   <div className="flex flex-col gap-2">
                     <Label>Frequency</Label>
@@ -393,26 +465,6 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
                       onChange={(e) => setRecurrenceEnd(e.target.value)}
                     />
                   </div>
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label>Subtype (optional)</Label>
-                  <Select
-                    value={goalSubtype || "none"}
-                    onValueChange={(v) =>
-                      setGoalSubtype(v == null || v === "none" ? "" : v)
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Optional" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {GOAL_SUBTYPE_OPTIONS.map((o) => (
-                        <SelectItem key={o.value || "none"} value={o.value || "none"}>
-                          {o.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
                 </div>
               </>
             )}
@@ -534,7 +586,14 @@ function GoalCard({ goal }: { goal: Goal }) {
             ) : (
               <>
                 {formatCurrency(goal.computed_current_value)}
-                {goal.target_amount ? ` of ${formatCurrency(goal.target_amount)}` : ""}
+                {goal.target_amount ? (
+                  <>
+                    {" "}
+                    of {formatCurrency(goal.target_amount)} (today&apos;s ₹)
+                  </>
+                ) : (
+                  ""
+                )}
               </>
             )}
           </span>
@@ -551,6 +610,18 @@ function GoalCard({ goal }: { goal: Goal }) {
           </div>
         </div>
       </div>
+
+      {(uiKind === "POINT_IN_TIME" || uiKind === "GROWTH") &&
+        !isExpenseLimit &&
+        goal.target_amount != null &&
+        goal.target_amount > 0 && (
+          <GoalTargetMoneyCardLine
+            rawTarget={goal.target_amount}
+            targetDate={goal.target_date}
+            goalSpecificInflation={goal.goal_specific_inflation_rate}
+            inflationResolution={goal.inflation_resolution ?? null}
+          />
+        )}
 
       {goal.notes && (
         <p className="text-xs text-muted-foreground border-t border-border/60 pt-2 whitespace-pre-wrap">
@@ -652,6 +723,11 @@ function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) 
         nextErrors.recurrence_amount = "Enter how much each payment is (₹)."
       } else if (amt <= 0) {
         nextErrors.recurrence_amount = "Use an amount greater than zero."
+      } else {
+        const monthly = recurrenceAmountToMonthlyInr(amt, form.recurrence_frequency)
+        if (monthly < MIN_MONTHLY_GOAL_CONTRIBUTION_INR) {
+          nextErrors.recurrence_amount = `Monthly cash flow must be at least ₹${MIN_MONTHLY_GOAL_CONTRIBUTION_INR.toLocaleString("en-IN")} in today's money (or the simulator treats it as zero).`
+        }
       }
       if (!form.recurrence_start?.trim()) {
         nextErrors.recurrence_start = "Pick the date of the first payment."
@@ -725,7 +801,24 @@ function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) 
                 value={form.uiKind}
                 onValueChange={(v) => {
                   const next = v as GoalUiKind
-                  setField("uiKind", next)
+                  setForm((f) => {
+                    let nextSubtype = f.goal_subtype
+                    if (next === "POINT_IN_TIME" || next === "GROWTH") {
+                      nextSubtype = f.goal_subtype || "CUSTOM"
+                    } else {
+                      nextSubtype = undefined
+                    }
+                    if (next === "RECURRING_CASH_FLOW") {
+                      return {
+                        ...f,
+                        uiKind: next,
+                        goal_subtype: nextSubtype,
+                        target_amount: undefined,
+                        target_date: undefined,
+                      }
+                    }
+                    return { ...f, uiKind: next, goal_subtype: nextSubtype }
+                  })
                   setFieldErrors((prev) => {
                     if (next !== "RECURRING_CASH_FLOW") {
                       return { ...prev, recurrence_amount: undefined, recurrence_start: undefined }
@@ -749,38 +842,79 @@ function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) 
               </Select>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            {(kind === "POINT_IN_TIME" || kind === "GROWTH") && (
               <div className="flex flex-col gap-2">
-                <Label htmlFor="goal-target">
-                  {kind === "EXPENSE_LIMIT" ? "Cap / limit (₹)" : "Target amount (₹)"}
-                </Label>
-                <Input
-                  id="goal-target"
-                  type="number"
-                  placeholder="e.g. 10000"
-                  value={form.target_amount ?? ""}
-                  onChange={(e) =>
-                    setField(
-                      "target_amount",
-                      e.target.value ? parseFloat(e.target.value) : undefined,
-                    )
-                  }
-                />
+                <Label htmlFor="add-infl-category">Category (inflation)</Label>
+                <p className="text-xs text-muted-foreground leading-snug">
+                  We use this to pick an inflation bucket (e.g. real estate vs travel vs education). You
+                  can still override with “Goal inflation %” below.
+                </p>
+                <Select
+                  value={form.goal_subtype || "CUSTOM"}
+                  onValueChange={(v) => setField("goal_subtype", v ?? undefined)}
+                >
+                  <SelectTrigger id="add-infl-category">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {GOAL_SUBTYPE_OPTIONS_INFLATION.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="goal-date">
-                  {kind === "RECURRING_CASH_FLOW"
-                    ? "End-by (optional)"
-                    : "Deadline (optional)"}
-                </Label>
-                <Input
-                  id="goal-date"
-                  type="date"
-                  value={form.target_date ?? ""}
-                  onChange={(e) => setField("target_date", e.target.value || undefined)}
-                />
+            )}
+
+            {kind !== "RECURRING_CASH_FLOW" ? (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="goal-target">
+                    {kind === "EXPENSE_LIMIT" ? "Cap / limit (₹)" : "Target (₹, today's money)"}
+                  </Label>
+                  <Input
+                    id="goal-target"
+                    type="number"
+                    placeholder="e.g. 10000"
+                    value={form.target_amount ?? ""}
+                    onChange={(e) =>
+                      setField(
+                        "target_amount",
+                        e.target.value ? parseFloat(e.target.value) : undefined,
+                      )
+                    }
+                  />
+                </div>
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="goal-date">Deadline (optional)</Label>
+                  <Input
+                    id="goal-date"
+                    type="date"
+                    value={form.target_date ?? ""}
+                    onChange={(e) => setField("target_date", e.target.value || undefined)}
+                  />
+                </div>
               </div>
-            </div>
+            ) : null}
+
+            {kind === "POINT_IN_TIME" || kind === "GROWTH" ? (
+              <GoalTargetMoneyHint
+                rawTargetInput={
+                  form.target_amount != null ? String(form.target_amount) : ""
+                }
+                targetDate={form.target_date ?? ""}
+                goalSpecificInflationInput={
+                  form.goal_specific_inflation_rate != null
+                    ? String(form.goal_specific_inflation_rate)
+                    : ""
+                }
+                inflationResolution={previewInflationResolutionForForm(
+                  form.goal_subtype,
+                  DEFAULT_HEADLINE_INFLATION_PCT,
+                )}
+              />
+            ) : null}
 
             {kind === "POINT_IN_TIME" && (
               <div className="grid grid-cols-2 gap-4">
@@ -875,7 +1009,7 @@ function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) 
               <>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="flex flex-col gap-2">
-                    <Label htmlFor="add-ramt">Amount per period (₹)</Label>
+                    <Label htmlFor="add-ramt">{"Amount per period (₹, today's money)"}</Label>
                     <Input
                       id="add-ramt"
                       type="number"

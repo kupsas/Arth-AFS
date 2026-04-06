@@ -43,8 +43,10 @@ from api.services.goal_decomposer import (
 from api.services.goal_graph import validate_link
 from api.services.inflation_service import (
     get_goal_inflation_rate,
+    resolve_goal_inflation,
     simulation_inflation_ema_span,
 )
+from api.services.simulation import MIN_MONTHLY_GOAL_CONTRIBUTION_INR
 from api.services.surplus_calculator import compute_surplus
 from api.services.activation_engine import (
     ConditionParseError,
@@ -148,7 +150,6 @@ class GoalUpdate(BaseModel):
     goal_specific_inflation_rate: float | None = Field(default=None, ge=0, le=50)
     expected_return_rate: float | None = Field(default=None, ge=0, le=50)
     starting_balance: float | None = Field(default=None, ge=0)
-    goal_subtype: str | None = Field(default=None, max_length=64)
 
 
 _VALID_GOAL_TYPES = {
@@ -450,6 +451,9 @@ def create_goal(
         recurrence_start=recurrence_start,
         recurrence_end=recurrence_end,
     )
+    _validate_recurring_monthly_minimum_or_400(
+        goal_class, body.recurrence_amount, recurrence_frequency
+    )
 
     goal = Goal(
         name=body.name,
@@ -495,7 +499,7 @@ def create_goal(
         session.refresh(goal)
 
     progress = compute_progress(goal, session)
-    return _goal_to_dict(goal, progress)
+    return _goal_to_dict(goal, progress, session=session)
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -535,7 +539,7 @@ def list_goals(
     result = []
     for goal in goals:
         progress = compute_progress(goal, session)
-        result.append(_goal_to_dict(goal, progress))
+        result.append(_goal_to_dict(goal, progress, session=session))
     return result
 
 
@@ -583,7 +587,8 @@ def decompose_goal(
             inflation_sim: dict | None = None
         else:
             # Blended IMF CPI YoY (trailing mean) — same scalar for all subtypes until sector series exist.
-            general_cpi = get_goal_inflation_rate(session, goal)
+            res_inf = resolve_goal_inflation(session, goal)
+            general_cpi = float(res_inf["annual_pct"])
             result = decompose_point_in_time_goal(
                 goal,
                 surplus,
@@ -591,8 +596,10 @@ def decompose_goal(
             )
             inflation_sim = {
                 "annual_pct": general_cpi,
+                "category": res_inf.get("category"),
+                "method": res_inf.get("method"),
                 "ema_span": simulation_inflation_ema_span(),
-                "method": "ema_of_imf_cpi_monthly_yoy",
+                "detail": res_inf.get("detail"),
             }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -718,7 +725,7 @@ def get_goal(
         raise HTTPException(status_code=404, detail=f"Goal {goal_id} not found")
 
     progress = compute_progress(goal, session)
-    return _goal_to_dict(goal, progress)
+    return _goal_to_dict(goal, progress, session=session)
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -819,10 +826,6 @@ def update_goal(
         update_data["goal_class"] = _validate_optional_enum(
             "goal_class", update_data["goal_class"], _VALID_GOAL_CLASSES
         )
-    if "goal_subtype" in update_data:
-        update_data["goal_subtype"] = _validate_optional_enum(
-            "goal_subtype", update_data["goal_subtype"], _VALID_GOAL_SUBTYPES
-        )
     if "recurrence_frequency" in update_data:
         update_data["recurrence_frequency"] = _validate_optional_enum(
             "recurrence_frequency",
@@ -886,6 +889,7 @@ def update_goal(
         recurrence_start=eff_rs,
         recurrence_end=eff_re,
     )
+    _validate_recurring_monthly_minimum_or_400(eff_class, eff_ra, eff_rf)
 
     for field, value in update_data.items():
         setattr(goal, field, value)
@@ -902,7 +906,7 @@ def update_goal(
     session.refresh(goal)
 
     progress = compute_progress(goal, session)
-    return _goal_to_dict(goal, progress)
+    return _goal_to_dict(goal, progress, session=session)
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -927,9 +931,52 @@ def delete_goal(
 # Helpers
 # ───────────────────────────────────────────────────────────────────────────
 
-def _goal_to_dict(goal: Goal, progress: dict) -> dict:
+
+def _recurrence_monthly_equivalent_inr(amount: float, frequency: str | None) -> float:
+    """Match dashboard `recurrenceAmountToMonthlyInr` / simulation need scaling."""
+    if frequency is None:
+        return float(amount)
+    f = str(frequency).strip().upper()
+    if f == "MONTHLY":
+        return float(amount)
+    if f == "QUARTERLY":
+        return float(amount) / 3.0
+    if f in ("ANNUAL", "YEARLY"):
+        return float(amount) / 12.0
+    return float(amount)
+
+
+def _validate_recurring_monthly_minimum_or_400(
+    goal_class: str | None,
+    recurrence_amount: float | None,
+    recurrence_frequency: str | None,
+) -> None:
+    if (goal_class or "").strip().upper() != "RECURRING_CASH_FLOW":
+        return
+    if recurrence_amount is None or recurrence_frequency is None:
+        return
+    amt = float(recurrence_amount)
+    if amt <= 0:
+        return
+    monthly = _recurrence_monthly_equivalent_inr(amt, recurrence_frequency)
+    if 0 < monthly < MIN_MONTHLY_GOAL_CONTRIBUTION_INR:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Recurring goals need at least ₹{MIN_MONTHLY_GOAL_CONTRIBUTION_INR:,.0f}/month "
+                "equivalent in today's money (or use zero)."
+            ),
+        )
+
+
+def _goal_to_dict(
+    goal: Goal,
+    progress: dict,
+    *,
+    session: Session | None = None,
+) -> dict:
     """Serialise a Goal + its computed progress to a JSON-safe dict."""
-    return {
+    out: dict = {
         "id": goal.id,
         "name": goal.name,
         "goal_type": goal.goal_type,
@@ -973,3 +1020,6 @@ def _goal_to_dict(goal: Goal, progress: dict) -> dict:
         "created_at": goal.created_at.isoformat() if goal.created_at else None,
         "updated_at": goal.updated_at.isoformat() if goal.updated_at else None,
     }
+    if session is not None:
+        out["inflation_resolution"] = resolve_goal_inflation(session, goal)
+    return out

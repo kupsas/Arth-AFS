@@ -18,7 +18,7 @@ from sqlmodel import Session, select
 from api.auth import get_current_user
 from api.database import get_session
 from api.models import Goal
-from api.services.inflation_service import cpi_general_yoy_ema_pct, get_goal_inflation_rate
+from api.services.inflation_service import cpi_general_yoy_ema_pct, resolve_goal_inflation
 from api.services.priority_scorer import _effective_goal_class, compute_priority_scores
 from api.services.simulation import (
     SimulationGoal,
@@ -46,6 +46,12 @@ class AllocateRequest(BaseModel):
         default=6.0,
         description="Headline CPI % — used when a goal's inflation_rate is null (same as simulate).",
     )
+    salary_growth_rate: float = Field(
+        default=0.0,
+        ge=0,
+        le=50,
+        description="Annual % — when positive, PMT uses growing-annuity math (same as simulate).",
+    )
 
 
 class CompareRequest(BaseModel):
@@ -66,7 +72,7 @@ def _goal_to_simulation_goal(
     if alloc is None or alloc <= 0:
         alloc = rank_by_goal_id.get(goal.id or 0, 99)
 
-    infl = get_goal_inflation_rate(session, goal)
+    res_inf = resolve_goal_inflation(session, goal)
     exp_ret = goal.expected_return_rate
     if exp_ret is None:
         exp_ret = 10.0
@@ -84,7 +90,10 @@ def _goal_to_simulation_goal(
         starting_balance=float(start_bal),
         allocation_priority=int(alloc),
         expected_return_rate=float(exp_ret),
-        inflation_rate=float(infl),
+        inflation_rate=float(res_inf["annual_pct"]),
+        inflation_category=res_inf.get("category"),
+        inflation_method=res_inf.get("method"),
+        inflation_label=res_inf.get("label"),
         recurrence_amount=goal.recurrence_amount,
         recurrence_frequency=goal.recurrence_frequency,
         recurrence_start=goal.recurrence_start,
@@ -156,6 +165,7 @@ def post_allocate(body: AllocateRequest) -> dict[str, float]:
         body.surplus,
         today=body.as_of_date,
         general_inflation_rate=body.general_inflation_rate,
+        salary_growth_rate=body.salary_growth_rate,
     )
 
 

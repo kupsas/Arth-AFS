@@ -26,6 +26,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { SimulationGoalTargetMoneyHint } from "@/components/goal-target-money-hint";
+import { recurrenceAmountToMonthlyInr } from "@/lib/goal-target-money";
+import { newSimulationClientRowId } from "@/lib/simulation-goal-identity";
 import { formatCurrency } from "@/lib/utils";
 import type { GoalProjection, SimulationGoal, SimulationGoalClass } from "@/lib/types";
 
@@ -34,6 +37,13 @@ const CLASSES: SimulationGoalClass[] = [
   "RECURRING_CASH_FLOW",
   "GROWTH",
 ];
+
+/** Normalize API / form values so switches stay reliable. */
+function normalizedGoalClass(goal: SimulationGoal): string {
+  return String(goal.goal_class ?? "").trim().toUpperCase();
+}
+
+const RECURRENCE_FREQUENCIES = ["MONTHLY", "QUARTERLY", "ANNUAL"] as const;
 
 function statusVariant(
   s: string,
@@ -54,6 +64,7 @@ function projectionFor(
 export function GoalCards({
   goals,
   projections,
+  generalInflationRate = 6,
   onUpdateGoal,
   onRemoveGoal,
   onReorderList,
@@ -61,6 +72,8 @@ export function GoalCards({
 }: {
   goals: SimulationGoal[];
   projections: GoalProjection[];
+  /** Headline CPI when a goal's inflation field is empty — must match SliderPanel. */
+  generalInflationRate?: number;
   onUpdateGoal: (goalId: number | null, index: number, patch: Partial<SimulationGoal>) => void;
   onRemoveGoal: (goalId: number | null, index: number) => void;
   onReorderList: (ordered: SimulationGoal[]) => void;
@@ -85,9 +98,18 @@ export function GoalCards({
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <div>
           <CardTitle className="text-base">Goals in this run</CardTitle>
-          <CardDescription>
-            Edit targets and priority. Lower priority number = funded first (after non-growth
-            ordering rules in the engine).
+          <CardDescription> Edit targets and priority.<br />
+            <ul className="list-disc list-inside space-y-1">
+              <li>Lower priority number = funded first (after non-growth ordering rules in the engine).</li>
+              <li>
+                After each goal&apos;s monthly minimum, extra surplus goes entirely to the
+                highest-priority overflow goal — smallest priority number among point-in-time
+                (deadline not reached) and growth. Recurring goals never take more than their
+                monthly need.
+              </li>
+              <li>Point-in-time targets are in today&apos;s rupees; the engine inflates them using goal or general inflation.</li>
+              <li>Recurring goals keep the base amount for the first 24 months from the start, then escalate each year by the goal&apos;s inflation rate.</li>
+            </ul>
           </CardDescription>
         </div>
         <Button type="button" variant="secondary" size="sm" onClick={onAddHypothetical}>
@@ -98,8 +120,13 @@ export function GoalCards({
       <CardContent className="space-y-3">
         {sorted.map((g, idx) => (
           <GoalCardRow
-            key={g.id != null ? `id-${g.id}` : `idx-${idx}-${g.name}`}
+            key={
+              g.id != null
+                ? `id-${g.id}`
+                : g.client_row_id ?? `hyp-fallback-${idx}`
+            }
             goal={g}
+            generalInflationRate={generalInflationRate}
             projection={projectionFor(projections, g.name)}
             onUpdate={(patch) => onUpdateGoal(g.id ?? null, goals.indexOf(g), patch)}
             onRemove={() => onRemoveGoal(g.id ?? null, goals.indexOf(g))}
@@ -119,8 +146,19 @@ export function GoalCards({
   );
 }
 
+/**
+ * One row in “Goals in this run”: collapsed summary + expandable editors.
+ *
+ * The simulation engine uses different inputs per `goal_class`:
+ * - **POINT_IN_TIME** — lump-sum target in today’s rupees, deadline, starting balance, returns, inflation.
+ * - **GROWTH** — same target-style fields (invest toward a corpus by a date).
+ * - **RECURRING_CASH_FLOW** — payment amount, frequency, active window; inflation escalates the need over time.
+ *
+ * We hide lump-sum-only fields for recurring rows (and vice versa) so the form matches what the backend reads.
+ */
 function GoalCardRow({
   goal,
+  generalInflationRate,
   projection,
   onUpdate,
   onRemove,
@@ -130,6 +168,7 @@ function GoalCardRow({
   canDown,
 }: {
   goal: SimulationGoal;
+  generalInflationRate: number;
   projection?: GoalProjection;
   onUpdate: (patch: Partial<SimulationGoal>) => void;
   onRemove: () => void;
@@ -140,10 +179,21 @@ function GoalCardRow({
 }) {
   const [open, setOpen] = React.useState(false);
 
+  const gc = normalizedGoalClass(goal);
+  const isRecurring = gc === "RECURRING_CASH_FLOW";
+  const isGrowth = gc === "GROWTH";
+  /** One-time style: point-in-time (or unknown class — show target-style fields). */
+  const isPointInTime = gc === "POINT_IN_TIME" || (!isRecurring && !isGrowth);
+
   const tgt = goal.target_amount ?? 0;
   const saved = goal.starting_balance ?? 0;
   const pct =
     tgt > 0 ? Math.min(100, Math.round((saved / tgt) * 100)) : 0;
+
+  const freq = (goal.recurrence_frequency ?? "MONTHLY").trim().toUpperCase();
+  const recAmt = goal.recurrence_amount ?? 0;
+  const monthlyFromRecurrence =
+    recAmt > 0 ? recurrenceAmountToMonthlyInr(recAmt, freq) : 0;
 
   return (
     <div className="rounded-lg border border-border bg-card">
@@ -169,7 +219,46 @@ function GoalCardRow({
             {formatCurrency(projection?.monthly_allocation ?? 0)}/mo avg ·{" "}
             {goal.goal_class.replace(/_/g, " ")}
           </p>
-          <Progress className="h-1.5" value={pct} />
+          {/* Summary line: what matters depends on goal class (PIT vs growth vs recurring). */}
+          {isRecurring ? (
+            <p className="text-[11px] text-muted-foreground leading-snug">
+              {recAmt > 0 ? (
+                <>
+                  {formatCurrency(recAmt)} per {freq.toLowerCase()} (
+                  ≈{formatCurrency(monthlyFromRecurrence)}/mo base) ·{" "}
+                </>
+              ) : (
+                <>Set recurrence amount · </>
+              )}
+              {goal.recurrence_start
+                ? `from ${goal.recurrence_start}`
+                : "start date unset"}
+              {goal.recurrence_end ? ` → ${goal.recurrence_end}` : ""}
+            </p>
+          ) : isGrowth ? (
+            <p className="text-[11px] text-muted-foreground leading-snug">
+              Target {formatCurrency(tgt || 0)}
+              {goal.target_date ? ` by ${goal.target_date}` : ""} ·{" "}
+              {goal.expected_return_rate ?? 10}% expected return · saved{" "}
+              {formatCurrency(saved)}
+            </p>
+          ) : (
+            <p className="text-[11px] text-muted-foreground leading-snug">
+              Target {formatCurrency(tgt || 0)}
+              {goal.target_date ? ` by ${goal.target_date}` : ""} · saved{" "}
+              {formatCurrency(saved)}
+              {isPointInTime && (goal.inflation_rate ?? null) != null
+                ? ` · ${goal.inflation_rate}% inflation`
+                : ""}
+            </p>
+          )}
+          {goal.goal_subtype ? (
+            <p className="text-[11px] text-muted-foreground/90 italic">
+              Subtype: {goal.goal_subtype.replace(/_/g, " ")}
+            </p>
+          ) : null}
+          {/* Progress toward a lump-sum target only makes sense for PIT / growth. */}
+          {isRecurring ? null : <Progress className="h-1.5" value={pct} />}
         </div>
         {open ? (
           <ChevronUp className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -231,7 +320,11 @@ function GoalCardRow({
             <div className="space-y-1">
               <Label className="text-xs">Class</Label>
               <Select
-                value={goal.goal_class}
+                value={
+                  CLASSES.includes(gc as SimulationGoalClass)
+                    ? gc
+                    : "POINT_IN_TIME"
+                }
                 onValueChange={(v) => onUpdate({ goal_class: v as SimulationGoalClass })}
               >
                 <SelectTrigger>
@@ -246,65 +339,247 @@ function GoalCardRow({
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Target (INR)</Label>
-              <Input
-                type="number"
-                value={goal.target_amount ?? ""}
-                onChange={(e) =>
-                  onUpdate({
-                    target_amount: e.target.value === "" ? null : Number(e.target.value),
-                  })
-                }
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Target date</Label>
-              <Input
-                type="date"
-                value={goal.target_date ?? ""}
-                onChange={(e) =>
-                  onUpdate({ target_date: e.target.value || null })
-                }
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Starting balance</Label>
-              <Input
-                type="number"
-                value={goal.starting_balance ?? 0}
-                onChange={(e) =>
-                  onUpdate({ starting_balance: Number(e.target.value) })
-                }
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Expected return % (annual)</Label>
-              <Input
-                type="number"
-                step="0.1"
-                value={goal.expected_return_rate ?? 10}
-                onChange={(e) =>
-                  onUpdate({ expected_return_rate: Number(e.target.value) })
-                }
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Inflation % (empty = headline)</Label>
-              <Input
-                type="number"
-                step="0.1"
-                placeholder="headline"
-                value={goal.inflation_rate ?? ""}
-                onChange={(e) =>
-                  onUpdate({
-                    inflation_rate:
-                      e.target.value === "" ? null : Number(e.target.value),
-                  })
-                }
-              />
-            </div>
+
+            {/* ── Recurring (EMI, rent, …): amount per period + window; engine escalates after grace. ── */}
+            {isRecurring ? (
+              <>
+                <div className="space-y-1 sm:col-span-2">
+                  <Label className="text-xs">
+                    Payment amount (₹ per period below)
+                  </Label>
+                  <p className="text-[11px] text-muted-foreground leading-snug">
+                    The engine converts this to an average monthly need while the goal is active,
+                    then raises it each year using the inflation field (after the first 24 months).
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Amount (per period)</Label>
+                  <Input
+                    type="number"
+                    value={goal.recurrence_amount ?? ""}
+                    onChange={(e) =>
+                      onUpdate({
+                        recurrence_amount:
+                          e.target.value === "" ? null : Number(e.target.value),
+                      })
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Frequency</Label>
+                  <Select
+                    value={
+                      RECURRENCE_FREQUENCIES.includes(
+                        freq as (typeof RECURRENCE_FREQUENCIES)[number],
+                      )
+                        ? freq
+                        : "MONTHLY"
+                    }
+                    onValueChange={(v) =>
+                      onUpdate({ recurrence_frequency: v })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {RECURRENCE_FREQUENCIES.map((f) => (
+                        <SelectItem key={f} value={f}>
+                          {f.charAt(0) + f.slice(1).toLowerCase()}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Recurrence start</Label>
+                  <Input
+                    type="date"
+                    value={goal.recurrence_start ?? ""}
+                    onChange={(e) =>
+                      onUpdate({ recurrence_start: e.target.value || null })
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Recurrence end (optional)</Label>
+                  <Input
+                    type="date"
+                    value={goal.recurrence_end ?? ""}
+                    onChange={(e) =>
+                      onUpdate({ recurrence_end: e.target.value || null })
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">
+                    Inflation % (empty = headline slider)
+                  </Label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    placeholder="headline"
+                    value={goal.inflation_rate ?? ""}
+                    onChange={(e) =>
+                      onUpdate({
+                        inflation_rate:
+                          e.target.value === "" ? null : Number(e.target.value),
+                      })
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">
+                    Expected return % (annual, on balance)
+                  </Label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    value={goal.expected_return_rate ?? 10}
+                    onChange={(e) =>
+                      onUpdate({ expected_return_rate: Number(e.target.value) })
+                    }
+                  />
+                </div>
+              </>
+            ) : null}
+
+            {/* ── Point-in-time: lump sum by date in today&apos;s rupees. ── */}
+            {isPointInTime && !isGrowth ? (
+              <>
+                <div className="space-y-1">
+                  <Label className="text-xs">Target (₹, today&apos;s money)</Label>
+                  <Input
+                    type="number"
+                    value={goal.target_amount ?? ""}
+                    onChange={(e) =>
+                      onUpdate({
+                        target_amount: e.target.value === "" ? null : Number(e.target.value),
+                      })
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Target date</Label>
+                  <Input
+                    type="date"
+                    value={goal.target_date ?? ""}
+                    onChange={(e) =>
+                      onUpdate({ target_date: e.target.value || null })
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Starting balance</Label>
+                  <Input
+                    type="number"
+                    value={goal.starting_balance ?? 0}
+                    onChange={(e) =>
+                      onUpdate({ starting_balance: Number(e.target.value) })
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Expected return % (annual)</Label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    value={goal.expected_return_rate ?? 10}
+                    onChange={(e) =>
+                      onUpdate({ expected_return_rate: Number(e.target.value) })
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Inflation % (empty = headline)</Label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    placeholder="headline"
+                    value={goal.inflation_rate ?? ""}
+                    onChange={(e) =>
+                      onUpdate({
+                        inflation_rate:
+                          e.target.value === "" ? null : Number(e.target.value),
+                      })
+                    }
+                  />
+                </div>
+              </>
+            ) : null}
+
+            {/* ── Growth: invest toward a target; same target semantics as PIT + return on pot. ── */}
+            {isGrowth ? (
+              <>
+                <div className="space-y-1">
+                  <Label className="text-xs">Target (₹, today&apos;s money)</Label>
+                  <Input
+                    type="number"
+                    value={goal.target_amount ?? ""}
+                    onChange={(e) =>
+                      onUpdate({
+                        target_amount: e.target.value === "" ? null : Number(e.target.value),
+                      })
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Target date</Label>
+                  <Input
+                    type="date"
+                    value={goal.target_date ?? ""}
+                    onChange={(e) =>
+                      onUpdate({ target_date: e.target.value || null })
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Starting balance</Label>
+                  <Input
+                    type="number"
+                    value={goal.starting_balance ?? 0}
+                    onChange={(e) =>
+                      onUpdate({ starting_balance: Number(e.target.value) })
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Expected return % (annual)</Label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    value={goal.expected_return_rate ?? 10}
+                    onChange={(e) =>
+                      onUpdate({ expected_return_rate: Number(e.target.value) })
+                    }
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Inflation % (empty = headline)</Label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    placeholder="headline"
+                    value={goal.inflation_rate ?? ""}
+                    onChange={(e) =>
+                      onUpdate({
+                        inflation_rate:
+                          e.target.value === "" ? null : Number(e.target.value),
+                      })
+                    }
+                  />
+                </div>
+              </>
+            ) : null}
           </div>
+
+          {/* Today&apos;s rupees explainer for lump-sum goals (PIT + growth). */}
+          {(isPointInTime && !isGrowth) || isGrowth ? (
+            <SimulationGoalTargetMoneyHint
+              goal={goal}
+              generalInflationRate={generalInflationRate}
+            />
+          ) : null}
         </div>
       )}
     </div>
@@ -314,6 +589,7 @@ function GoalCardRow({
 export function defaultHypotheticalGoal(): SimulationGoal {
   return {
     id: null,
+    client_row_id: newSimulationClientRowId(),
     name: "New hypothetical goal",
     goal_class: "POINT_IN_TIME",
     target_amount: 500000,

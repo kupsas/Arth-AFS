@@ -7,7 +7,6 @@
 import * as React from "react";
 
 import { GoalCards, defaultHypotheticalGoal } from "@/components/simulation/goal-cards";
-import { GoalTimeline } from "@/components/simulation/goal-timeline";
 import { RunRateChart } from "@/components/simulation/run-rate-chart";
 import { SaveSimulationDialog } from "@/components/simulation/save-dialog";
 import { SliderPanel } from "@/components/simulation/slider-panel";
@@ -15,6 +14,8 @@ import { SurplusWaterfall } from "@/components/simulation/surplus-waterfall";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSimulation } from "@/hooks/use-simulation";
+import { cn } from "@/lib/utils";
+import { Loader2 } from "lucide-react";
 
 export default function SimulatePage() {
   const {
@@ -70,9 +71,12 @@ export default function SimulatePage() {
         <div>
           <h2 className="text-lg font-semibold tracking-tight">Simulation sandbox</h2>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {isSimulating && (
-            <span className="self-center text-xs text-muted-foreground">Updating…</span>
+            <span className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+              Running simulation…
+            </span>
           )}
           <Button
             type="button"
@@ -94,27 +98,39 @@ export default function SimulatePage() {
 
       <SliderPanel draft={draftParams} onChange={updateGlobalParam} />
 
-      <SurplusWaterfall
-        projections={result.projections}
-        cascadeEvents={result.cascade_events}
-      />
+      {/* Charts + goal cards dim slightly while POST /api/simulate runs (incl. cascade refinement on server). */}
+      <div className="relative space-y-6">
+        {isSimulating && (
+          <div
+            className="pointer-events-none absolute inset-0 z-10 rounded-xl bg-muted/25 animate-pulse"
+            aria-hidden
+          />
+        )}
+        <div
+          className={cn(
+            "relative z-0 space-y-6",
+            isSimulating && "opacity-70 transition-opacity duration-200",
+          )}
+        >
+          <SurplusWaterfall projections={result.projections} />
 
-      <RunRateChart
-        projections={result.projections}
-        netWorthProjection={result.net_worth_projection}
-        goals={draftParams.goals}
-      />
+          <RunRateChart
+            projections={result.projections}
+            netWorthProjection={result.net_worth_projection}
+            goals={draftParams.goals}
+          />
 
-      <GoalTimeline events={result.cascade_events} />
-
-      <GoalCards
-        goals={draftParams.goals}
-        projections={result.projections}
-        onUpdateGoal={(id, idx, patch) => updateGoal(id, idx, patch)}
-        onRemoveGoal={(id, idx) => removeGoal(id, idx)}
-        onReorderList={reorderGoalsByList}
-        onAddHypothetical={() => addHypotheticalGoal(defaultHypotheticalGoal())}
-      />
+          <GoalCards
+            goals={draftParams.goals}
+            projections={result.projections}
+            generalInflationRate={draftParams.general_inflation_rate ?? 6}
+            onUpdateGoal={(id, idx, patch) => updateGoal(id, idx, patch)}
+            onRemoveGoal={(id, idx) => removeGoal(id, idx)}
+            onReorderList={reorderGoalsByList}
+            onAddHypothetical={() => addHypotheticalGoal(defaultHypotheticalGoal())}
+          />
+        </div>
+      </div>
 
       <SaveSimulationDialog
         open={saveOpen}

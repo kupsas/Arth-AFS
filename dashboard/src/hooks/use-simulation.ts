@@ -18,6 +18,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { fetchSimulateFromCurrent, runSimulation } from "@/lib/api";
 import { goalKeys, goalTreeKeys, goalLinkKeys, lifeEventKeys } from "@/hooks/use-goals";
+import { newSimulationClientRowId } from "@/lib/simulation-goal-identity";
+import { computeSimulationHorizonMonths } from "@/lib/simulation-horizon";
 import type { SimulationGoal, SimulationParams, SimulationResult } from "@/lib/types";
 
 /** sessionStorage key — must stay in sync with save/reset flows */
@@ -25,6 +27,19 @@ export const SIMULATION_DRAFT_STORAGE_KEY = "arth:simulation:draft";
 
 function cloneParams(p: SimulationParams): SimulationParams {
   return JSON.parse(JSON.stringify(p)) as SimulationParams;
+}
+
+/**
+ * Horizon is derived from goals (longest end year + 2 calendar years); one-time flows are not
+ * used in the sandbox UI — keep lists empty so payloads stay small and consistent.
+ */
+function applyDerivedSimulationFields(p: SimulationParams): SimulationParams {
+  return {
+    ...p,
+    simulation_months: computeSimulationHorizonMonths(p.goals, p.as_of_date),
+    one_time_inflows: [],
+    one_time_outflows: [],
+  };
 }
 
 /** Stable JSON for dirty-checking (goal order preserved; dates are strings). */
@@ -47,6 +62,9 @@ function paramsSignature(p: SimulationParams): string {
       allocation_priority: g.allocation_priority ?? 99,
       expected_return_rate: g.expected_return_rate ?? 10,
       inflation_rate: g.inflation_rate ?? null,
+      inflation_category: g.inflation_category ?? null,
+      inflation_method: g.inflation_method ?? null,
+      inflation_label: g.inflation_label ?? null,
       recurrence_amount: g.recurrence_amount ?? null,
       recurrence_frequency: g.recurrence_frequency ?? null,
       recurrence_start: g.recurrence_start ?? null,
@@ -94,7 +112,7 @@ export function useSimulation() {
     hydratedRef.current = true;
 
     const server = hydrateQuery.data;
-    const bp = server.params as SimulationParams;
+    const bp = applyDerivedSimulationFields(server.params as SimulationParams);
     setBaseParams(bp);
     setBaseResult(server.result as SimulationResult);
     setMeta(server.meta ?? {});
@@ -109,8 +127,19 @@ export function useSimulation() {
 
     if (restored && Array.isArray(restored.goals)) {
       skipNextDebounceRef.current = true;
-      setDraftParams(restored);
-      void runSimulation(restored)
+      // Hypothetical rows used to be keyed by name in the UI; old drafts need a stable id
+      // so renaming does not remount the card and collapse the editor.
+      const withRowIds = {
+        ...restored,
+        goals: restored.goals.map((g) =>
+          g.id == null && !g.client_row_id
+            ? { ...g, client_row_id: newSimulationClientRowId() }
+            : g,
+        ),
+      };
+      const merged = applyDerivedSimulationFields(withRowIds);
+      setDraftParams(merged);
+      void runSimulation(merged)
         .then(setResult)
         .catch(() => {});
     } else {
@@ -120,6 +149,23 @@ export function useSimulation() {
       setResult(server.result as SimulationResult);
     }
   }, [hydrateQuery.data]);
+
+  // Recompute horizon when goal dates / recurrence ends / as_of change (not user-editable).
+  React.useEffect(() => {
+    if (!draftParams) return;
+    setDraftParams((prev) => {
+      if (!prev) return prev;
+      const next = applyDerivedSimulationFields(prev);
+      if (
+        prev.simulation_months === next.simulation_months &&
+        (prev.one_time_inflows?.length ?? 0) === 0 &&
+        (prev.one_time_outflows?.length ?? 0) === 0
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, [draftParams?.goals, draftParams?.as_of_date]);
 
   // Debounced re-simulation when draft changes (user edits)
   React.useEffect(() => {
@@ -186,7 +232,11 @@ export function useSimulation() {
   const addHypotheticalGoal = React.useCallback((goal: SimulationGoal) => {
     setDraftParams((prev) => {
       if (!prev) return prev;
-      const g = { ...goal, id: goal.id ?? null };
+      const g = {
+        ...goal,
+        id: goal.id ?? null,
+        client_row_id: goal.client_row_id ?? newSimulationClientRowId(),
+      };
       return { ...prev, goals: [...prev.goals, g] };
     });
   }, []);
@@ -232,7 +282,7 @@ export function useSimulation() {
   /** After successful PATCH/create/reorder — reload canonical params from DB. */
   const commitDraftAsBase = React.useCallback(async () => {
     const data = await fetchSimulateFromCurrent();
-    const bp = data.params as SimulationParams;
+    const bp = applyDerivedSimulationFields(data.params as SimulationParams);
     const res = data.result as SimulationResult;
     setBaseParams(bp);
     setBaseResult(res);

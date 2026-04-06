@@ -51,7 +51,6 @@ function goalUpdatePatch(bg: SimulationGoal, dg: SimulationGoal): GoalUpdate {
   if ((bg.starting_balance ?? 0) !== (dg.starting_balance ?? 0)) {
     p.starting_balance = dg.starting_balance ?? null;
   }
-  if ((bg.goal_subtype ?? null) !== (dg.goal_subtype ?? null)) p.goal_subtype = dg.goal_subtype ?? null;
   if ((bg.recurrence_amount ?? null) !== (dg.recurrence_amount ?? null)) {
     p.recurrence_amount = dg.recurrence_amount ?? null;
   }
