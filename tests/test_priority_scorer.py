@@ -177,19 +177,7 @@ def test_feasibility_on_track_vs_at_risk():
     assert s_on == 30.0
     assert rev_on is False
 
-    at_risk = Goal(
-        name="Risk",
-        goal_type="SAVINGS",
-        user_id="u",
-        goal_class="POINT_IN_TIME",
-        target_amount=100_000.0,
-        starting_balance=10_000.0,
-        expected_return_rate=0.0,
-        target_date=datetime.date(2027, 1, 1),
-        activation_status="ACTIVE",
-    )
-    # projected = 10k + 10k*12 = 130k if allocation 10k - actually we pass allocation 10k, n=12, r=0 -> 10k + 120k = 130k ratio 1.3 -> 30
-    # Need ratio 0.55: target 100k, projected ~55k
+    # Mid ratio ~0.55 → tier 0.5–0.8 → score 80 (see projected math on mid below).
     mid = Goal(
         name="Mid",
         goal_type="SAVINGS",

@@ -365,21 +365,21 @@ def liquidity_summary(session: Session, user_id: str, today: datetime.date | Non
         ld = h.earliest_liquidity_date
         if ld is None:
             ld = compute_earliest_liquidity_date(session, h, as_of)
-        bid = _summary_bucket_id(ld, as_of)
+        bucket_id = _summary_bucket_id(ld, as_of)
         v = holding_value(session, h, None)
         grand += v
-        totals[bid] += v
-        counts[bid] += 1
+        totals[bucket_id] += v
+        counts[bucket_id] += 1
 
     buckets: list[LiquidityBucket] = []
-    for bid, (label, hint) in _SUMMARY_BUCKET_META.items():
+    for bucket_key, (label, hint) in _SUMMARY_BUCKET_META.items():
         buckets.append(
             LiquidityBucket(
-                bucket_id=bid,
+                bucket_id=bucket_key,
                 label=label,
                 date_range_hint=hint,
-                total_value_inr=round(totals[bid], 2),
-                holdings_count=counts[bid],
+                total_value_inr=round(totals[bucket_key], 2),
+                holdings_count=counts[bucket_key],
             )
         )
 

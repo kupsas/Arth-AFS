@@ -548,7 +548,6 @@ class TestInflationScenarios:
         assert len(r.projections) == 3
 
     def test_s4_4_null_goal_inflation_uses_general_params(self) -> None:
-        today = datetime.date(2026, 1, 1)
         g = SimulationGoal(
             id=1,
             name="Any",

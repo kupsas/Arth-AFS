@@ -42,7 +42,6 @@ from api.services.goal_decomposer import (
 )
 from api.services.goal_graph import validate_link
 from api.services.inflation_service import (
-    get_goal_inflation_rate,
     resolve_goal_inflation,
     simulation_inflation_ema_span,
 )

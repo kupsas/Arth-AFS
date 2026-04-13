@@ -20,10 +20,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-logger = logging.getLogger(__name__)
-
 from api.services.goal_decomposer import add_months, months_between
 from api.services.inflation_service import GOAL_INFLATION_MAP, INFLATION_DEFAULTS
+
+logger = logging.getLogger(__name__)
 
 # ── Goal class constants (aligned with pipeline / API) ───────────────────────
 GC_POINT = "POINT_IN_TIME"

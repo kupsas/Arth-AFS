@@ -247,7 +247,7 @@ def sync_imf_cpi_history(session: Session) -> dict[str, Any]:
     }
 
 
-def fetch_cpi_from_imf_sdmx() -> dict[str, float] | None:
+def fetch_cpi_from_imf_sdmx() -> dict[str, float | str] | None:
     """
     Latest headline YoY (convenience for callers that expect one dict).
 
