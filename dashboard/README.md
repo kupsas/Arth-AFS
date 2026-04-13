@@ -1,12 +1,12 @@
 # Arth Dashboard
 
-Next.js + shadcn/ui dashboard for the Arth personal finance pipeline. You log in once (session cookie against the FastAPI backend), then use the home dashboard (trends, charts, drill-downs), full transaction table, review queue, goals, and settings (reminders + statement upload).
+Next.js + shadcn/ui dashboard for the Arth personal finance pipeline. You log in once (session cookie against the FastAPI backend), then use the home dashboard (trends, charts, drill-downs), transactions, review queue, **portfolio**, **goals** (including hierarchy and simulation entry points), **simulate**, and settings (reminders + statement upload).
 
 ## Stack
 
 | Layer | Choice |
 |-------|--------|
-| Framework | Next.js 16.2 (App Router, TypeScript) |
+| Framework | Next.js 16.2.x (App Router, TypeScript) |
 | UI | shadcn/ui → base-ui (see note below) |
 | Styling | Tailwind CSS v4 (CSS-based config) |
 | Charts | Recharts (via shadcn chart components) |
@@ -52,7 +52,9 @@ python3 -m uvicorn api.main:app --port 8000 --reload
 | `/` | Dashboard — “V2” layout: this-month focus, trend charts, category grids, bar drill-down, goals/reminders snippets, statement upload entry points |
 | `/transactions` | Full transaction table with filters, sorting, pagination, slide-out edit (including spend tags and exclude-from-analytics) |
 | `/review` | Review queue — card-based view of unreviewed transactions with approve/edit/skip actions |
-| `/goals` | Goals CRUD and progress (ties into metrics like expense limits and chart keys) |
+| `/goals` | Goals CRUD, hierarchy / priorities, progress (metrics + simulation hooks) |
+| `/portfolio` | Holdings, net worth, trends, investment activity, price-backed valuations |
+| `/simulate` | Surplus / goal funding scenarios (calls `/api/simulate` and related goal APIs) |
 | `/settings` | Reminders (monthly due dates) and statement upload UI (calls API pipeline upload) |
 
 ## Environment Variables
@@ -94,7 +96,9 @@ dashboard/src/
     page.tsx                  # Dashboard V2 (this month + trends + drill-down)
     globals.css               # Tailwind v4 + shadcn oklch theme vars
     transactions/page.tsx     # Transactions table page
-    goals/page.tsx            # Goals (full page)
+    goals/page.tsx            # Goals + hierarchy / simulation entry
+    portfolio/page.tsx        # Portfolio / holdings / net worth
+    simulate/page.tsx         # Goal funding & surplus simulation UI
     settings/page.tsx         # Reminders + statement upload
     review/page.tsx           # Review queue page
   components/
@@ -104,31 +108,20 @@ dashboard/src/
       mobile-blocker.tsx      # Viewport < 1024px → desktop-only message
       theme-toggle.tsx        # Dark/light mode button
     providers.tsx             # QueryClient + ThemeProvider + TooltipProvider
-    dashboard/                # Dashboard V2 components
-      date-range-picker.tsx   # Still used on Transactions page
-      goal-progress-section.tsx
-      top-expenses-card.tsx
-      reminders-card.tsx
-      time-range-toggle.tsx
-      investment-trend-chart.tsx
-      expense-stacked-bar.tsx
-      category-trend-grid.tsx
-      bar-drilldown-sheet.tsx
-      goals-section.tsx
-      upload-button.tsx
-    transactions/             # Transaction table components
-      transaction-table.tsx   # TanStack Table data table
-      transaction-filters.tsx # Filter bar (search, dropdowns, date range)
-      transaction-edit-sheet.tsx  # Slide-in edit panel
-    review/                   # Review queue components
-      review-card.tsx         # Individual transaction card (approve/edit/skip)
-    ui/                       # shadcn UI primitives (21 components)
+    dashboard/                # Dashboard V2 components (charts, reminders, uploads, …)
+    portfolio/                # Holdings tables, net worth charts, grouping toggles
+    simulation/               # Surplus waterfall, goal timeline, explorer UI
+    transactions/             # Transaction table + filters + edit sheet
+    review/                   # Review queue + investment review cards
+    ui/                       # shadcn UI primitives
   hooks/
-    use-transactions.ts       # React Query hooks for transaction endpoints
-    use-metrics.ts            # React Query hooks for metrics endpoints
-    use-goals.ts              # Goals CRUD + cache helpers
-    use-recurring.ts          # Recurring pattern list / detect / patch
-    use-settings.ts           # Reminders API
+    use-transactions.ts       # Transaction endpoints
+    use-metrics.ts            # Metrics endpoints
+    use-goals.ts              # Goals + related APIs
+    use-recurring.ts          # Recurring patterns
+    use-settings.ts           # Reminders
+    use-investment-transactions.ts  # Investment ledger (portfolio)
+    …                         # Other feature hooks as needed
   lib/
     types.ts                  # Shared TypeScript types (mirrors Python models)
     api.ts                    # Typed HTTP client

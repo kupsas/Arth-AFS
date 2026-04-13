@@ -113,3 +113,21 @@ After exporting, run the benchmark to see how the current prompt and model stack
 ```bash
 python3 docs/evaluations/llm-benchmark-2026-03/benchmark.py
 ```
+
+---
+
+## Other scripts (quick reference)
+
+The `scripts/` folder has many **one-off** maintenance tools. Read the top of each file for exact flags; common themes:
+
+| Script | Use when |
+|--------|-----------|
+| `backup_db.sh`, `com.arth.backup.plist` | Scheduled or manual SQLite backups |
+| `backfill_*` (`hdfc_cc_statement_emails`, `icici_direct_trade_emails`, `investment_txn_holding_ids`, `ppf_nps_cost_and_links`, …) | Backfill historical data after schema or parser changes |
+| `validate_email_statement.py`, `validate_icici_direct_trade_email.py` | Validate a single email or PDF against parsers |
+| `diagnose_portfolio_prices.py`, `validate_price_sources.py` | Debug missing marks or bad symbols |
+| `enrich_holdings.py`, `sync_all_holdings.py` | Holdings enrichment / sync |
+| `migrate_db.py`, `migrate_goals_v2.py`, `migrate_phase45.py` | Schema migrations (run with care; backup first) |
+| `compare_icici_trade_emails_to_db.py`, `remove_duplicate_pdf_email_transactions.py` | Reconciliation / dedup helpers |
+
+Operator runbooks for **historical price backfill** and **test→prod price merge** are documented above (`backfill_price_history.py`, `merge_prices_from_db.py`).

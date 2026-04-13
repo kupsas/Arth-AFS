@@ -1,6 +1,6 @@
 # API
 
-FastAPI backend for Arth. Serves transaction data, aggregated metrics, pipeline controls, and email scraper management. SQLite database via SQLModel.
+FastAPI backend for Arth. Serves transactions, metrics, portfolio (holdings, prices, investment activity), goals (including hierarchy and simulation helpers), pipeline controls, and email scraper management. SQLite database via SQLModel.
 
 ---
 
@@ -18,6 +18,9 @@ python3 -m uvicorn api.main:app --port 8000 --reload
 On startup, the server:
 1. Initializes the SQLite database (creates tables if they don't exist — idempotent, safe every boot)
 2. Starts the Gmail email scraper scheduler (pauses automatically if OAuth hasn't been set up yet)
+3. Kicks off **background** jobs (non-blocking): refresh stale **prices** (NSE / AMFI / yfinance as needed) and sync **IMF India CPI** history for inflation features (unless `INFLATION_DISABLE_IMF` is set)
+
+See `api/main.py` `lifespan` for the exact behavior.
 
 ---
 
@@ -29,8 +32,10 @@ The API uses an **httpOnly session cookie** (`arth_session`) after a successful 
 |------|----------------|
 | `POST /api/auth/login`, `POST /api/auth/logout` | No (login issues the cookie; logout clears it) |
 | `GET /health` | No |
-| Everything under `/api/transactions`, `/api/metrics`, `/api/pipeline`, `/api/scraper`, `/api/recurring`, `/api/goals`, `/api/settings` | **Yes** — missing or invalid session → `401` |
+| Everything under `/api/*` **except** the two routes above | **Yes** — routers are mounted with `Depends(get_current_user)`; missing or invalid session → `401` |
 | `GET /api/auth/me` | Yes — use this to check whether the browser still has a valid session |
+
+That includes all of: transactions, metrics, pipeline, scraper, recurring, surplus, liquidity, goal-suggestions, inflation, simulate, goals (CRUD + tree), goal-links, life-events, settings, holdings, investment-transactions, liabilities, and prices.
 
 The interactive **Swagger UI** at `/docs` cannot easily use cookie auth for try-it-out calls unless you log in from the dashboard (or another client) first and share the browser session. For day-to-day use, prefer the dashboard or `curl` with `-b`/`-c` cookie jars.
 
@@ -166,15 +171,168 @@ Auto-detected recurring patterns (subscriptions, rent-like debits, etc.).
 
 ### Goals — `/api/goals`
 
-User-defined goals (expense limits, savings targets, etc.). See `Goal` in `api/models.py` for `goal_type`, `status`, and `chart_key` semantics.
+User-defined goals (expense limits, savings targets, hierarchy links, etc.). See `Goal`, `GoalLink`, and related types in `api/models.py`.
+
+**CRUD**
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/` | Create a goal |
 | `GET` | `/` | List goals (optional filters in query — see Swagger) |
+| `GET` | `/priorities` | Priority scoring / ordering helpers |
+| `POST` | `/reorder` | Reorder goals |
+| `POST` | `/{goal_id}/decompose` | Decomposition helpers |
 | `GET` | `/{goal_id}` | One goal |
 | `PATCH` | `/{goal_id}` | Update fields including `current_value`, `status`, `notes` |
 | `DELETE` | `/{goal_id}` | Remove a goal |
+
+**Hierarchy & graph** (same `/api/goals` prefix; see Swagger for response shapes)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/tree` | Goal tree structure |
+| `GET` | `/allocation` | Allocation view |
+| `GET` | `/{goal_id}/ancestors` | Ancestors in the hierarchy |
+| `GET` | `/{goal_id}/descendants` | Descendants |
+| `GET` | `/{goal_id}/impact` | Impact analysis for a goal |
+
+---
+
+### Goal links — `/api/goal-links`
+
+Edges between goals (`GoalLink` model) — dependencies, ordering, or relationships in the hierarchy.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/` | Create a link |
+| `GET` | `/` | List links |
+| `PATCH` | `/{link_id}` | Update |
+| `DELETE` | `/{link_id}` | Delete |
+
+---
+
+### Life events — `/api/life-events`
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | List life events |
+| `POST` | `/` | Create |
+| `PATCH` | `/{event_id}` | Update |
+
+---
+
+### Surplus — `/api/surplus`
+
+Household surplus calculations for goals / simulation (see services under `api/services/`).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Current surplus snapshot |
+| `GET` | `/monthly` | Month-by-month series |
+
+---
+
+### Liquidity — `/api/liquidity`
+
+Holding liquidity and match-to-goal helpers.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/summary` | Aggregated liquidity view |
+| `POST` | `/refresh` | Recompute / refresh |
+| `GET` | `/goal-match/{goal_id}` | Match holdings to a goal |
+| `GET` | `/goal-suggestions` | Starting-balance style suggestions |
+| `POST` | `/mismatch-check` | Detect mismatches |
+
+---
+
+### Goal suggestions — `/api/goal-suggestions`
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Suggested goal actions / hints (see Swagger) |
+
+---
+
+### Inflation — `/api/inflation`
+
+IMF CPI–backed inflation series used by simulation and goals.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Current inflation inputs |
+| `GET` | `/history` | Historical series |
+| `POST` | `/refresh` | Pull / refresh from IMF |
+
+---
+
+### Simulation — `/api/simulate`
+
+Goal funding and “what-if” simulation (surplus allocation, compare scenarios).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/` | Run a simulation |
+| `POST` | `/compare` | Compare scenarios |
+| `POST` | `/allocate` | Allocation run |
+| `POST` | `/from-current` | Simulate from current balances |
+
+---
+
+### Holdings — `/api/holdings`
+
+Portfolio positions, net-worth history, returns, enrichment, and CSV import. See `Holding` in `api/models.py`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | List holdings |
+| `GET` | `/summary` | Summary cards / totals |
+| `GET` | `/history` | Net worth history |
+| `GET` | `/batch-returns` | Returns across holdings |
+| `GET` | `/portfolio-value-trend` | Portfolio value trend series |
+| `POST` | `/enrich` | Enrich holdings from pipeline / market data |
+| `POST` | `/import` | Import holdings (CSV) |
+| `GET` | `/{holding_id}` | Detail |
+| `POST` | `/` | Create |
+| `PATCH` | `/{holding_id}` | Update |
+
+---
+
+### Investment transactions — `/api/investment-transactions`
+
+Broker / MF / PPF-style activity rows (separate from `transactions` cash ledger).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Paginated list |
+| `PATCH` | `/bulk` | Bulk update |
+| `PATCH` | `/{inv_id}` | Update one |
+| `POST` | `/` | Create |
+| `POST` | `/import` | Import batch |
+
+---
+
+### Liabilities — `/api/liabilities`
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | List |
+| `GET` | `/summary` | Summary |
+| `GET` | `/{liability_id}` | One liability |
+| `POST` | `/` | Create |
+| `PATCH` | `/{liability_id}` | Update |
+| `DELETE` | `/{liability_id}` | Delete |
+
+---
+
+### Prices — `/api/prices`
+
+Daily prices / NAV history keyed by symbol (NSE ticker, AMFI code, etc.).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/refresh` | Refresh prices for symbols in scope |
+| `GET` | `/{symbol}/history` | Time series for one symbol |
 
 ---
 
@@ -186,6 +344,8 @@ User-defined goals (expense limits, savings targets, etc.). See `Goal` in `api/m
 | `POST` | `/reminders` | Create reminder |
 | `PATCH` | `/reminders/{reminder_id}` | Update |
 | `DELETE` | `/reminders/{reminder_id}` | Delete |
+| `POST` | `/reminders/derive-anchors` | Derive reminder anchors from transactions |
+| `GET` | `/reminders/status` | Status for reminder subsystem |
 
 ---
 
@@ -199,7 +359,7 @@ User-defined goals (expense limits, savings targets, etc.). See `Goal` in `api/m
 
 ## Database Schema
 
-Six core domain tables (plus SQLModel metadata), all defined in `api/models.py`.
+All tables are defined in `api/models.py`. The **cash ledger** is `transactions`; **portfolio** adds `holdings`, `investment_transactions`, `holding_value_snapshots`, `prices`, `liabilities`; **goals** add `goals`, `goal_links`, `life_events`, `reminders`, `recurring_patterns`, `inflation_rates`; **ops** include `pipeline_runs`, `processed_emails`.
 
 ### `transactions`
 
@@ -296,10 +456,27 @@ Monthly payment reminders (`due_day_of_month`, optional amount and category). Se
 
 ---
 
+### Portfolio & goals (abbreviated)
+
+| Table | Purpose |
+|-------|---------|
+| `holdings` | Positions (equity, MF, PPF, NPS, etc.) |
+| `investment_transactions` | Parsed investment / broker activity |
+| `holding_value_snapshots` | Point-in-time valuations |
+| `prices` | Daily close / NAV per symbol |
+| `liabilities` | Loans and other liabilities |
+| `goals` / `goal_links` | Goals and graph edges |
+| `life_events` | Dated life events tied to planning |
+| `inflation_rates` | CPI / inflation series used in simulation |
+
+For column-level detail, use the SQLModel definitions in `api/models.py` or Swagger response schemas.
+
+---
+
 ## Architecture Notes
 
 - **CORS:** Defaults to `localhost:3000` and `localhost:8000`. For Cloudflare Tunnel or other origins, set `CORS_EXTRA_ORIGINS` in `.env` (comma-separated full origins, e.g. `https://abc.trycloudflare.com`). `allow_credentials=True` so the session cookie works cross-port in dev.
 - **Auth:** Cookie-based session for the two household accounts. Not a multi-tenant SaaS — treat `.env` secrets and network exposure accordingly if you ever host off localhost.
-- **Scheduler lifecycle:** The APScheduler background thread starts with the FastAPI `lifespan` context and shuts down cleanly on exit. One `uvicorn` command manages the API and the email scraper.
+- **Scheduler lifecycle:** The APScheduler background thread starts with the FastAPI `lifespan` context and shuts down cleanly on exit. One `uvicorn` command manages the API, scheduled Gmail polling, periodic price jobs, and weekly inflation refresh (see `scraper/scheduler.py`).
 - **Database sessions:** Injected via FastAPI's `Depends(get_session)`. No global session state — each request gets its own session.
 - **DB init:** `init_db()` is called on every server start. It creates tables that don't exist and leaves existing ones alone — safe to run repeatedly.

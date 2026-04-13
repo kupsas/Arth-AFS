@@ -10,7 +10,7 @@ Reference documentation, product specs, evaluations, and design notes for the Ar
 
 ```
 docs/
-  product/            Product requirements and gap analysis
+  product/            Phase 5 guideline, UI notes (living product docs)
   system-design/      Architecture notes and early design decisions
   data-notes/         Notes about raw bank data formats and how they map to the schema
   evaluations/        LLM benchmark results, methodology, and model comparisons
@@ -25,8 +25,10 @@ docs/
 
 | File | Description |
 |---|---|
-| `arth_prd_v_1.md` | Original PRD (Jul 2025) — problem statement, 17 Day-1 questions, personas, non-goals, tech stack, and timeline |
-| `gap_analysis_phase4_complete.md` | Post-Phase-4 gap analysis — PRD vs reality scorecard, business/security/engineering gaps, and proposed Phase 4.5 hardening plan |
+| `arth_phase5_guideline_v3_final.md` | Phase 5 guideline — scope, principles, and delivery notes for the agentic / Q&A direction (successor to the old PRD-style docs) |
+| `Health-Page-UI-thoughts.md` | Design notes for health-related dashboard surfaces |
+| `Holdings-Page-UI-thoughts.md` | Design notes for portfolio / holdings UI |
+| `Statements-Page-UI-thoughts.pdf` | Design notes for statements UX |
 
 ---
 

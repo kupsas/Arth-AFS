@@ -1,6 +1,6 @@
 # Tests
 
-pytest test suite for the Arth pipeline, API, and email scraper. 86+ tests across unit, integration, and end-to-end coverage.
+pytest test suite for the Arth pipeline, API, email scraper, portfolio, goals, and supporting services. **600+** collected tests (`pytest tests/ --collect-only` for the exact count on your branch).
 
 ---
 
@@ -27,18 +27,16 @@ Tests use an **in-memory SQLite database** via `conftest.py`. No `.env` required
 
 ---
 
-## Test Files
+## Test files (high level)
 
-| File | What it tests | Count |
-|---|---|---|
-| `test_email_parsers.py` | `can_parse()` routing + full field assertions against real HTML email fixtures | ~50 |
-| `test_reconciliation.py` | 5 core reconciliation scenarios: email→reconciled upgrade, statement-only insert, cross-account false positive guard, manual edit survival, content-hash dedup | 16 |
-| `test_orchestrator.py` | Full scrape cycle paths: processed/skipped/failed + already-processed dedup, using mock `GmailClient` and real fixture HTML | 20 |
-| `test_db_and_api.py` | DB operations + API endpoint tests via FastAPI `TestClient` | — |
-| `test_pipeline_e2e.py` | End-to-end pipeline (parse → transform → classify → write) | — |
-| `test_prompt_yaml.py` | YAML prompt files load correctly and contain all required keys | — |
-| `test_prompt_loader.py` | Prompt loader correctly interpolates `{variable}` placeholders | — |
-| `test_prompt_snapshots.py` | Rendered prompts match golden snapshots — catches accidental prompt changes | — |
+| Area | Examples |
+|------|-----------|
+| **Email & scraper** | `test_email_parsers.py`, `test_orchestrator.py`, `test_reconciliation.py` |
+| **API & DB** | `test_db_and_api.py`, route-focused tests under `tests/test_*` for holdings, goals, surplus, prices, … |
+| **Pipeline** | `test_pipeline_e2e.py`, parser tests, `test_prompt_*.py` |
+| **Portfolio / goals** | `test_holding_*.py`, `test_goal_*.py`, `test_returns_calculator.py`, `test_surplus_calculator.py`, … |
+
+Run `pytest tests/ --collect-only -q` for an up-to-date file list and count. Individual files move quickly as features land — rely on **module names** (`test_<feature>.py`) rather than a frozen table.
 
 ---
 

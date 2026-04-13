@@ -178,6 +178,8 @@ python3 -m pipeline.run --source new_bank_savings --validate
 | `parsers/hdfc_savings.py` | HDFC savings account (.txt format, `\t`-separated) |
 | `parsers/hdfc_cc.py` | HDFC credit card (CSV format, handles both 1905 and 5778) |
 | `parsers/icici_savings.py` | ICICI savings account (PDF format, word-coordinate extraction) |
+| `holding_parsers/` | ICICI Direct, NPS, and other **position** parsers — not the same as cash `parsers/` |
+| `holding_pipeline.py` | Wires holding ingest / enrichment into the DB (see `api` + `pipeline` integration) |
 | `transformer.py` | `ParsedTransaction` → `CanonicalTransaction`: assigns content_hash, ISO dates, direction, amount |
 | `rules_classifier.py` | Deterministic classification rules (channel, txn_type, upi_type, known merchants) |
 | `llm_classifier.py` | LLM abstraction: multi-model fallback, response caching, token tracking |

@@ -1,6 +1,6 @@
 # Arth
 
-Personal finance system for Sashank and Aditi — built for India's banking ecosystem. Ingests raw bank statements and live Gmail alert emails, classifies every transaction using deterministic rules and LLM, stores everything in a local SQLite database, and surfaces insights on a Next.js dashboard.
+Personal finance system for Sashank and Aditi — built for India's banking ecosystem. One **SQLite** database and a **FastAPI** backend power a **Next.js** app for the full picture: **cash-ledger** ingestion and classification, **portfolio** (holdings, marks, net worth), **goals** (hierarchy and priorities), and a **simulation** layer (surplus, funding scenarios). Raw statements and Gmail feed the transaction pipeline; rules + LLM classify spend; separate services handle prices, inflation series, and goal math — all in one place.
 
 **Not a startup. Not a SaaS product. A tool built by two people, for two people.**
 
@@ -10,12 +10,15 @@ Personal finance system for Sashank and Aditi — built for India's banking ecos
 
 | Capability | Details |
 |---|---|
-| **Transaction ingestion** | Parse statements from 4 bank sources: HDFC savings, HDFC CC (×2), ICICI savings |
-| **Auto-classification** | Rules + LLM pipeline assigns type, channel, counterparty, and category to every transaction |
-| **Real-time email scraping** | Gmail API polls bank alert emails every 15 minutes — no waiting for monthly statements |
-| **Statement reconciliation** | Email and statement data are automatically merged; no duplicates, no lost review work |
-| **Dashboard** | Session login, spending overview (charts + drill-downs), transactions, review queue, goals, settings (reminders + statement upload) |
-| **3,236 transactions** | Across all 4 sources, all-time — fully classified and searchable |
+| **Portfolio** | Holdings across sleeves (equity, MF, PPF, NPS, …), **net worth** and history, **price** / NAV marks (NSE bhav, AMFI, fallbacks), liabilities — surfaced on `/portfolio` |
+| **Simulation** | Surplus, liquidity, inflation-aware **goal funding** and “what-if” runs — `/simulate` and `/goals` tied to `/api/simulate`, surplus, and liquidity APIs |
+| **Goals** | Goal graph (links, hierarchy), priorities, life events, reminders — not just expense targets |
+| **Cash ledger & analytics** | Full **transaction** table, metrics, trends, recurring detection, review queue — the classic “where did the money go” view |
+| **Transaction ingestion** | Parse statements from four bank **sources** (HDFC savings, HDFC CC ×2, ICICI savings) |
+| **Auto-classification** | Rules + LLM assign type, channel, counterparty, and category on the cash pipeline |
+| **Real-time email scraping** | Gmail API polls on a schedule — bank **alerts** plus other routed mail (see scraper README) |
+| **Statement reconciliation** | Email-sourced and statement-sourced **cash** rows merged; no duplicate rows, no lost review work |
+| **Dashboard shell** | Session login, then home, transactions, review, portfolio, goals, simulate, settings (reminders + uploads) |
 
 ---
 
@@ -47,44 +50,51 @@ For Gmail email scraper setup, see [`scraper/README.md`](scraper/README.md).
 
 ## System Architecture
 
+High level: **one database**, **one API**, **one web app**. The diagram separates the **cash classification pipeline** (bank-specific parsers, then shared rules + LLM) from **portfolio and planning** (holdings, prices, goals, simulation) — both read and write the same SQLite file. Schedulers inside the API process handle Gmail polling, price refresh, and inflation sync.
+
 ```mermaid
-flowchart LR
-    subgraph sources [Data Sources]
-        S1["Bank Statements\nCSV / PDF / TXT"]
-        S2["Gmail Alert Emails\nevery 15 min"]
+flowchart TB
+    subgraph sources [Sources]
+        files["Bank files\nCSV PDF TXT"]
+        gmail["Gmail\nalerts statements broker mail"]
     end
 
-    subgraph pipeline [Classification Pipeline]
-        P1[Parse]
-        P2[Transform]
-        P3[Rules Classify]
-        P4[LLM Classify]
-        P1 --> P2 --> P3 --> P4
+    subgraph cashPipeline [Cash transaction pipeline]
+        p1[Parse]
+        p2[Transform]
+        p3[Rules]
+        p4[LLM]
+        p1 --> p2 --> p3 --> p4
     end
 
-    subgraph storage [Storage]
-        DB[("SQLite\narth.db")]
+    subgraph planning [Portfolio and planning]
+        svc["Holdings prices goals\nsurplus simulation"]
     end
 
-    subgraph backend [FastAPI Backend]
-        API[REST API]
-        SCH[Email Scheduler]
+    arthDb[("SQLite\narth.db")]
+
+    files --> p1
+    gmail --> p1
+    p4 --> arthDb
+
+    arthDb <--> svc
+
+    api[FastAPI]
+    arthDb --> api
+    svc --> api
+
+    subgraph web [Next.js]
+        w1["Spending txn review"]
+        w2["Portfolio"]
+        w3["Goals simulate"]
     end
 
-    subgraph frontend [Next.js Dashboard]
-        D1[Dashboard]
-        D2[Transactions]
-        D3[Review Queue]
-    end
-
-    S1 --> P1
-    S2 --> SCH --> P1
-    P4 --> DB
-    DB --> API
-    API --> D1
-    API --> D2
-    API --> D3
+    api --> w1
+    api --> w2
+    api --> w3
 ```
+
+**Not shown:** APScheduler jobs (Gmail, daily prices, weekly inflation) run inside the API process and touch the same DB — see [`api/main.py`](api/main.py) and [`scraper/scheduler.py`](scraper/scheduler.py).
 
 ---
 
@@ -97,7 +107,9 @@ Next.js app with cookie-based login (`/login` → FastAPI sets `arth_session`). 
 | **Dashboard** (`/`) | This-month snapshot, trend charts, category grids, bar drill-down, goals/reminders, upload entry points |
 | **Transactions** (`/transactions`) | Searchable, filterable, sortable table with server-side pagination; slide-in edit (counterparty, category, txn type, spend tags, exclude-from-analytics) |
 | **Review Queue** (`/review`) | Card-based view of unreviewed transactions (mainly email-sourced); approve, edit-and-approve, or skip |
-| **Goals** (`/goals`) | Financial goals with progress tied to metrics/charts |
+| **Goals** (`/goals`) | Goals CRUD, hierarchy, priorities, and links to metrics / simulation |
+| **Portfolio** (`/portfolio`) | Holdings, net worth, allocations, price-backed marks, investment activity |
+| **Simulate** (`/simulate`) | Goal funding and surplus “what-if” scenarios (ties to `/api/simulate`) |
 | **Settings** (`/settings`) | Payment reminders and statement upload |
 
 See [`dashboard/README.md`](dashboard/README.md) for setup and implementation details.
@@ -158,8 +170,13 @@ The FastAPI backend groups routes like this (all except `/api/auth/*` login/logo
 | Pipeline | `/api/pipeline` | Trigger runs, upload statements, run history |
 | Scraper | `/api/scraper` | Scheduler control, OAuth, coverage map |
 | Recurring | `/api/recurring` | Detect and manage recurring patterns |
-| Goals | `/api/goals` | CRUD for user goals |
-| Settings | `/api/settings` | Reminders |
+| Surplus / liquidity / inflation | `/api/surplus`, `/api/liquidity`, `/api/inflation` | Household surplus, holding liquidity, IMF CPI history |
+| Simulation | `/api/simulate` | Goal funding and scenario runs |
+| Goals | `/api/goals`, `/api/goal-links`, `/api/life-events` | Goals CRUD, tree/hierarchy, links, life events |
+| Goal suggestions | `/api/goal-suggestions` | Helper hints for goal setup |
+| Holdings & investments | `/api/holdings`, `/api/investment-transactions` | Portfolio positions, imports, investment ledger |
+| Liabilities & prices | `/api/liabilities`, `/api/prices` | Loans; daily prices / NAV history |
+| Settings | `/api/settings` | Reminders (including derive-anchors) |
 
 Full interactive docs at **http://localhost:8000/docs** (Swagger UI).
 
@@ -173,6 +190,8 @@ See [`api/README.md`](api/README.md) for the complete endpoint reference and dat
 Arth/
   pipeline/                  Classification pipeline (Parse → Transform → Rules → LLM → Write)
     parsers/                   Bank-specific statement parsers (HDFC savings/CC, ICICI)
+    holding_parsers/           ICICI Direct, NPS, etc. — enrichment for holdings ingest
+    holding_pipeline.py        Orchestrates holding ingest / enrichment (see pipeline README)
     config.py                  All knobs in one place (models, paths, source configs, LLM chain)
     models.py                  Pydantic models and classification enums
     rules_classifier.py        Deterministic classification rules
@@ -181,31 +200,29 @@ Arth/
     run.py                     CLI entry point
 
   api/                       FastAPI backend
-    main.py                    App entry point, CORS, lifespan, scheduler start/stop
+    main.py                    App entry point, CORS, lifespan, scheduler, background price + inflation jobs
     database.py                Engine, session factory, init_db()
-    models.py                  SQLModel table definitions (Transaction, PipelineRun, ProcessedEmail)
-    routes/
-      transactions.py          Transaction CRUD, filtering, bulk update
-      metrics.py               5 metrics endpoints (summary, category, trend, counterparties, accounts)
-      pipeline.py              Trigger runs, list runs, run status
-      scraper.py               Scraper control + OAuth endpoints
+    models.py                  SQLModel tables (transactions, holdings, goals, prices, …)
+    routes/                    transactions, metrics, pipeline, scraper, recurring, surplus, liquidity,
+                               inflation, simulate, goals, goal_tree, goal_links, life_events,
+                               settings, holdings, investment_transactions, liabilities, prices, …
 
   scraper/                   Gmail email scraper
-    email_parsers/             Bank-specific email parsers (HDFC CC, HDFC savings, ICICI)
+    email_parsers/             Alert parsers + statement PDF / ICICI Direct trade parsers
     orchestrator.py            Main scrape cycle (fetch → dedup → parse → classify → write)
-    scheduler.py               APScheduler wrapper (runs inside the FastAPI process)
+    scheduler.py               APScheduler: Gmail poll, price job, inflation job
     gmail_client.py            OAuth2 auth + email fetching
 
   dashboard/                 Next.js frontend
-    src/app/                   Pages: /, /login, /transactions, /review, /goals, /settings
-    src/components/            Dashboard V2, layout, transactions, review, goals, settings
-    src/hooks/                 React Query hooks (use-transactions, use-metrics)
+    src/app/                   Pages: /, /login, /transactions, /review, /portfolio, /goals, /simulate, /settings
+    src/components/            Dashboard, portfolio, simulation, layout, transactions, review, goals
+    src/hooks/                 React Query hooks (transactions, metrics, goals, holdings, …)
     src/lib/                   Types, API client, utilities
 
   prompts/                   YAML prompt templates (git-versioned, safe to commit)
-  scripts/                   One-time setup and migration scripts
-  tests/                     pytest test suite (86+ tests)
-  docs/                      Architecture docs, evaluations, PRD, data notes
+  scripts/                   Operator scripts (backfills, validation, migrations) — see scripts/README.md
+  tests/                     pytest suite (600+ tests) — pipeline, API, scraper, portfolio, goals
+  docs/                      Architecture docs, evaluations, Phase 5 guideline, data notes
   data/                      SQLite database, LLM cache (all gitignored)
 ```
 
@@ -218,7 +235,7 @@ Arth/
 pytest tests/
 ```
 
-CI (GitHub Actions) runs `ruff`, `mypy`, and `pytest` with coverage on `pipeline/` and `api/` and fails if combined coverage drops below **35%** (see `.github/workflows/ci.yml`). Scraper code is not part of that gate yet.
+CI (GitHub Actions) runs `ruff`, `mypy`, and `pytest` with coverage on `pipeline/` and `api/` and fails if combined coverage drops below **35%** (see `.github/workflows/ci.yml`). Extra suites cover `scraper/` and other packages outside that gate.
 
 **Optional — match CI lint locally before you push:**
 ```bash
@@ -241,34 +258,4 @@ Hooks run `ruff check` on `pipeline/`, `api/`, `scraper/`, and `tests/` (same pa
 
 **Modify LLM prompts:** Edit the YAML files in `prompts/`. Read [`prompts/README.md`](prompts/README.md) first.
 
----
-
-## Current Status
-
-Phases 0–4 complete. Phase 5 (Agentic Q&A system) is next.
-
-| Phase | What was built | Status |
-|---|---|---|
-| Phase 0 | Foundation: prompts to YAML, git setup, worktrees | ✅ Done |
-| Phase 1 | Parsers: HDFC CC, ICICI savings, LLM benchmark + accuracy | ✅ Done (Mar 14) |
-| Phase 2 | Storage: SQLite database, FastAPI backend | ✅ Done (Mar 15) |
-| Phase 3 | UI: Next.js dashboard, 3 screens, metrics API | ✅ Done (Mar 19) |
-| Phase 4 | Email scraper: Gmail API, reconciliation, 86 tests | ✅ Done (Mar 19) |
-| Phase 5 | Agentic Q&A: RAG agent, researcher, evals, memory | Pending |
-
-
-
----
-
-## Key Design Decisions
-
-| Decision | Choice | Why |
-|---|---|---|
-| Database | SQLite (not Postgres) | 2 users, single machine, zero ops overhead |
-| Classification | Rules first, LLM second | Deterministic rules hit 96–100% accuracy; LLM handles only the long tail |
-| LLM primary | gemini-3.1-flash-lite | 81% accuracy at $0.0025/20 txns — best quality-to-cost (Mar 2026 benchmark) |
-| Prompt storage | YAML files | Structured, git-versioned, safe to commit |
-| Backend | FastAPI (Python) | Stays in the pipeline's language; auto-generates Swagger docs |
-| Frontend | Next.js + shadcn/ui | Portfolio-grade UI, strong TypeScript ecosystem |
-| Email ingestion | APScheduler inside FastAPI | One process to manage; no Celery overhead for a personal tool |
-| Parallel dev | Git worktrees | Multiple Cursor windows on independent branches |
+**Roadmap / Phase 5:** Product direction and agentic Q&A scope live in [`docs/product/arth_phase5_guideline_v3_final.md`](docs/product/arth_phase5_guideline_v3_final.md) and the [`docs/README.md`](docs/README.md) index.

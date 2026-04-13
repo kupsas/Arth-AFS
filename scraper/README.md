@@ -58,6 +58,10 @@ curl -X POST http://localhost:8000/api/scraper/trigger
 
 Email scraping covers ~70-80% of day-to-day spending. Monthly statement uploads fill the remaining gaps.
 
+### Statement PDFs and broker emails (Phase 0+)
+
+Beyond **alert** emails, the scraper can process **attached PDFs** and structured broker mail (HDFC combined statements, HDFC CC statement PDFs, ICICI statement PDFs, ICICI Direct trade notifications). These flow through dedicated parsers in `scraper/email_parsers/` (`hdfc_statement.py`, `hdfc_cc_statement.py`, `icici_statement.py`, `icici_direct_trade.py`, etc.) and may enqueue rows for the **review queue** or investment pipeline depending on content. Prefer the API/dashboard upload path for large statement batches when that is easier.
+
 **What email does NOT capture (by design):**
 - HDFC net banking outbound — HDFC intentionally sends no alert; you initiated it from their platform
 - HDFC CC auto-pay / E-mandate — email exists but contains no amount or date, cannot be parsed
@@ -127,11 +131,15 @@ scraper/
   gmail_client.py    OAuth2 auth, token management, email fetching, HTML body extraction
   email_router.py    find_parser(): routes a message to the correct parser by sender + subject
   orchestrator.py    scrape_new_emails(): the main cycle (fetch → dedup → parse → classify → write)
-  scheduler.py       APScheduler wrapper: start/stop/trigger/reschedule/get_status
+  scheduler.py       APScheduler wrapper: Gmail poll, daily price job, weekly inflation job
   email_parsers/
     base.py          BaseEmailParser ABC + _lookup_account() helper
-    hdfc_bank.py     HDFCCreditCardAlertParser, HDFCUPIAlertParser, HDFCAccountUpdateParser
-    icici_bank.py    ICICINetBankingParser (handles both IMPS and NEFT)
+    base_statement.py Shared helpers for statement PDF pipelines
+    hdfc_bank.py     HDFC alert parsers (CC swipe, UPI, account update)
+    hdfc_statement.py / hdfc_cc_statement.py  HDFC PDF statements
+    icici_bank.py    ICICI IMPS/NEFT alert parser
+    icici_statement.py  ICICI PDF statements
+    icici_direct_trade.py  ICICI Direct trade / contract emails
 ```
 
 **Adding a new bank parser:**
