@@ -88,8 +88,12 @@ def validate_chart_key_for_goal(goal_type: str, chart_key: str | None) -> None:
             raise ValueError("chart_key investment_net is not valid for EXPENSE_LIMIT")
         return
     if goal_type == "INVESTMENT":
-        if chart_key != CHART_KEY_INVESTMENT_NET:
-            raise ValueError("INVESTMENT goals only support chart_key investment_net")
+        # None = not tied to the investment chart (e.g. second+ savings goal). Only one
+        # goal per user should use investment_net so the dashboard chart has a single link.
+        if chart_key is not None and chart_key != CHART_KEY_INVESTMENT_NET:
+            raise ValueError(
+                "INVESTMENT goals only support chart_key 'investment_net' or omit it (unlinked)"
+            )
         return
     if chart_key is not None:
         raise ValueError(f"chart_key is only supported for EXPENSE_LIMIT and INVESTMENT, not {goal_type}")
@@ -123,7 +127,7 @@ def expense_limit_sum_for_chart_key(
 ) -> float:
     """Sum OUTFLOW amounts for EXPENSE_LIMIT goals tied to chart_key (metrics filters)."""
     # Late import: metrics imports this module; avoid circular import at load time.
-    from api.routes.metrics import _analytics_only, _date_where, _expense_where
+    from api.services.query_helpers import _analytics_only, _date_where, _expense_where
 
     if chart_key == CHART_KEY_EXPENSE_NEED_WANT_STACK:
         base = _expense_where(

@@ -21,6 +21,7 @@ from fastapi.responses import RedirectResponse
 from api.auth import get_current_user
 from api.database import get_engine, init_db
 from api.routes import metrics, pipeline, transactions
+from api.services.inflation_service import sync_imf_cpi_history
 from api.services.price_feed import run_startup_price_sync
 from api.routes.auth import router as auth_router
 from api.routes.goal_links import router as goal_links_router
@@ -33,6 +34,11 @@ from api.routes.liabilities import router as liabilities_router
 from api.routes.prices import router as prices_router
 from api.routes.settings import router as settings_router
 from api.routes.recurring import router as recurring_router
+from api.routes.surplus import router as surplus_router
+from api.routes.liquidity import router as liquidity_router
+from api.routes.goal_suggestions import router as goal_suggestions_router
+from api.routes.inflation import router as inflation_router
+from api.routes.simulate import router as simulate_router
 from api.routes.scraper import router as scraper_router
 from pipeline.logging_config import setup_logging
 from scraper.scheduler import shutdown_scheduler, start_scheduler
@@ -63,6 +69,35 @@ async def _run_startup_prices_in_thread() -> None:
         raise
 
 
+async def _run_startup_inflation_in_thread() -> None:
+    """IMF CPI fetch can be slow — keep it off the event loop like price sync."""
+
+    logger.info(
+        "Startup inflation sync: background job started (IMF monthly CPI YoY → DB)"
+    )
+
+    def _sync_inflation() -> None:
+        try:
+            if os.getenv("INFLATION_DISABLE_IMF", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            ):
+                logger.info("INFLATION_DISABLE_IMF — skipping startup inflation sync")
+                return
+            with Session(get_engine()) as session:
+                sync_imf_cpi_history(session)
+        except Exception:
+            logger.exception(
+                "Startup inflation sync failed — will retry on weekly job or refresh"
+            )
+
+    try:
+        await asyncio.to_thread(_sync_inflation)
+    except asyncio.CancelledError:
+        raise
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle for the Arth API server.
@@ -76,9 +111,11 @@ async def lifespan(app: FastAPI):
          then refresh marks **in the background**. Uvicorn used to await this before
          ``yield``, which left "Waiting for application startup" for minutes when NSE
          or AMFI was slow or unreachable.
+      5. Sub-Plan F — IMF India CPI monthly YoY history sync **in the background**
+         (weekly job also scheduled in ``scraper.scheduler``).
 
     Shutdown:
-      5. Clean up the APScheduler background thread so the process exits cleanly.
+      6. Clean up the APScheduler background thread so the process exits cleanly.
     """
     setup_logging()
     logger.info("Arth API starting up...")
@@ -87,7 +124,10 @@ async def lifespan(app: FastAPI):
     # Schedule price sync without awaiting — server becomes ready immediately.
     # Keep a reference on app.state so the task is not GC'd before it runs (asyncio footgun).
     app.state.startup_price_sync_task = asyncio.create_task(_run_startup_prices_in_thread())
-    logger.info("Arth API ready (startup price sync runs in background)")
+    app.state.startup_inflation_sync_task = asyncio.create_task(
+        _run_startup_inflation_in_thread()
+    )
+    logger.info("Arth API ready (startup price + inflation sync run in background)")
     yield
     logger.info("Arth API shutting down...")
     shutdown_scheduler()
@@ -140,6 +180,11 @@ app.include_router(metrics.router,      prefix="/api/metrics",       tags=["Metr
 app.include_router(pipeline.router,     prefix="/api/pipeline",      tags=["Pipeline"],      dependencies=_auth)
 app.include_router(scraper_router,      prefix="/api/scraper",       tags=["Scraper"],       dependencies=_auth)
 app.include_router(recurring_router,    prefix="/api/recurring",     tags=["Recurring"],     dependencies=_auth)
+app.include_router(surplus_router,      prefix="/api/surplus",       tags=["Surplus"],       dependencies=_auth)
+app.include_router(liquidity_router,    prefix="/api/liquidity",     tags=["Liquidity"],     dependencies=_auth)
+app.include_router(goal_suggestions_router, prefix="/api/goal-suggestions", tags=["Goal suggestions"], dependencies=_auth)
+app.include_router(inflation_router,   prefix="/api/inflation",     tags=["Inflation"],     dependencies=_auth)
+app.include_router(simulate_router,    prefix="/api/simulate",      tags=["Simulation"],    dependencies=_auth)
 # goal_tree_router first: static paths /tree and /allocation must not hit /{goal_id}.
 app.include_router(goal_tree_router,   prefix="/api/goals",         tags=["Goals"],         dependencies=_auth)
 app.include_router(goals_router,        prefix="/api/goals",         tags=["Goals"],         dependencies=_auth)

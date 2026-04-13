@@ -106,6 +106,7 @@ class HoldingOut(BaseModel):
     market_cap_class: str | None = None
     fund_category: str | None = None
     fund_house: str | None = None
+    earliest_liquidity_date: datetime.date | None = None
     user_id: str
     is_active: bool
     notes: str | None
@@ -161,6 +162,7 @@ class HoldingCreate(BaseModel):
     user_id: str = Field(default="sashank", min_length=1, max_length=64)
     is_active: bool = True
     notes: str | None = Field(default=None, max_length=10_000)
+    earliest_liquidity_date: datetime.date | None = None
 
 
 class HoldingUpdate(BaseModel):
@@ -169,6 +171,7 @@ class HoldingUpdate(BaseModel):
     current_value: float | None = Field(default=None, ge=0)
     last_valued_date: datetime.date | None = None
     notes: str | None = Field(default=None, max_length=10_000)
+    earliest_liquidity_date: datetime.date | None = None
 
 
 class HoldingsSummaryOut(BaseModel):
@@ -563,6 +566,7 @@ def create_holding(body: HoldingCreate, *, session: Session = Depends(get_sessio
         user_id=body.user_id,
         is_active=body.is_active,
         notes=body.notes,
+        earliest_liquidity_date=body.earliest_liquidity_date,
     )
     if body.folio_number:
         h.folio_number_encrypted = body.folio_number
@@ -606,6 +610,9 @@ def patch_holding(
         h.last_valued_date = body.last_valued_date
     if body.notes is not None:
         h.notes = body.notes
+    patch_fields = body.model_dump(exclude_unset=True)
+    if "earliest_liquidity_date" in patch_fields:
+        h.earliest_liquidity_date = patch_fields["earliest_liquidity_date"]
     h.updated_at = datetime.datetime.now(datetime.UTC)
     session.add(h)
     session.commit()

@@ -31,11 +31,13 @@ from __future__ import annotations
 
 import datetime
 import logging
+from collections import Counter
 from statistics import median, stdev
 
 from sqlmodel import Session, col, select
 
 from api.models import RecurringPattern, Transaction
+from api.services.account_user_map import user_id_for_account
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +66,14 @@ _FREQ_RANGES: list[tuple[str, int, int]] = [
     ("QUARTERLY", 80, 100),
     ("YEARLY",  340, 380),
 ]
+
+
+def _infer_user_id_from_transactions(group_txns: list[Transaction]) -> str:
+    """Majority vote of account_id -> user_id for transactions in this pattern group."""
+    if not group_txns:
+        return "sashank"
+    votes = [user_id_for_account(t.account_id) for t in group_txns]
+    return Counter(votes).most_common(1)[0][0]
 
 
 def detect_and_upsert(session: Session) -> dict[str, int]:
@@ -168,9 +178,12 @@ def detect_and_upsert(session: Session) -> dict[str, int]:
         # Use the most recent transaction's counterparty_category as the label
         counterparty_category = group_txns[-1].counterparty_category
 
+        pattern_user_id = _infer_user_id_from_transactions(group_txns)
+
         # ── Step 5: Upsert ─────────────────────────────────────────────────────
         existing = session.exec(
             select(RecurringPattern)
+            .where(RecurringPattern.user_id == pattern_user_id)
             .where(RecurringPattern.counterparty == counterparty)
             .where(RecurringPattern.direction == direction)
             .where(RecurringPattern.frequency == frequency)
@@ -179,6 +192,7 @@ def detect_and_upsert(session: Session) -> dict[str, int]:
         now = datetime.datetime.now(datetime.UTC)
 
         if existing:
+            existing.user_id = pattern_user_id
             existing.counterparty_category = counterparty_category
             existing.expected_amount = expected_amount
             existing.amount_tolerance = amount_tolerance
@@ -193,6 +207,7 @@ def detect_and_upsert(session: Session) -> dict[str, int]:
             updated += 1
         else:
             pattern = RecurringPattern(
+                user_id=pattern_user_id,
                 counterparty=counterparty,
                 counterparty_category=counterparty_category,
                 direction=direction,

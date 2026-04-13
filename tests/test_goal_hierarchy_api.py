@@ -166,7 +166,7 @@ class TestGoalsCrudHierarchy:
             sensitivity_to_returns="LOW",
         )
         assert g["pyramid_id"] == "S4"
-        assert g["tier"] == "STRATEGY"
+        assert g["tier"] == "L2"  # STRATEGY normalised to L2 on write
         assert g["time_horizon"] == "ANNUAL"
         assert g["funding_mode"] == "ACCUMULATION"
         assert g["activation_status"] == "ACTIVE"
@@ -174,6 +174,31 @@ class TestGoalsCrudHierarchy:
         assert g["allocation_priority"] == 1
         assert g["interruptible"] is False
         assert g["sensitivity_to_returns"] == "LOW"
+
+    def test_create_goal_with_v2_simulation_fields(self, client):
+        """POST /api/goals persists goal_class, recurrence, inflation, subtype (Sub-Plan A)."""
+        g = _create_goal(
+            client,
+            name="Loan EMI",
+            goal_type="DEBT_PAYOFF",
+            goal_class="RECURRING_CASH_FLOW",
+            recurrence_amount=55000,
+            recurrence_frequency="MONTHLY",
+            recurrence_start="2026-05-01",
+            goal_specific_inflation_rate=6.0,
+            expected_return_rate=10.0,
+            starting_balance=10000,
+            goal_subtype="LOAN_PAYOFF",
+        )
+        assert g["goal_class"] == "RECURRING_CASH_FLOW"
+        assert g["recurrence_amount"] == 55000
+        assert g["recurrence_frequency"] == "MONTHLY"
+        assert g["recurrence_start"] == "2026-05-01"
+        assert g["goal_specific_inflation_rate"] == 6.0
+        assert g["expected_return_rate"] == 10.0
+        assert g["starting_balance"] == 10000
+        assert g["goal_subtype"] == "LOAN_PAYOFF"
+        assert g["system_priority_score"] is None
 
     def test_create_goal_with_valid_activation_condition(self, client):
         """An activation_condition using valid DSL is accepted and stored."""
@@ -208,6 +233,32 @@ class TestGoalsCrudHierarchy:
         resp = client.post("/api/goals", json={**_GOAL_BASE, "activation_status": "ZOMBIE"})
         assert resp.status_code == 400
 
+    def test_second_investment_goal_uses_unlinked_chart_key(self, client):
+        """Only one INVESTMENT goal may use investment_net; the next is stored with chart_key None."""
+        r1 = client.post(
+            "/api/goals",
+            json={
+                "name": "First investment",
+                "goal_type": "INVESTMENT",
+                "target_amount": 100000,
+                "chart_key": "investment_net",
+            },
+        )
+        assert r1.status_code == 201, r1.text
+        assert r1.json()["chart_key"] == "investment_net"
+
+        r2 = client.post(
+            "/api/goals",
+            json={
+                "name": "House — down payment",
+                "goal_type": "INVESTMENT",
+                "target_amount": 500000,
+                "chart_key": "investment_net",
+            },
+        )
+        assert r2.status_code == 201, r2.text
+        assert r2.json()["chart_key"] is None
+
     def test_pyramid_id_uniqueness_enforced(self, client):
         """Two goals cannot share the same pyramid_id for the same user."""
         _create_goal(client, pyramid_id="V1")
@@ -216,13 +267,13 @@ class TestGoalsCrudHierarchy:
         assert "pyramid_id" in resp.json()["detail"].lower() or "already" in resp.json()["detail"].lower()
 
     def test_list_goals_filter_by_tier(self, client):
-        """GET /api/goals?tier=VISION returns only Vision-tier goals."""
-        _create_goal(client, tier="VISION", name="Vision goal")
-        _create_goal(client, tier="STRATEGY", name="Strategy goal")
-        resp = client.get("/api/goals?tier=VISION")
+        """GET /api/goals?tier=L1 returns only L1-tier goals."""
+        _create_goal(client, tier="L1", name="Top goal")
+        _create_goal(client, tier="L2", name="Next goal")
+        resp = client.get("/api/goals?tier=L1")
         assert resp.status_code == 200
         goals = resp.json()
-        assert all(g["tier"] == "VISION" for g in goals)
+        assert all(g["tier"] == "L1" for g in goals)
         assert len(goals) == 1
 
     def test_list_goals_filter_by_activation_status(self, client):
@@ -439,20 +490,20 @@ class TestGoalTreeEndpoints:
     # ── /tree ─────────────────────────────────────────────────────────────
 
     def test_tree_returns_tier_buckets(self, client):
-        """GET /api/goals/tree returns vision/strategy/tactic/operational/untiered + links."""
+        """GET /api/goals/tree returns l1–l4/untiered + links."""
         _create_goal(client, name="V1 Goal", tier="VISION", pyramid_id="V1")
         _create_goal(client, name="S1 Goal", tier="STRATEGY", pyramid_id="S1")
 
         resp = client.get("/api/goals/tree")
         assert resp.status_code == 200
         tree = resp.json()
-        assert "vision" in tree
-        assert "strategy" in tree
-        assert "tactic" in tree
-        assert "operational" in tree
+        assert "l1" in tree
+        assert "l2" in tree
+        assert "l3" in tree
+        assert "l4" in tree
         assert "links" in tree
-        assert len(tree["vision"]) == 1
-        assert len(tree["strategy"]) == 1
+        assert len(tree["l1"]) == 1
+        assert len(tree["l2"]) == 1
 
     def test_tree_includes_links(self, client):
         """Links between goals appear in the tree's 'links' list."""
@@ -474,8 +525,8 @@ class TestGoalTreeEndpoints:
         assert resp.status_code == 200
         tree = resp.json()
         all_goals = (
-            tree["vision"] + tree["strategy"] +
-            tree["tactic"] + tree["operational"] + tree["untiered"]
+            tree["l1"] + tree["l2"] +
+            tree["l3"] + tree["l4"] + tree["untiered"]
         )
         assert all_goals == []  # other_user has no goals
 
@@ -485,8 +536,8 @@ class TestGoalTreeEndpoints:
         assert resp.status_code == 200
         tree = resp.json()
         all_goals = (
-            tree["vision"] + tree["strategy"] +
-            tree["tactic"] + tree["operational"] + tree["untiered"]
+            tree["l1"] + tree["l2"] +
+            tree["l3"] + tree["l4"] + tree["untiered"]
         )
         assert all_goals == []
 

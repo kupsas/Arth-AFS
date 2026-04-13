@@ -11,6 +11,7 @@ Tables:
   - RecurringPattern  — auto-detected recurring transaction patterns (Phase 4.5c)
   - Goal              — user-defined financial goals (Phase 4.5d, hierarchy Phase B.0)
   - GoalLink          — parent/child causal links between goals (Phase B.0)
+  - InflationRate     — cached CPI / sector inflation (Goals architecture V2)
   - LifeEvent         — flags for activation DSL (event:...) (Phase B.0)
   - Holding           — portfolio position snapshot (Phase A.0)
   - InvestmentTransaction — broker/fund ledger rows (Phase A.0)
@@ -191,7 +192,7 @@ class ProcessedEmail(SQLModel, table=True):
 class RecurringPattern(SQLModel, table=True):
     """A recurring transaction pattern detected by the detection algorithm.
 
-    One row per unique (counterparty, direction, frequency) combination.
+    One row per unique (user_id, counterparty, direction, frequency) combination.
     The algorithm runs a statistical analysis on transaction history to find
     groups with consistent intervals (std dev < 25% of median interval).
 
@@ -200,8 +201,20 @@ class RecurringPattern(SQLModel, table=True):
     """
 
     __tablename__ = "recurring_patterns"
+    __table_args__ = (
+        Index(
+            "uq_recurring_pattern_user_cp_dir_freq",
+            "user_id",
+            "counterparty",
+            "direction",
+            "frequency",
+            unique=True,
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
+
+    user_id: str = Field(default="sashank", index=True)  # "sashank" | "aditi" — inferred from txns
 
     counterparty: str = Field(index=True)
     counterparty_category: str | None = None
@@ -258,7 +271,7 @@ class Goal(SQLModel, table=True):
     investment_net, category:swiggy_food) so limits match chart filters.
 
     Phase B.0 — hierarchy / pyramid:
-      ``tier`` groups goals (VISION / STRATEGY / TACTIC / OPERATIONAL).
+      ``tier`` groups goals (L1 / L2 / L3 / L4; legacy VISION / STRATEGY / TACTIC / OPERATIONAL).
       ``activation_status`` is lifecycle (PENDING / ACTIVE / COMPLETED / PAUSED), separate
       from ``status`` which remains progress (ON_TRACK / AT_RISK / …).
       ``pyramid_id`` is a short stable id (e.g. V1, S4) unique per ``user_id`` for DSL refs.
@@ -312,7 +325,7 @@ class Goal(SQLModel, table=True):
         default=None,
         index=True,
         max_length=32,
-        description="VISION | STRATEGY | TACTIC | OPERATIONAL",
+        description="L1 | L2 | L3 | L4 (legacy: VISION | STRATEGY | TACTIC | OPERATIONAL)",
     )
     time_horizon: str | None = Field(
         default=None,
@@ -356,6 +369,57 @@ class Goal(SQLModel, table=True):
         description="LOW | MEDIUM | HIGH",
     )
 
+    # ── Goals architecture V2 (simulation / surplus / priority) ─────────
+    goal_class: str | None = Field(
+        default=None,
+        max_length=32,
+        description="POINT_IN_TIME | RECURRING_CASH_FLOW | GROWTH",
+    )
+    recurrence_amount: float | None = Field(
+        default=None,
+        ge=0,
+        description="Amount per recurrence period (e.g. EMI per month).",
+    )
+    recurrence_frequency: str | None = Field(
+        default=None,
+        max_length=16,
+        description="MONTHLY | QUARTERLY | ANNUAL",
+    )
+    recurrence_start: datetime.date | None = Field(
+        default=None,
+        description="When recurring payments begin.",
+    )
+    recurrence_end: datetime.date | None = Field(
+        default=None,
+        description="When recurring payments end (NULL = ongoing).",
+    )
+    goal_specific_inflation_rate: float | None = Field(
+        default=None,
+        ge=0,
+        le=50,
+        description="Annual inflation % for this goal's cost; NULL = use general CPI.",
+    )
+    expected_return_rate: float | None = Field(
+        default=None,
+        ge=0,
+        le=50,
+        description="Expected annual return % for this goal's horizon.",
+    )
+    starting_balance: float | None = Field(
+        default=None,
+        ge=0,
+        description="Amount already saved toward this goal.",
+    )
+    system_priority_score: float | None = Field(
+        default=None,
+        description="Computed priority 0–100; higher = fund first (Sub-Plan E).",
+    )
+    goal_subtype: str | None = Field(
+        default=None,
+        max_length=64,
+        description="HOME_PURCHASE | VEHICLE | WEDDING | … | CUSTOM",
+    )
+
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )
@@ -397,6 +461,27 @@ class GoalLink(SQLModel, table=True):
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# InflationRate — cached CPI / sector inflation (Sub-Plan A / F)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class InflationRate(SQLModel, table=True):
+    """Cached inflation: one row per category, or for ``CPI_GENERAL`` one row per ``YYYY-MM`` (IMF monthly YoY)."""
+
+    __tablename__ = "inflation_rates"
+
+    id: int | None = Field(default=None, primary_key=True)
+    category: str = Field(index=True, max_length=64)
+    rate: float
+    source: str = Field(max_length=128)
+    period: str = Field(max_length=32)
+    fetched_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+    user_id: str = Field(default="system", index=True)
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -507,6 +592,11 @@ class Holding(SQLModel, table=True):
     market_cap_class: str | None = None  # LARGE_CAP | MID_CAP | SMALL_CAP
     fund_category: str | None = None  # SEBI / AMFI bucket, e.g. "Equity Scheme - Large Cap Fund"
     fund_house: str | None = None  # AMC name, e.g. "SBI Mutual Fund"
+
+    earliest_liquidity_date: datetime.date | None = Field(
+        default=None,
+        description="Earliest date value becomes accessible (Sub-Plan C). NULL = unknown.",
+    )
 
     user_id: str = Field(default="sashank", index=True)
     is_active: bool = Field(default=True, index=True)

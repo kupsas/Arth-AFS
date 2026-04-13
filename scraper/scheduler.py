@@ -7,6 +7,8 @@ Responsibilities:
   - Run **daily price refresh** at **18:30 Asia/Kolkata** (after Indian cash
     market close): NSE/AMFI/yfinance via ``refresh_all_prices`` (Phase A.4.1).
     This job is **always** scheduled so portfolio marks work without Gmail.
+  - After prices commit, run **holding liquidity refresh** (Sub-Plan C): updates
+    stored ``earliest_liquidity_date`` for all users so T+2 sleeves track the calendar.
   - Provide start / stop / trigger / reschedule / status controls used by
     the /api/scraper/* endpoints (Step 8)
   - If Gmail hasn't been authenticated yet, the **email** job is omitted;
@@ -30,6 +32,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import os
 import threading
 from zoneinfo import ZoneInfo
 
@@ -38,9 +41,11 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlmodel import Session
 
 from api.database import get_engine
+from api.services.inflation_service import sync_imf_cpi_history
 from pipeline.config import LLM_MODEL  # noqa: F401 — imported for context; not used directly here
 from scraper.config import GMAIL_TOKEN_PATH, POLL_INTERVAL_MINUTES
 from scraper.gmail_client import GmailClient, GmailReauthRequiredError
+from api.services.liquidity_service import refresh_all_users_liquidity_dates
 from api.services.price_feed import (
     backfill_nse_portfolio_gaps,
     refresh_all_prices,
@@ -222,6 +227,20 @@ def _run_daily_price_job() -> None:
             refresh_summary = refresh_all_prices(session)
             session.commit()
 
+        # Sub-Plan C — equity/MF T+2 dates track calendar days; cheap, no network.
+        try:
+            with Session(get_engine()) as liq_session:
+                liq_result = refresh_all_users_liquidity_dates(liq_session)
+                liq_session.commit()
+            logger.info(
+                "Daily liquidity refresh — users=%d, updated_rows=%d, unchanged_rows=%d",
+                liq_result.user_count,
+                liq_result.total_updated,
+                liq_result.total_unchanged,
+            )
+        except Exception:
+            logger.exception("Daily liquidity refresh failed — will retry on next schedule")
+
         now = datetime.datetime.now(datetime.timezone.utc)
         with _price_status_lock:
             _price_last_run_at = now
@@ -248,6 +267,26 @@ def _run_daily_price_job() -> None:
     finally:
         with _price_status_lock:
             _is_price_job_running = False
+
+
+def _run_inflation_sync_job() -> None:
+    """Refresh IMF India CPI monthly YoY rows in ``inflation_rates`` (weekly / manual)."""
+    if os.getenv("INFLATION_DISABLE_IMF", "").strip().lower() in ("1", "true", "yes"):
+        logger.debug("INFLATION_DISABLE_IMF — skipping scheduled inflation sync")
+        return
+    try:
+        with Session(get_engine()) as session:
+            summary = sync_imf_cpi_history(session)
+        if summary.get("ok"):
+            logger.info(
+                "Scheduled inflation sync OK — months_written=%s latest_period=%s",
+                summary.get("months_written"),
+                summary.get("latest_period"),
+            )
+        else:
+            logger.warning("Scheduled inflation sync incomplete: %s", summary)
+    except Exception:
+        logger.exception("Scheduled inflation sync failed")
 
 
 def _ensure_email_scrape_job() -> None:
@@ -296,6 +335,17 @@ def start_scheduler(interval_minutes: int = POLL_INTERVAL_MINUTES) -> None:
         misfire_grace_time=_DAILY_PRICE_MISFIRE_GRACE_SEC,
         coalesce=True,
     )
+    # Sub-Plan F — keep CPI_GENERAL monthly history fresh without hitting IMF on every request.
+    _scheduler.add_job(
+        _run_inflation_sync_job,
+        trigger=CronTrigger(
+            day_of_week="sun", hour=7, minute=0, timezone=_DAILY_PRICE_TZ
+        ),
+        id="weekly_inflation",
+        replace_existing=True,
+        misfire_grace_time=_DAILY_PRICE_MISFIRE_GRACE_SEC,
+        coalesce=True,
+    )
 
     if GMAIL_TOKEN_PATH.exists():
         _scheduler.add_job(
@@ -316,7 +366,8 @@ def start_scheduler(interval_minutes: int = POLL_INTERVAL_MINUTES) -> None:
 
     _scheduler.start()
     logger.info(
-        "Scheduler started — daily prices 18:30 IST; email poll every %d min (%s)",
+        "Scheduler started — daily prices 18:30 IST; weekly inflation Sun 07:00 IST; "
+        "email poll every %d min (%s)",
         interval_minutes,
         "on" if GMAIL_TOKEN_PATH.exists() else "off until OAuth",
     )

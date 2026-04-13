@@ -373,7 +373,16 @@ export type ProgressCadence = "MONTHLY" | "ANNUAL";
 /**
  * Goal pyramid tier (Phase B). Stored uppercase on the API; list filter uses same values.
  */
-export type GoalTier = "VISION" | "STRATEGY" | "TACTIC" | "OPERATIONAL";
+/** L1–L4 replace legacy VISION…OPERATIONAL; API may still accept legacy on write. */
+export type GoalTier =
+  | "L1"
+  | "L2"
+  | "L3"
+  | "L4"
+  | "VISION"
+  | "STRATEGY"
+  | "TACTIC"
+  | "OPERATIONAL";
 
 export type GoalTimeHorizon =
   | "MONTHLY"
@@ -397,6 +406,15 @@ export type GoalActivationStatus = "PENDING" | "ACTIVE" | "COMPLETED" | "PAUSED"
 export type SensitivityToReturns = "LOW" | "MEDIUM" | "HIGH";
 
 export type GoalLinkType = "DECOMPOSES_INTO" | "DEPENDS_ON" | "CONTRIBUTES_TO";
+
+/** From `resolve_goal_inflation` — category vs headline CPI EMA. */
+export interface GoalInflationResolution {
+  annual_pct: number;
+  category?: string | null;
+  method?: string;
+  label?: string;
+  detail?: string;
+}
 
 /** Mirrors the goal dict returned by api/routes/goals.py */
 export interface Goal {
@@ -427,6 +445,19 @@ export interface Goal {
   allocation_priority?: number | null;
   interruptible?: boolean | null;
   sensitivity_to_returns?: string | null;
+  /** Goals architecture V2 — optional until backfilled */
+  goal_class?: string | null;
+  recurrence_amount?: number | null;
+  recurrence_frequency?: string | null;
+  recurrence_start?: string | null;
+  recurrence_end?: string | null;
+  goal_specific_inflation_rate?: number | null;
+  expected_return_rate?: number | null;
+  starting_balance?: number | null;
+  system_priority_score?: number | null;
+  goal_subtype?: string | null;
+  /** Present when goal was loaded with session (GET list/detail). */
+  inflation_resolution?: GoalInflationResolution | null;
   // Computed progress (live from DB)
   computed_current_value: number;
   computed_percentage: number;     // 0–100+
@@ -458,6 +489,15 @@ export interface GoalCreate {
   allocation_priority?: number | null;
   interruptible?: boolean | null;
   sensitivity_to_returns?: string | null;
+  goal_class?: string | null;
+  recurrence_amount?: number | null;
+  recurrence_frequency?: string | null;
+  recurrence_start?: string | null;
+  recurrence_end?: string | null;
+  goal_specific_inflation_rate?: number | null;
+  expected_return_rate?: number | null;
+  starting_balance?: number | null;
+  goal_subtype?: string | null;
 }
 
 export interface GoalUpdate {
@@ -482,6 +522,214 @@ export interface GoalUpdate {
   allocation_priority?: number | null;
   interruptible?: boolean | null;
   sensitivity_to_returns?: string | null;
+  /** Goals architecture V2 — mirrors api/routes/goals.py GoalUpdate */
+  goal_class?: string | null;
+  recurrence_amount?: number | null;
+  recurrence_frequency?: string | null;
+  recurrence_start?: string | null;
+  recurrence_end?: string | null;
+  goal_specific_inflation_rate?: number | null;
+  expected_return_rate?: number | null;
+  starting_balance?: number | null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Simulation sandbox (Sub-Plan H) — mirrors api/services/simulation.py
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** POINT_IN_TIME | RECURRING_CASH_FLOW | GROWTH */
+export type SimulationGoalClass =
+  | "POINT_IN_TIME"
+  | "RECURRING_CASH_FLOW"
+  | "GROWTH";
+
+/** ON_TRACK | AT_RISK | BEHIND | ACHIEVED | IMPOSSIBLE */
+export type GoalSimStatus =
+  | "ON_TRACK"
+  | "AT_RISK"
+  | "BEHIND"
+  | "ACHIEVED"
+  | "IMPOSSIBLE";
+
+export interface OneTimeEvent {
+  amount: number;
+  date: string;
+  description?: string;
+}
+
+/** Sandbox goal row — mirrors SimulationGoal (JSON uses ISO dates). */
+export interface SimulationGoal {
+  id?: number | null;
+  /**
+   * Stable React list key for hypothetical rows (`id == null`). Never sent to the engine
+   * (API ignores extra fields); avoids remounting the row when `name` or sort order changes.
+   */
+  client_row_id?: string;
+  name: string;
+  goal_class: SimulationGoalClass | string;
+  target_amount?: number | null;
+  target_date?: string | null;
+  starting_balance?: number;
+  allocation_priority?: number;
+  expected_return_rate?: number;
+  /** Annual %; null → resolve from goal_subtype + map (same as API) */
+  inflation_rate?: number | null;
+  inflation_category?: string | null;
+  inflation_method?: string | null;
+  inflation_label?: string | null;
+  recurrence_amount?: number | null;
+  recurrence_frequency?: string | null;
+  recurrence_start?: string | null;
+  recurrence_end?: string | null;
+  goal_subtype?: string | null;
+}
+
+export interface SimulationParams {
+  goals: SimulationGoal[];
+  monthly_surplus: number;
+  salary_growth_rate?: number;
+  general_inflation_rate?: number;
+  simulation_months?: number;
+  one_time_inflows?: OneTimeEvent[];
+  one_time_outflows?: OneTimeEvent[];
+  as_of_date?: string | null;
+}
+
+export interface MonthlySnapshot {
+  month: string;
+  cumulative_value: number;
+  monthly_contribution: number;
+  monthly_return: number;
+  target_at_month?: number | null;
+  /** Engine amortized need this month (PIT dynamic PMT, recurring monthly need, GROWTH 0). */
+  monthly_need?: number | null;
+}
+
+export interface GoalProjection {
+  goal_id: number | null;
+  goal_name: string;
+  monthly_allocation: number;
+  projected_completion_date: string | null;
+  status: GoalSimStatus;
+  projected_final_amount: number;
+  shortfall: number;
+  monthly_trajectory: MonthlySnapshot[];
+  /** RECURRING: billing periods with positive need (chunked by recurrence frequency). */
+  periods_total?: number | null;
+  /** RECURRING: periods where contribution sum >= 95% of need sum. */
+  periods_funded?: number | null;
+  /** RECURRING: periods_funded / periods_total. */
+  funding_rate?: number | null;
+  /** RECURRING: sum of monthly_contribution over the trajectory. */
+  total_contributed?: number | null;
+  /** RECURRING: sum of monthly_need over the trajectory. */
+  total_needed?: number | null;
+}
+
+export interface CascadeEvent {
+  month: string;
+  completed_goal: string;
+  freed_surplus: number;
+  beneficiary_goals: string[];
+}
+
+export interface MonthlyNetWorth {
+  month: string;
+  total_value: number;
+  total_contributions: number;
+  total_returns: number;
+  /** Investable surplus for that month (before allocation); equals sum of goal rows + unallocated. */
+  monthly_surplus_pool?: number;
+  /** Surplus not placed on any goal after allocation rules. */
+  unallocated_surplus?: number;
+}
+
+export interface SimulationResult {
+  projections: GoalProjection[];
+  surplus_allocation: Record<string, number>;
+  total_surplus_allocated: number;
+  unallocated_surplus: number;
+  cascade_events: CascadeEvent[];
+  net_worth_projection: MonthlyNetWorth[];
+  warnings: string[];
+}
+
+export interface GoalDelta {
+  goal_name: string;
+  base_completion?: string | null;
+  variant_completion?: string | null;
+  base_status?: GoalSimStatus | null;
+  variant_status?: GoalSimStatus | null;
+  months_shifted?: number | null;
+}
+
+export interface ScenarioComparison {
+  scenario_name: string;
+  changes_from_base: Record<string, unknown>;
+  result: SimulationResult;
+  deltas: GoalDelta[];
+}
+
+/** GET /api/surplus — mirrors SurplusResult */
+export interface SurplusMonthDetail {
+  month: string;
+  income: number;
+  expense_category_filtered: number;
+  expense_need: number;
+  expense_want: number;
+  surplus_path_a: number;
+  surplus_path_b: number;
+}
+
+export interface SurplusResult {
+  user_id: string;
+  monthly_income: number;
+  monthly_expense_baseline: number;
+  monthly_surplus: number;
+  surplus_path_a: number;
+  surplus_path_b: number;
+  computation_method: string;
+  months_analyzed: number;
+  month_details: SurplusMonthDetail[];
+  recurring_income_patterns: Record<string, unknown>[];
+  warnings: string[];
+}
+
+/** POST /api/simulate/from-current */
+export interface FromCurrentResponse {
+  params: SimulationParams;
+  meta: Record<string, unknown>;
+  result: SimulationResult;
+}
+
+export interface PriorityBreakdown {
+  time_pressure: number;
+  consequence_severity: number;
+  feasibility_urgency: number;
+  asset_alignment: number;
+}
+
+export interface GoalPriorityRow {
+  goal_id: number;
+  goal_name: string;
+  priority_score: number;
+  suggested_rank: number;
+  breakdown: PriorityBreakdown;
+  explanation: string;
+  needs_revision: boolean;
+}
+
+export interface PriorityResult {
+  user_id: string;
+  priorities: GoalPriorityRow[];
+  monthly_surplus: number;
+  active_goal_count: number;
+  computed_at: string;
+}
+
+export interface GoalReorderItem {
+  goal_id: number;
+  allocation_priority: number;
 }
 
 /** One edge in the goal pyramid — mirrors api/routes/goal_links.py */
@@ -505,14 +753,14 @@ export interface GoalLinkCreate {
 }
 
 /**
- * GET /api/goals/tree — goals grouped by tier (lowercase keys) plus all links.
+ * GET /api/goals/tree — goals grouped by tier bucket (l1…l4) plus untiered and links.
  * Each goal includes the same fields as GET /api/goals (including computed progress).
  */
 export interface GoalTree {
-  vision: Goal[];
-  strategy: Goal[];
-  tactic: Goal[];
-  operational: Goal[];
+  l1: Goal[];
+  l2: Goal[];
+  l3: Goal[];
+  l4: Goal[];
   untiered: Goal[];
   links: GoalLink[];
 }
@@ -761,6 +1009,8 @@ export interface Holding {
   market_cap_class?: string | null;
   fund_category?: string | null;
   fund_house?: string | null;
+  /** Earliest date value is accessible (Goals V2 / liquidity). */
+  earliest_liquidity_date?: string | null;
   user_id: string;
   is_active: boolean;
   notes: string | null;
@@ -810,6 +1060,7 @@ export interface HoldingValueUpdate {
   current_value?: number | null;
   last_valued_date?: string | null;
   notes?: string | null;
+  earliest_liquidity_date?: string | null;
 }
 
 /** Snapshot inside GET /api/holdings/summary → ``net_worth``. */
