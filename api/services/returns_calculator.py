@@ -30,6 +30,7 @@ from scipy.optimize import newton
 from sqlmodel import Session, col, select
 
 from api.models import Holding, InvestmentTransaction
+from api.services.ppf_ledger_basis import ppf_net_contributions_from_ledger
 from pipeline.models import AssetClass, CompoundingFrequency, InvestmentTxnType, ValuationMethod
 
 logger = logging.getLogger(__name__)
@@ -156,10 +157,14 @@ def compute_fixed_return(
     holding: Holding,
     *,
     as_of_date: datetime.date | None = None,
+    principal_override: float | None = None,
 ) -> dict[str, Any]:
     """PPF/FD-style metrics from principal, quoted rate, and compounding."""
     as_of = as_of_date or _utc_today()
-    principal = float(holding.principal_amount or 0.0)
+    if principal_override is not None and principal_override > 0:
+        principal = float(principal_override)
+    else:
+        principal = float(holding.principal_amount or 0.0)
     r = _interest_rate_decimal(holding.interest_rate)
     m = _compounding_periods_per_year(holding.compounding_frequency)
 
@@ -322,7 +327,12 @@ def compute_returns(
         AssetClass.PPF.value,
         AssetClass.FD.value,
     ):
-        fixed = compute_fixed_return(holding, as_of_date=as_of)
+        principal_ov: float | None = None
+        if ac == AssetClass.PPF.value and holding.id is not None:
+            principal_ov = ppf_net_contributions_from_ledger(session, holding.id)
+        fixed = compute_fixed_return(
+            holding, as_of_date=as_of, principal_override=principal_ov
+        )
         ann = fixed.get("implied_cagr")
         if ann is None:
             ann = fixed.get("stated_annual_rate")

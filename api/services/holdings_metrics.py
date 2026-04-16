@@ -17,7 +17,9 @@ from sqlmodel import Session, col, select
 from api.models import Holding
 from api.services.historical_portfolio import earliest_user_history_date
 from api.services.net_worth import holding_value
+from api.services.ppf_ledger_basis import ppf_net_contributions_from_ledger
 from api.services.returns_calculator import compute_returns
+from pipeline.models import AssetClass
 
 # Batch XIRR: cache keyed by (user_id, fingerprint). Invalidates when any active
 # holding's updated_at changes (e.g. import, price refresh updating the row).
@@ -34,12 +36,18 @@ def _utc_today() -> datetime.date:
     return datetime.datetime.now(datetime.UTC).date()
 
 
-def holding_cost_basis(h: Holding) -> float | None:
-    """Deployed capital from the holding row, or None if we cannot infer it."""
+def holding_cost_basis(session: Session, h: Holding) -> float | None:
+    """Deployed capital: market rows use qty×avg; PPF uses linked ledger when available."""
     if h.quantity is not None and h.average_cost_per_unit is not None:
         q, ac = float(h.quantity), float(h.average_cost_per_unit)
         if q >= 0 and ac >= 0:
             return q * ac
+    # PPF: ``principal_amount`` is often stale (parser snapshot) while ``current_value``
+    # is synced from the full ledger — prefer net contributions from linked txns.
+    if h.asset_class == AssetClass.PPF.value and h.id is not None:
+        from_ledger = ppf_net_contributions_from_ledger(session, h.id)
+        if from_ledger is not None:
+            return from_ledger
     if h.principal_amount is not None and float(h.principal_amount) > 0:
         return float(h.principal_amount)
     return None
@@ -99,7 +107,7 @@ def compute_batch_returns(session: Session, user_id: str) -> dict[int, dict[str,
 def overall_gain_for_holding(session: Session, h: Holding) -> tuple[float | None, float | None]:
     """(overall_gain, overall_gain_pct) using cost basis vs economic current value."""
     cv = holding_value(session, h, None)
-    cb = holding_cost_basis(h)
+    cb = holding_cost_basis(session, h)
     if cb is None:
         return None, None
     gain = cv - cb
@@ -141,7 +149,7 @@ def asset_class_breakdown_and_totals(
         cv = holding_value(session, h, None)
         total_cv += cv
         cv_by[ac] += cv
-        cb = holding_cost_basis(h)
+        cb = holding_cost_basis(session, h)
         if cb is not None:
             total_cb_known += cb
             inv_by[ac] += cb

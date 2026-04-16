@@ -19,6 +19,7 @@ from sqlmodel import Session, col, select
 from api.models import Holding, InvestmentTransaction
 from api.services.holding_enrichment import enrich_single_equity_classification
 from api.services.liquidity_service import compute_earliest_liquidity_date
+from api.services.ppf_ledger_basis import ppf_net_contributions_from_ledger
 from api.services.price_feed import canonical_nse_symbol
 from pipeline.investment_txn_linking import extract_amfi_scheme_code
 from pipeline.models import AssetClass, InvestmentTxnType, LiquidityClass, ValuationMethod
@@ -157,6 +158,11 @@ def sync_holding_from_transactions(session: Session, holding_id: int) -> dict[st
     if h.asset_class == AssetClass.PPF.value:
         balance = _compute_ppf_balance(txns)
         h.current_value = round(balance, 2)
+        # Keep ``principal_amount`` aligned with contributions so APIs / UI that read
+        # the row (and ``holding_cost_basis`` fallbacks) match the ledger.
+        net_contrib = ppf_net_contributions_from_ledger(session, holding_id)
+        if net_contrib is not None:
+            h.principal_amount = net_contrib
         h.is_active = balance > 1e-6
         session.add(h)
         return {

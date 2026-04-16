@@ -34,6 +34,7 @@ from api.services.nps_exit_projection import (
     nps_projection_annual_rate_percent,
     parse_subscriber_dob_from_env,
 )
+from api.services.ppf_ledger_basis import ppf_net_contributions_from_ledger
 from api.services.ppf_maturity import earliest_ppf_contribution_date, effective_ppf_maturity_date
 from api.services.ppf_projection import ppf_projected_balance_at_maturity
 from api.services.ppf_reference_rate import get_ppf_reference_rate_for_projection
@@ -293,6 +294,12 @@ def _holding_out_with_metrics(
                 "ppf_projection_rate_note": rate_note,
             }
         )
+        # Expose ledger-based contributions as ``principal_amount`` so clients that
+        # only read this field (e.g. portfolio "Invested") match server gain math.
+        if h.id is not None:
+            net_pb = ppf_net_contributions_from_ledger(session, h.id)
+            if net_pb is not None:
+                extra["principal_amount"] = net_pb
 
     if h.asset_class == AssetClass.NPS.value:
         dob = parse_subscriber_dob_from_env()
