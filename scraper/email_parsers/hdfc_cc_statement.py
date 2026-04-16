@@ -28,8 +28,8 @@ import pipeline.config  # noqa: F401 — load ``.env`` before ``os.getenv``
 from pipeline.models import ParsedTransaction
 from pipeline.parsers.hdfc_cc_pdf import HDFCCreditCardPdfParser
 from scraper.email_parsers.base_statement import BaseStatementEmailParser
+from scraper.pdf_passwords import HDFC_CC_STATEMENT_PASSWORD_KEYS, resolve_pdf_password_chain
 from scraper.pdf_utils import decrypt_pdf
-from scraper.secrets_context import resolve_secret_env
 
 logger = logging.getLogger(__name__)
 
@@ -95,12 +95,11 @@ class HDFCCCStatementEmailParser(BaseStatementEmailParser):
         email_sender: str = "",
         email_subject: str = "",
     ) -> list[ParsedTransaction]:
-        password = resolve_secret_env("HDFC_CC_STATEMENT_PASSWORD") or resolve_secret_env(
-            "HDFC_STATEMENT_PASSWORD", ""
-        )
+        password = resolve_pdf_password_chain(*HDFC_CC_STATEMENT_PASSWORD_KEYS)
         if not password:
             logger.error(
-                "HDFC_CC_STATEMENT_PASSWORD is not set — cannot decrypt HDFC CC PDF."
+                "HDFC CC PDF password not set — configure one of: %s",
+                ", ".join(HDFC_CC_STATEMENT_PASSWORD_KEYS),
             )
             return []
 

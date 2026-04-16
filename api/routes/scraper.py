@@ -60,6 +60,7 @@ class BackfillRequest(BaseModel):
     after: datetime.date
     before: datetime.date
     sender_emails: list[str] | None = None
+    gmail_query: str | None = None
     max_messages: int | None = None
     dry_run: bool = False
 
@@ -164,6 +165,12 @@ async def scraper_backfill(
             detail="Gmail is not authenticated. Complete OAuth first via POST /api/scraper/oauth/init.",
         )
 
+    if body.gmail_query and body.sender_emails:
+        raise HTTPException(
+            status_code=400,
+            detail="Use either gmail_query or sender_emails, not both.",
+        )
+
     def _run() -> dict:
         with Session(get_engine()) as s:
             result = run_historical_backfill(
@@ -172,6 +179,7 @@ async def scraper_backfill(
                 before=body.before,
                 user_id=current_user,
                 sender_emails=body.sender_emails,
+                gmail_query=body.gmail_query,
                 max_messages=body.max_messages,
                 dry_run=body.dry_run,
             )

@@ -44,7 +44,7 @@ cd dashboard && npm install && npm run dev
 # Dashboard → http://localhost:3000
 ```
 
-For Gmail email scraper setup, see [`scraper/README.md`](scraper/README.md).
+For Gmail email scraper setup, see [`scraper/README.md`](scraper/README.md). **Ingestion policy:** email scraping is primary; file pipeline and uploads are explicit fallbacks — details in [`docs/system-design/INGESTION_PATHS.md`](docs/system-design/INGESTION_PATHS.md).
 
 ---
 

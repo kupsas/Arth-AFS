@@ -48,6 +48,25 @@ from scraper.secrets_context import statement_secrets_context
 
 logger = logging.getLogger(__name__)
 
+# Compound Gmail queries (subject filters) for historical sweeps — used by
+# ``run_historical_backfill(gmail_query=...)`` and ``scripts/scrape_historical.py``.
+HISTORICAL_GMAIL_QUERY_PRESETS: dict[str, str] = {
+    "hdfc-combined-statement": (
+        "(from:hdfcbanksmartstatement@hdfcbank.net OR "
+        "from:hdfcbanksmartstatement@hdfcbank.bank.in) "
+        'subject:"HDFC Bank Combined Email Statement"'
+    ),
+    "hdfc-cc-statement": (
+        "(from:emailstatements.cards@hdfcbank.net OR "
+        "from:emailstatements.cards@hdfcbank.bank.in) "
+        'subject:"Credit Card Statement"'
+    ),
+    "icici-nse-trades": (
+        "(from:ebix@nse.co.in OR from:nseinvest@nse.co.in OR from:nse-direct@nse.co.in) "
+        '"Trades executed at NSE"'
+    ),
+}
+
 
 class _AttachmentEmailParser(Protocol):
     """Parsers with ``parse_type == "attachment"`` implement this (not :class:`BaseEmailParser` alone)."""
@@ -486,6 +505,7 @@ def run_historical_backfill(
     client: GmailClient | None = None,
     user_id: str | None = None,
     sender_emails: list[str] | None = None,
+    gmail_query: str | None = None,
     max_messages: int | None = None,
     dry_run: bool = False,
 ) -> ScrapeResult:
@@ -494,7 +514,19 @@ def run_historical_backfill(
     Uses the same parse → classify → :func:`pipeline.db_writer.write_to_db` path as
     live scraping, with explicit date bounds instead of incremental lookback.
     ``processed_emails`` still dedupes message IDs.
+
+    **Two modes:**
+
+    - **Per-sender (default):** one ``from:sender after:… before:…`` query per address
+      in config (or restrict with ``sender_emails``).
+    - **Custom query:** pass ``gmail_query`` (e.g. subject filters for HDFC combined
+      statements). Do not pass ``sender_emails`` together with ``gmail_query``.
+
+    Preset strings live in :data:`HISTORICAL_GMAIL_QUERY_PRESETS`.
     """
+    if gmail_query is not None and sender_emails is not None:
+        raise ValueError("Use either gmail_query or sender_emails, not both.")
+
     result = ScrapeResult()
     uid = (user_id or "").strip() or _default_scraper_user_id()
     bank = get_bank_senders_config(session, uid)
@@ -508,6 +540,76 @@ def run_historical_backfill(
         client.authenticate()
 
     already_done = _get_processed_ids(session)
+
+    # ── Mode: arbitrary Gmail query (subject filters, OR from: clauses, etc.) ─
+    if gmail_query is not None:
+        full_query = f"{gmail_query.strip()} after:{after_s} before:{before_s}"
+        logger.info("Historical backfill (custom query): %s", full_query[:200])
+        try:
+            messages = client.search_messages(
+                full_query,
+                paginate=True,
+                max_results_per_page=100,
+                max_total=max_messages,
+            )
+        except Exception as exc:
+            result.errors.append(f"Gmail API error: {exc}")
+            logger.error("%s", result.errors[-1])
+            return result
+
+        result.emails_found += len(messages)
+        new_messages = [m for m in messages if m.id not in already_done]
+        logger.info(
+            "   %d total, %d already processed, %d new to process",
+            len(messages),
+            len(messages) - len(new_messages),
+            len(new_messages),
+        )
+
+        for msg in new_messages:
+            sender_norm = _normalise_sender(msg.sender)
+            if dry_run:
+                result.emails_skipped += 1
+                already_done.add(msg.id)
+                continue
+            try:
+                status, txn_count = _process_email(
+                    msg,
+                    client=client,
+                    session=session,
+                    parser_registry=parser_registry,
+                    user_id=uid,
+                )
+                _record_email(session, msg, sender=sender_norm, status=status, txn_count=txn_count)
+                if status == "processed":
+                    result.emails_processed += 1
+                    result.txns_created += txn_count
+                else:
+                    result.emails_skipped += 1
+                already_done.add(msg.id)
+            except Exception as exc:
+                result.emails_failed += 1
+                result.errors.append(f"[{msg.id}] {exc}")
+                try:
+                    _record_email(
+                        session,
+                        msg,
+                        sender=sender_norm,
+                        status="failed",
+                        error_message=str(exc),
+                    )
+                    already_done.add(msg.id)
+                except Exception:
+                    pass
+
+        logger.info(
+            "Historical backfill (custom query) complete — processed: %d, skipped: %d, failed: %d, new txns: %d",
+            result.emails_processed,
+            result.emails_skipped,
+            result.emails_failed,
+            result.txns_created,
+        )
+        return result
 
     for raw_sender in senders:
         sender_norm = _normalise_sender(raw_sender)

@@ -123,7 +123,8 @@ The `scripts/` folder has many **one-off** maintenance tools. Read the top of ea
 | Script | Use when |
 |--------|-----------|
 | `backup_db.sh`, `com.arth.backup.plist` | Scheduled or manual SQLite backups |
-| `backfill_*` (`hdfc_cc_statement_emails`, `icici_direct_trade_emails`, `investment_txn_holding_ids`, `ppf_nps_cost_and_links`, …) | Backfill historical data after schema or parser changes |
+| `scrape_historical.py`, `POST /api/scraper/backfill` | **Preferred** Gmail historical import (date range + optional `--preset` / `gmail_query`) |
+| `backfill_*` (deprecated wrappers + `investment_txn_holding_ids`, `ppf_nps_cost_and_links`, …) | Legacy aliases; use `scrape_historical.py` for statement/trade email sweeps |
 | `validate_email_statement.py`, `validate_icici_direct_trade_email.py` | Validate a single email or PDF against parsers |
 | `diagnose_portfolio_prices.py`, `validate_price_sources.py` | Debug missing marks or bad symbols |
 | `enrich_holdings.py`, `sync_all_holdings.py` | Holdings enrichment / sync |
