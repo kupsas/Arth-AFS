@@ -314,6 +314,8 @@ def _apply_sqlite_patches() -> None:
 
         if not _column_exists(conn, "transactions", "classification_source"):
             conn.execute(text("ALTER TABLE transactions ADD COLUMN classification_source TEXT"))
+        if not _column_exists(conn, "transactions", "review_confidence"):
+            conn.execute(text("ALTER TABLE transactions ADD COLUMN review_confidence TEXT"))
 
 
 def _merge_starter_pack_for_all_users() -> None:
@@ -336,6 +338,66 @@ def _chmod_owner_rw_only(path: Path) -> None:
         pass
 
 
+def _seed_desktop_prereq_defaults() -> None:
+    """Seed app_users + scraper config from env / scraper.config when tables are empty."""
+    import bcrypt
+    from sqlmodel import Session, select
+
+    from api.models import AppUser, ScraperAccountMapping, ScraperBankSender
+    from scraper.config import BANK_SENDERS
+
+    try:
+        with Session(_engine) as session:
+            if session.exec(select(AppUser)).first() is None:
+                raw_user = (os.getenv("AUTH_USERNAME") or "sashank").strip()
+                raw_pw = (os.getenv("AUTH_PASSWORD") or "").strip()
+                if raw_pw:
+                    pw_hash = bcrypt.hashpw(
+                        raw_pw.encode("utf-8"),
+                        bcrypt.gensalt(rounds=12),
+                    ).decode("ascii")
+                    session.add(
+                        AppUser(
+                            username=raw_user,
+                            password_hash=pw_hash,
+                            setup_completed_at=None,
+                        )
+                    )
+                    session.commit()
+                    logger.info("Seeded default app_users row for %r", raw_user)
+
+            if session.exec(select(ScraperBankSender)).first() is None:
+                uid = (os.getenv("AUTH_USERNAME") or "sashank").strip()
+                for sender_email, cfg in BANK_SENDERS.items():
+                    pk = cfg.get("parser_key")
+                    session.add(
+                        ScraperBankSender(
+                            user_id=uid,
+                            sender_email=sender_email.strip().lower(),
+                            parser_key=str(pk) if pk else None,
+                            first_run_lookback_days=cfg.get("first_run_lookback_days"),
+                            enabled=True,
+                        )
+                    )
+                    accounts = cfg.get("accounts") or {}
+                    for last_4, acct in accounts.items():
+                        session.add(
+                            ScraperAccountMapping(
+                                user_id=uid,
+                                sender_email=sender_email.strip().lower(),
+                                last_4_digits=str(last_4),
+                                account_id=str(acct["account_id"]),
+                                source_key=str(acct["source_key"]),
+                            )
+                        )
+                session.commit()
+                logger.info(
+                    "Seeded scraper_bank_senders / scraper_account_mappings from scraper.config"
+                )
+    except Exception:
+        logger.exception("Desktop prereq seed skipped or failed")
+
+
 def init_db() -> None:
     """Create all tables that don't already exist.
 
@@ -348,6 +410,7 @@ def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     SQLModel.metadata.create_all(_engine)
     _apply_sqlite_patches()
+    _seed_desktop_prereq_defaults()
     _merge_starter_pack_for_all_users()
     # Phase A.5 — limit exposure of local secrets (SQLite file + Gmail OAuth token).
     _chmod_owner_rw_only(DB_PATH)

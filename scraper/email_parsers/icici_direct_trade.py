@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-import os
 from typing import ClassVar
 
 import pipeline.config  # noqa: F401 — load ``.env`` before ``os.getenv``
@@ -24,6 +23,7 @@ from pipeline.holding_parsers.icici_direct_contract_note import parse_icici_dire
 from pipeline.models import ParsedTransaction
 from scraper.email_parsers.base_statement import BaseStatementEmailParser
 from scraper.pdf_utils import decrypt_pdf
+from scraper.secrets_context import resolve_secret_env
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,9 @@ def classify_icici_direct_subject(subject: str) -> str | None:
 
 def _nse_trades_pdf_password() -> tuple[str, str]:
     """Password for NSE-originated trade PDFs and env var name for error messages."""
-    p = os.getenv("NSE_TRADES_EXECUTED_PASSWORD") or os.getenv("ICICI_DIRECT_TRADE_PASSWORD")
+    p = resolve_secret_env("NSE_TRADES_EXECUTED_PASSWORD") or resolve_secret_env(
+        "ICICI_DIRECT_TRADE_PASSWORD"
+    )
     return (p or "", "NSE_TRADES_EXECUTED_PASSWORD")
 
 

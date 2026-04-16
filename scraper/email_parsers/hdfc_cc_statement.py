@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-import os
 import re
 from typing import ClassVar
 
@@ -30,6 +29,7 @@ from pipeline.models import ParsedTransaction
 from pipeline.parsers.hdfc_cc_pdf import HDFCCreditCardPdfParser
 from scraper.email_parsers.base_statement import BaseStatementEmailParser
 from scraper.pdf_utils import decrypt_pdf
+from scraper.secrets_context import resolve_secret_env
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ class HDFCCCStatementEmailParser(BaseStatementEmailParser):
         email_sender: str = "",
         email_subject: str = "",
     ) -> list[ParsedTransaction]:
-        password = os.getenv("HDFC_CC_STATEMENT_PASSWORD") or os.getenv(
+        password = resolve_secret_env("HDFC_CC_STATEMENT_PASSWORD") or resolve_secret_env(
             "HDFC_STATEMENT_PASSWORD", ""
         )
         if not password:

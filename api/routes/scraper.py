@@ -27,9 +27,12 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from sqlmodel import Session, col, select
 
-from api.database import get_session
+from api.auth import get_current_user
+from api.database import get_engine, get_session
 from api.models import ProcessedEmail
-from scraper.config import BANK_SENDERS, GMAIL_TOKEN_PATH
+from scraper.config import GMAIL_TOKEN_PATH
+from scraper.config_loader import all_sender_emails, get_bank_senders_config
+from scraper.orchestrator import run_historical_backfill
 from scraper.scheduler import (
     get_status,
     note_gmail_reconnected,
@@ -49,6 +52,16 @@ router = APIRouter()
 class ScraperConfigUpdate(BaseModel):
     """Body for PATCH /config."""
     interval_minutes: int
+
+
+class BackfillRequest(BaseModel):
+    """Body for POST /backfill — historical Gmail sweep (DESKTOP_PREREQS item 4)."""
+
+    after: datetime.date
+    before: datetime.date
+    sender_emails: list[str] | None = None
+    max_messages: int | None = None
+    dry_run: bool = False
 
 
 class ProcessedEmailOut(BaseModel):
@@ -130,6 +143,51 @@ async def trigger_scrape():
         "txns_created":     result.txns_created,
         "errors":           result.errors,
     }
+
+
+# ─── POST /backfill ────────────────────────────────────────────────────────────
+
+
+@router.post("/backfill")
+async def scraper_backfill(
+    body: BackfillRequest,
+    current_user: str = Depends(get_current_user),
+):
+    """Historical Gmail import between two dates (exclusive ``before``).
+
+    Reuses the same parse → DB path as live scraping; ``processed_emails`` prevents
+    duplicates. Can be long-running — uses a thread pool like POST /trigger.
+    """
+    if not GMAIL_TOKEN_PATH.exists():
+        raise HTTPException(
+            status_code=503,
+            detail="Gmail is not authenticated. Complete OAuth first via POST /api/scraper/oauth/init.",
+        )
+
+    def _run() -> dict:
+        with Session(get_engine()) as s:
+            result = run_historical_backfill(
+                session=s,
+                after=body.after,
+                before=body.before,
+                user_id=current_user,
+                sender_emails=body.sender_emails,
+                max_messages=body.max_messages,
+                dry_run=body.dry_run,
+            )
+            return {
+                "emails_found": result.emails_found,
+                "emails_processed": result.emails_processed,
+                "emails_skipped": result.emails_skipped,
+                "emails_failed": result.emails_failed,
+                "txns_created": result.txns_created,
+                "errors": result.errors,
+            }
+
+    try:
+        return await run_in_threadpool(_run)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 # ─── POST /start ───────────────────────────────────────────────────────────────
@@ -402,20 +460,26 @@ _COVERAGE: list[dict] = [
 
 
 @router.get("/coverage")
-def email_coverage():
+def email_coverage(
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+):
     """Return the email alert coverage map.
 
     Shows which accounts have real-time email coverage, which transaction types
     are captured, and what remains statement-only.
 
     This is based on confirmed real-email discovery (Step 3a) — not assumptions.
+    ``configured_senders`` reflects DB-backed scraper config when present.
     """
     email_accounts = sum(1 for a in _COVERAGE if a["has_email_coverage"])
+    bank = get_bank_senders_config(session, current_user)
+    senders = all_sender_emails(bank)
     return {
         "summary": {
             "total_accounts": len(_COVERAGE),
             "accounts_with_email_coverage": email_accounts,
-            "configured_senders": list(BANK_SENDERS.keys()),
+            "configured_senders": senders,
         },
         "accounts": _COVERAGE,
     }

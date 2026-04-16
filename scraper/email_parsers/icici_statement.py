@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-import os
 import re
 from typing import ClassVar, Literal
 
@@ -38,6 +37,7 @@ from pipeline.models import ParsedTransaction
 from pipeline.parsers.icici_savings import ICICISavingsParser
 from scraper.email_parsers.base_statement import BaseStatementEmailParser
 from scraper.pdf_utils import decrypt_pdf
+from scraper.secrets_context import resolve_secret_env
 
 logger = logging.getLogger(__name__)
 
@@ -96,14 +96,14 @@ def _statement_kind(
 
 def _monthly_password() -> str:
     return (
-        os.getenv("ICICI_STATEMENT_MONTHLY_PASSWORD")
-        or os.getenv("ICICI_STATEMENT_PASSWORD")
+        resolve_secret_env("ICICI_STATEMENT_MONTHLY_PASSWORD")
+        or resolve_secret_env("ICICI_STATEMENT_PASSWORD")
         or ""
     )
 
 
 def _annual_password() -> str:
-    return os.getenv("ICICI_STATEMENT_ANNUAL_PASSWORD") or ""
+    return resolve_secret_env("ICICI_STATEMENT_ANNUAL_PASSWORD") or ""
 
 
 class ICICIStatementEmailParser(BaseStatementEmailParser):

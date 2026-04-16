@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-import os
 from typing import ClassVar
 
 import pipeline.config  # noqa: F401 — load ``.env`` before ``os.getenv``
@@ -26,6 +25,7 @@ from pipeline.models import ParsedTransaction
 from pipeline.parsers.hdfc_savings_pdf import HDFCSavingsPdfParser
 from scraper.email_parsers.base_statement import BaseStatementEmailParser
 from scraper.pdf_utils import decrypt_pdf
+from scraper.secrets_context import resolve_secret_env
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ class HDFCCombinedStatementEmailParser(BaseStatementEmailParser):
         email_sender: str = "",
         email_subject: str = "",
     ) -> list[ParsedTransaction]:
-        password = os.getenv("HDFC_STATEMENT_PASSWORD", "").strip()
+        password = resolve_secret_env("HDFC_STATEMENT_PASSWORD", "").strip()
         if not password:
             logger.error("HDFC_STATEMENT_PASSWORD is not set — cannot decrypt HDFC combined PDF.")
             return []

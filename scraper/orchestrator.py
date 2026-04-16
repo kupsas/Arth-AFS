@@ -39,9 +39,12 @@ from pipeline.llm_classifier import classify_llm
 from pipeline.models import ParsedTransaction
 from pipeline.rules_classifier import classify_rules
 from pipeline.transformer import transform
-from scraper.config import ALL_SENDERS, BANK_SENDERS, SCRAPER_LOOKBACK_DAYS
+from scraper.config import BANK_SENDERS, SCRAPER_LOOKBACK_DAYS
+from scraper.config_loader import all_sender_emails, get_bank_senders_config
+from scraper.email_parsers import BaseEmailParser, build_email_parser_registry
 from scraper.email_router import _normalise_sender, find_parser
 from scraper.gmail_client import GmailClient, GmailMessage
+from scraper.secrets_context import statement_secrets_context
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +86,11 @@ class ScrapeResult:
 
 # ─── Internal helpers ──────────────────────────────────────────────────────────
 
-def _get_lookback_date(session: Session, sender: str) -> datetime.date:
+def _get_lookback_date(
+    session: Session,
+    sender: str,
+    bank_senders: dict | None = None,
+) -> datetime.date:
     """Return the date to use as the Gmail 'after:' query cutoff for this sender.
 
     Strategy:
@@ -114,7 +121,8 @@ def _get_lookback_date(session: Session, sender: str) -> datetime.date:
     # :data:`scraper.config.BANK_SENDERS` so the first poll is not shorter than a
     # typical billing cycle.
     days = SCRAPER_LOOKBACK_DAYS
-    for raw_addr, cfg in BANK_SENDERS.items():
+    bs = bank_senders if bank_senders is not None else BANK_SENDERS
+    for raw_addr, cfg in bs.items():
         if _normalise_sender(raw_addr) == sender:
             days = int(cfg.get("first_run_lookback_days", days))
             break
@@ -174,6 +182,8 @@ def _process_email(
     *,
     client: GmailClient,
     session: Session,
+    parser_registry: dict[str, list[BaseEmailParser]],
+    user_id: str,
 ) -> tuple[str, int]:
     """Process one email through the full pipeline.
 
@@ -187,7 +197,7 @@ def _process_email(
     """
     # ── Step 1: subject-line filter ──────────────────────────────────────────
     # find_parser() does a cheap string-match on subject.  No body download yet.
-    parser = find_parser(msg.sender, msg.subject)
+    parser = find_parser(msg.sender, msg.subject, registry=parser_registry)
 
     if parser is None:
         # Sender is registered but no parser matched this subject.
@@ -208,40 +218,41 @@ def _process_email(
     attachment_holdings: list = []
     attachment_inv_txns: list = []
 
-    if parse_type == "attachment":
-        attachments = client.get_attachments(msg.id)
-        if not attachments:
-            logger.debug(
-                "Parser %s matched subject but no PDF attachments in message %s — skipping",
-                type(parser).__name__,
-                msg.id,
-            )
-            return "skipped", 0
-        # Multi-PDF emails: parsers may accumulate holdings / inv_txns per file — reset once per message.
-        reset_fn = getattr(parser, "reset_attachment_outputs", None)
-        if callable(reset_fn):
-            reset_fn()
-        parsed_txns: list[ParsedTransaction] = []
-        stmt_parser = cast(_AttachmentEmailParser, parser)
-        for _filename, pdf_bytes in attachments:
-            parsed_txns.extend(
-                stmt_parser.parse_attachment(
-                    pdf_bytes,
-                    received_date,
-                    email_sender=_normalise_sender(msg.sender),
-                    email_subject=msg.subject or "",
+    with statement_secrets_context(session, user_id):
+        if parse_type == "attachment":
+            attachments = client.get_attachments(msg.id)
+            if not attachments:
+                logger.debug(
+                    "Parser %s matched subject but no PDF attachments in message %s — skipping",
+                    type(parser).__name__,
+                    msg.id,
                 )
-            )
-        # Call once after all PDFs — parsers accumulate PPF / trade legs in ``parse_attachment``;
-        # calling :meth:`attachment_investment_outputs` inside the loop duplicated rows on multi-PDF emails.
-        inv_fn = getattr(parser, "attachment_investment_outputs", None)
-        if callable(inv_fn):
-            h, t = inv_fn()
-            attachment_holdings.extend(h)
-            attachment_inv_txns.extend(t)
-    else:
-        html_body = client.get_message_body(msg.id)
-        parsed_txns = parser.parse(html_body, received_date)
+                return "skipped", 0
+            # Multi-PDF emails: parsers may accumulate holdings / inv_txns per file — reset once per message.
+            reset_fn = getattr(parser, "reset_attachment_outputs", None)
+            if callable(reset_fn):
+                reset_fn()
+            parsed_txns: list[ParsedTransaction] = []
+            stmt_parser = cast(_AttachmentEmailParser, parser)
+            for _filename, pdf_bytes in attachments:
+                parsed_txns.extend(
+                    stmt_parser.parse_attachment(
+                        pdf_bytes,
+                        received_date,
+                        email_sender=_normalise_sender(msg.sender),
+                        email_subject=msg.subject or "",
+                    )
+                )
+            # Call once after all PDFs — parsers accumulate PPF / trade legs in ``parse_attachment``;
+            # calling :meth:`attachment_investment_outputs` inside the loop duplicated rows on multi-PDF emails.
+            inv_fn = getattr(parser, "attachment_investment_outputs", None)
+            if callable(inv_fn):
+                h, t = inv_fn()
+                attachment_holdings.extend(h)
+                attachment_inv_txns.extend(t)
+        else:
+            html_body = client.get_message_body(msg.id)
+            parsed_txns = parser.parse(html_body, received_date)
 
     # ── Step 3: ParsedTransaction list ready (+ optional PPF / holdings from PDF) ─
 
@@ -310,12 +321,11 @@ def _process_email(
 
     # ── Annual ICICI PDF: PPF → holdings + investment_transactions ────────────
     if attachment_holdings or attachment_inv_txns:
-        uid = (os.environ.get("ARTH_USER_ID") or "sashank").strip() or "sashank"
-        hr = ingest_holdings(session, attachment_holdings, user_id=uid)
+        hr = ingest_holdings(session, attachment_holdings, user_id=user_id)
         tr = ingest_investment_transactions(
             session,
             attachment_inv_txns,
-            user_id=uid,
+            user_id=user_id,
             source_type="email",
             gmail_message_id=msg.id,
         )
@@ -333,10 +343,19 @@ def _process_email(
 
 # ─── Public entry point ────────────────────────────────────────────────────────
 
+def _default_scraper_user_id() -> str:
+    return (
+        (os.environ.get("ARTH_SCRAPER_USER_ID") or os.environ.get("AUTH_USERNAME") or "sashank")
+        .strip()
+        or "sashank"
+    )
+
+
 def scrape_new_emails(
     *,
     session: Session,
     client: GmailClient | None = None,
+    user_id: str | None = None,
 ) -> ScrapeResult:
     """Run one full scrape cycle: fetch → parse → classify → write.
 
@@ -360,6 +379,9 @@ def scrape_new_emails(
         and total transactions created.
     """
     result = ScrapeResult()
+    uid = (user_id or "").strip() or _default_scraper_user_id()
+    bank = get_bank_senders_config(session, uid)
+    parser_registry = build_email_parser_registry(bank)
 
     # ── Authenticate if no client was supplied ────────────────────────────────
     if client is None:
@@ -371,13 +393,13 @@ def scrape_new_emails(
     already_done = _get_processed_ids(session)
 
     # ── Iterate over each configured bank sender ──────────────────────────────
-    for raw_sender in ALL_SENDERS:
+    for raw_sender in all_sender_emails(bank):
         sender = _normalise_sender(raw_sender)  # strips display name, lowercases
         logger.info("── Scraping sender: %s", sender)
 
         # Determine the lookback window (first run → SCRAPER_LOOKBACK_DAYS days ago;
         # subsequent runs → 1 day before the most recently received email).
-        after_date = _get_lookback_date(session, sender)
+        after_date = _get_lookback_date(session, sender, bank)
         logger.info("   Querying emails since %s", after_date)
 
         # ── Fetch email metadata from Gmail ───────────────────────────────────
@@ -403,7 +425,13 @@ def scrape_new_emails(
         # ── Process each new email ────────────────────────────────────────────
         for msg in new_messages:
             try:
-                status, txn_count = _process_email(msg, client=client, session=session)
+                status, txn_count = _process_email(
+                    msg,
+                    client=client,
+                    session=session,
+                    parser_registry=parser_registry,
+                    user_id=uid,
+                )
 
                 _record_email(session, msg, sender=sender, status=status, txn_count=txn_count)
 
@@ -447,4 +475,93 @@ def scrape_new_emails(
         result.emails_failed,
         result.txns_created,
     )
+    return result
+
+
+def run_historical_backfill(
+    *,
+    session: Session,
+    after: datetime.date,
+    before: datetime.date,
+    client: GmailClient | None = None,
+    user_id: str | None = None,
+    sender_emails: list[str] | None = None,
+    max_messages: int | None = None,
+    dry_run: bool = False,
+) -> ScrapeResult:
+    """Sweep Gmail between ``after`` (inclusive) and ``before`` (exclusive).
+
+    Uses the same parse → classify → :func:`pipeline.db_writer.write_to_db` path as
+    live scraping, with explicit date bounds instead of incremental lookback.
+    ``processed_emails`` still dedupes message IDs.
+    """
+    result = ScrapeResult()
+    uid = (user_id or "").strip() or _default_scraper_user_id()
+    bank = get_bank_senders_config(session, uid)
+    parser_registry = build_email_parser_registry(bank)
+    senders = sender_emails if sender_emails else all_sender_emails(bank)
+    after_s = after.strftime("%Y/%m/%d")
+    before_s = before.strftime("%Y/%m/%d")
+
+    if client is None:
+        client = GmailClient()
+        client.authenticate()
+
+    already_done = _get_processed_ids(session)
+
+    for raw_sender in senders:
+        sender_norm = _normalise_sender(raw_sender)
+        query = f"from:{raw_sender} after:{after_s} before:{before_s}"
+        logger.info("Backfill query: %s", query)
+
+        try:
+            messages = client.search_messages(
+                query,
+                paginate=True,
+                max_results_per_page=100,
+                max_total=max_messages,
+            )
+        except Exception as exc:
+            result.errors.append(f"Gmail API error for {sender_norm}: {exc}")
+            logger.error("%s", result.errors[-1])
+            continue
+
+        result.emails_found += len(messages)
+        new_messages = [m for m in messages if m.id not in already_done]
+
+        for msg in new_messages:
+            if dry_run:
+                result.emails_skipped += 1
+                already_done.add(msg.id)
+                continue
+            try:
+                status, txn_count = _process_email(
+                    msg,
+                    client=client,
+                    session=session,
+                    parser_registry=parser_registry,
+                    user_id=uid,
+                )
+                _record_email(session, msg, sender=sender_norm, status=status, txn_count=txn_count)
+                if status == "processed":
+                    result.emails_processed += 1
+                    result.txns_created += txn_count
+                else:
+                    result.emails_skipped += 1
+                already_done.add(msg.id)
+            except Exception as exc:
+                result.emails_failed += 1
+                result.errors.append(f"[{msg.id}] {exc}")
+                try:
+                    _record_email(
+                        session,
+                        msg,
+                        sender=sender_norm,
+                        status="failed",
+                        error_message=str(exc),
+                    )
+                    already_done.add(msg.id)
+                except Exception:
+                    pass
+
     return result
