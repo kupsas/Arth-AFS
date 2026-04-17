@@ -424,8 +424,15 @@ export function completeSetupWizard(): Promise<{ setup_completed: boolean }> {
 }
 
 /** POST /api/setup/secrets — store PDF password map (requires session). */
-export function saveSetupSecrets(secrets_json: Record<string, string>): Promise<{ ok: boolean }> {
-  return post<{ ok: boolean }>("/api/setup/secrets", { secrets_json });
+export function saveSetupSecrets(
+  secrets_json: Record<string, string>,
+): Promise<{ ok: boolean; keys: string[] }> {
+  return post<{ ok: boolean; keys: string[] }>("/api/setup/secrets", { secrets_json });
+}
+
+/** GET /api/setup/secrets/meta — which keys exist (values never returned). */
+export function fetchSetupSecretsMeta(): Promise<{ keys: string[]; has_secrets: boolean }> {
+  return get<{ keys: string[]; has_secrets: boolean }>("/api/setup/secrets/meta");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -105,6 +105,27 @@ def mark_setup_complete(
     return {"setup_completed": True, "username": current_user}
 
 
+@router.get("/secrets/meta")
+def list_secret_keys(
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> dict:
+    """Return which env-style keys are stored for this user — **values are never exposed**."""
+    import json
+
+    row = session.exec(
+        select(UserSecrets).where(UserSecrets.user_id == current_user)
+    ).first()
+    if not row or not row.secrets_json:
+        return {"keys": [], "has_secrets": False}
+    try:
+        data = json.loads(row.secrets_json)
+        keys = list(data.keys()) if isinstance(data, dict) else []
+    except json.JSONDecodeError:
+        keys = []
+    return {"keys": keys, "has_secrets": bool(keys)}
+
+
 @router.post("/secrets")
 def put_user_secrets(
     body: SecretsUpdateRequest,
