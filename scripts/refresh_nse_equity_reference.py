@@ -2,8 +2,9 @@
 """
 Populate ``nse_equity_reference`` from NIFTY 100, NIFTY MIDCAP 150, and the latest equity bhav.
 
-**Market cap:** NIFTY 100 → ``LARGE_CAP``; NIFTY MIDCAP 150 → ``MID_CAP``; every other
-equity in that bhav session → ``SMALL_CAP``.
+**Market cap:** only for ``instrument_kind=EQUITY``: NIFTY 100 → ``LARGE_CAP``;
+NIFTY MIDCAP 150 → ``MID_CAP``; every other **equity-style** bhav row → ``SMALL_CAP``.
+Bonds, SGBs, REITs, etc. get ``instrument_kind`` set and ``market_cap_class=NULL``.
 
 **When to run:** After deploy (once), then occasionally (e.g. yearly when index
 constituents change meaningfully). Same network requirements as price refresh.
@@ -55,9 +56,10 @@ def main() -> int:
     with Session(engine) as session:
         if args.dry_run:
             try:
-                refresh_nse_equity_reference(session, commit=False)
+                stats = refresh_nse_equity_reference(session, commit=False)
             finally:
                 session.rollback()
+            print(json.dumps(stats, indent=2))
             print("dry_run: rolled back (no changes persisted)")
             return 0
         stats = refresh_nse_equity_reference(session, commit=True)
@@ -70,6 +72,7 @@ def main() -> int:
                     json.dumps(
                         {
                             "symbol": r.symbol,
+                            "instrument_kind": r.instrument_kind,
                             "market_cap_class": r.market_cap_class,
                             "industry": r.industry,
                             "company_name": r.company_name,

@@ -1,14 +1,22 @@
 """
-Build and refresh :class:`api.models.NseEquityReference` from NSE **Nifty indices** + **equity bhav**.
+Build and refresh :class:`api.models.NseEquityReference` from NSE **Nifty indices** + **CM bhav**.
 
-**Market cap rule (SEBI-style index buckets):**
-- Symbol in **NIFTY 100** → ``LARGE_CAP``
-- Else symbol in **NIFTY MIDCAP 150** → ``MID_CAP``
-- Else any symbol seen in the latest **equity bhav** session → ``SMALL_CAP``
+**Universe:** NIFTY 100 ∪ NIFTY MIDCAP 150 ∪ **every symbol** in the latest bhav session.
+The bhav file lists equities alongside NCDs, G-Secs, SGBs, T-bills, InvITs, REITs, SDLs, etc.
 
-Index API rows include rich ``meta`` (company name, industry, ISIN). Bhav rows carry the
-full official CSV columns for small caps and are merged into ``reference_json`` for
-large/mid names when the same session is available.
+**``instrument_kind``** (coarse, from bhav ``SCTYSRS`` / series):
+- ``RR`` → REIT, ``IV`` → INVIT, ``GB`` → SGB, ``GS`` → GSEC, ``TB`` → TBILL, ``SG`` → SDL
+- ``N*`` debenture-style series (``N1``, ``NA``, ``NE``, …) → NCD
+- ``Z`` + digit (e.g. ``Z8``) → NCD
+- ``Y`` + digit (trust-style tranches) → DEBT_STRUCTURED
+- ``E`` + digit (e.g. ``E1``) → DEBT_STRUCTURED
+- ``EQ`` / ``BE`` / ``SM`` / ``ST`` / ``BZ`` / ``P1`` (and ``FININSTRMTP=STK``) → EQUITY
+- anything else → UNKNOWN
+
+**Market cap** (``LARGE_CAP`` / ``MID_CAP`` / ``SMALL_CAP``) is assigned **only** when
+``instrument_kind=EQUITY``: index membership sets large/mid; other equities that appear
+only in bhav are ``SMALL_CAP``. Non-equities get ``market_cap_class=NULL`` so downstream
+enrichment never labels a bond as a small-cap stock.
 
 Run :func:`refresh_nse_equity_reference` from ``scripts/refresh_nse_equity_reference.py``
 after NSE connectivity is configured (same as price refresh).
@@ -19,7 +27,9 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+import re
 import time
+from collections import Counter
 from typing import Any
 
 from sqlmodel import Session, delete
@@ -35,6 +45,70 @@ from api.services.price_feed import (
 logger = logging.getLogger(__name__)
 
 _INDEX_THROTTLE_SEC = 0.5
+
+# NSE CM bhav ``SctySrs`` values that behave like tradeable corporate equity / SME / T2T
+# common stock rows (still require ``FININSTRMTP=STK`` in :func:`instrument_kind_from_bhav_row`).
+_EQUITY_STYLE_SCTYSRS = frozenset({"EQ", "BE", "SM", "ST", "BZ"})
+
+# Single-series overrides (checked before N-prefixed NCD heuristics — ``IV`` is InvIT, not NCD).
+_SCTYSRS_INSTRUMENT_KIND: dict[str, str] = {
+    "RR": "REIT",
+    "IV": "INVIT",
+    "GB": "SGB",
+    "GS": "GSEC",
+    "TB": "TBILL",
+    "SG": "SDL",
+}
+
+_Y_SERIES_DEBT = re.compile(r"^Y\d$")
+_E_SERIES_DEBT = re.compile(r"^E\d$")
+
+
+def instrument_kind_from_bhav_row(row: dict[str, str] | None) -> str:
+    """
+    Map one bhav row to a coarse ``instrument_kind`` string stored on :class:`NseEquityReference`.
+
+    NSE often uses ``FININSTRMTP=STK`` for both shares and many debt listings; **series**
+    (``SCTYSRS``) is the reliable discriminator for EQ vs N1 vs GS, etc.
+    """
+    if not row:
+        return "UNKNOWN"
+    srs = (row.get("SCTYSRS") or row.get("SctySrs") or "").strip().upper()
+    if not srs:
+        return "UNKNOWN"
+
+    mapped = _SCTYSRS_INSTRUMENT_KIND.get(srs)
+    if mapped is not None:
+        return mapped
+
+    # Corporate NCD-style ``Z8`` etc. (letter Z + digit) — still debt, not equity ``BZ``.
+    if len(srs) == 2 and srs[0] == "Z" and srs[1].isdigit():
+        return "NCD"
+    if _Y_SERIES_DEBT.match(srs):
+        return "DEBT_STRUCTURED"
+    if _E_SERIES_DEBT.match(srs):
+        return "DEBT_STRUCTURED"
+    if len(srs) >= 2 and srs[0] == "N":
+        return "NCD"
+
+    ftp = (row.get("FININSTRMTP") or row.get("FinInstrmTp") or "").strip().upper()
+    if ftp and ftp != "STK":
+        return "UNKNOWN"
+
+    if srs in _EQUITY_STYLE_SCTYSRS or srs == "P1":
+        return "EQUITY"
+
+    return "UNKNOWN"
+
+
+def bhav_row_is_listed_equity_like(row: dict[str, str] | None) -> bool:
+    """
+    True if a UDIFF bhav row should be treated as **equity-style** for cap / stock logic.
+
+    Kept for callers that only need a boolean; equivalent to
+    ``instrument_kind_from_bhav_row(row) == "EQUITY"``.
+    """
+    return instrument_kind_from_bhav_row(row) == "EQUITY"
 
 
 def _index_stock_rows(raw_response: dict) -> list[dict]:
@@ -76,7 +150,7 @@ def _payload(index_row: dict | None, bhav_row: dict[str, str] | None) -> str:
 
 def refresh_nse_equity_reference(session: Session, *, commit: bool = True) -> dict[str, Any]:
     """
-    Replace ``nse_equity_reference`` with a fresh snapshot (Nifty 100 + Midcap 150 + bhav).
+    Replace ``nse_equity_reference`` with a fresh snapshot (Nifty 100 + Midcap 150 + full bhav).
 
     Returns counts for logging / CLI output.
     """
@@ -84,7 +158,7 @@ def refresh_nse_equity_reference(session: Session, *, commit: bool = True) -> di
     preferred = latest_bhav_target_date()
     session_d, price_map = resolve_nse_bhav_session_and_map(preferred)
     if price_map is None:
-        msg = "No usable NSE equity bhav session — cannot classify small caps or merge bhav rows"
+        msg = "No usable NSE equity bhav session — cannot refresh reference rows"
         logger.error(msg)
         raise RuntimeError(msg)
 
@@ -110,29 +184,38 @@ def refresh_nse_equity_reference(session: Session, *, commit: bool = True) -> di
         if sym:
             mid_map[sym] = r
 
-    all_syms = set(large_map) | set(mid_map) | set(bhav_rows)
+    all_syms = set(large_map) | set(mid_map) | set(bhav_rows.keys())
 
     session.exec(delete(NseEquityReference))
 
     n_large = n_mid = n_small = 0
+    kind_counts: Counter[str] = Counter()
     now = datetime.datetime.now(datetime.UTC)
 
     for sym in sorted(all_syms):
         idx_row: dict | None = None
-        cap: str
+        br = bhav_rows.get(sym)
+
         if sym in large_map:
-            cap = "LARGE_CAP"
+            instrument_kind = "EQUITY"
+            cap: str | None = "LARGE_CAP"
             idx_row = large_map[sym]
             n_large += 1
         elif sym in mid_map:
+            instrument_kind = "EQUITY"
             cap = "MID_CAP"
             idx_row = mid_map[sym]
             n_mid += 1
         else:
-            cap = "SMALL_CAP"
-            n_small += 1
+            instrument_kind = instrument_kind_from_bhav_row(br) if br else "UNKNOWN"
+            if instrument_kind == "EQUITY":
+                cap = "SMALL_CAP"
+                n_small += 1
+            else:
+                cap = None
 
-        br = bhav_rows.get(sym)
+        kind_counts[instrument_kind] += 1
+
         meta = (idx_row or {}).get("meta") if isinstance((idx_row or {}).get("meta"), dict) else {}
         company = meta.get("companyName") if isinstance(meta.get("companyName"), str) else None
         industry = meta.get("industry") if isinstance(meta.get("industry"), str) else None
@@ -152,6 +235,7 @@ def refresh_nse_equity_reference(session: Session, *, commit: bool = True) -> di
         ref = NseEquityReference(
             symbol=sym,
             market_cap_class=cap,
+            instrument_kind=instrument_kind,
             company_name=company.strip()[:512] if company else None,
             industry=industry.strip()[:256] if industry else None,
             isin=isin.strip()[:16] if isin else None,
@@ -173,6 +257,8 @@ def refresh_nse_equity_reference(session: Session, *, commit: bool = True) -> di
         "large_cap": n_large,
         "mid_cap": n_mid,
         "small_cap": n_small,
+        "bhav_rows_total": len(bhav_rows),
+        "instrument_kind": dict(sorted(kind_counts.items(), key=lambda kv: kv[0])),
     }
     logger.info("nse_equity_reference refreshed: %s", out)
     return out

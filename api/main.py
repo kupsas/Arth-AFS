@@ -107,8 +107,9 @@ async def lifespan(app: FastAPI):
     Startup:
       1. Configure structured logging (stdout INFO + rotating file DEBUG).
       2. Ensure all DB tables exist (init_db is idempotent — safe to call every boot).
-      3. Start APScheduler: daily price job at 18:30 IST always; Gmail poll only
-         if ``gmail_token.json`` exists (or after OAuth adds the email job).
+      3. Start APScheduler: daily price job at 18:30 IST; weekly prices + NSE reference +
+         holdings enrich Sun 19:15 IST; Gmail poll only if ``gmail_token.json`` exists
+         (or after OAuth adds the email job).
       4. Phase A.4.2 — If there are market-priced holdings, backfill stale NSE ``prices``
          then refresh marks **in the background**. Uvicorn used to await this before
          ``yield``, which left "Waiting for application startup" for minutes when NSE

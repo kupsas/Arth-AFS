@@ -128,7 +128,24 @@ The `scripts/` folder has many **one-off** maintenance tools. Read the top of ea
 | `validate_email_statement.py`, `validate_icici_direct_trade_email.py` | Validate a single email or PDF against parsers |
 | `diagnose_portfolio_prices.py`, `validate_price_sources.py` | Debug missing marks or bad symbols |
 | `enrich_holdings.py`, `sync_all_holdings.py` | Holdings enrichment / sync |
+| `weekly_market_data_refresh.py` | Same weekly chain as the API scheduler (manual / cron if no server) |
 | `migrate_db.py`, `migrate_goals_v2.py`, `migrate_phase45.py` | Schema migrations (run with care; backup first) |
 | `compare_icici_trade_emails_to_db.py`, `remove_duplicate_pdf_email_transactions.py` | Reconciliation / dedup helpers |
 
 Operator runbooks for **historical price backfill** and **test→prod price merge** are documented above (`backfill_price_history.py`, `merge_prices_from_db.py`).
+
+---
+
+## `weekly_market_data_refresh.py`
+
+**When to use:** One-off or host-cron when you **do not** run the API server continuously. While the server is up, the same three steps run automatically on **Sunday 19:15 Asia/Kolkata** via ``scraper.scheduler`` (after the day’s 18:30 IST daily price job). ``GET /api/scraper/status`` exposes ``weekly_market_*`` timestamps.
+
+**Run once (all users):**
+
+```bash
+python3 scripts/weekly_market_data_refresh.py
+```
+
+**Limit to one user:** `python3 scripts/weekly_market_data_refresh.py --user-id sashank`
+
+**Optional crontab (no server):** e.g. Sunday 19:20 IST — `20 19 * * 0 cd /path/to/Arth && /usr/bin/python3 scripts/weekly_market_data_refresh.py >> data/logs/weekly_market_refresh.log 2>&1` (adjust path and `python3`).

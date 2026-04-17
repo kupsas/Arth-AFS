@@ -14,7 +14,7 @@ Tables:
   - InflationRate     — cached CPI / sector inflation (Goals architecture V2)
   - LifeEvent         — flags for activation DSL (event:...) (Phase B.0)
   - Holding           — portfolio position snapshot (Phase A.0)
-  - NseEquityReference — cached NSE index + bhav snapshot per ticker (cap / industry)
+  - NseEquityReference — cached NSE index + bhav snapshot per ticker (cap / industry / instrument kind)
   - InvestmentTransaction — broker/fund ledger rows (Phase A.0)
   - Liability         — loans and recurring obligations (Phase A.0)
   - Price             — daily close/NAV per symbol (Phase A.0)
@@ -621,16 +621,19 @@ class Holding(SQLModel, table=True):
 
 
 # ───────────────────────────────────────────────────────────────────────────
-# NseEquityReference — Nifty index + bhav snapshot (market cap, industry cache)
+# NseEquityReference — Nifty index + full CM bhav snapshot (cap, industry, instrument kind)
 # ───────────────────────────────────────────────────────────────────────────
 
 
 class NseEquityReference(SQLModel, table=True):
-    """One row per NSE equity ticker — populated by ``refresh_nse_equity_reference``.
+    """One row per NSE **ticker** in the CM bhav universe — populated by ``refresh_nse_equity_reference``.
 
-    ``market_cap_class`` follows SEBI-style buckets from index membership:
-    NIFTY 100 → ``LARGE_CAP``, NIFTY MIDCAP 150 → ``MID_CAP``, else ``SMALL_CAP``
-    (including names that appear only in the equity bhav file).
+    The bhav file mixes common stock with NCDs, G-Secs, SGBs, T-bills, InvITs, REITs, etc.
+    ``instrument_kind`` captures that coarse classification (from ``SCTYSRS`` / series).
+
+    ``market_cap_class`` is **only** set for ``instrument_kind=EQUITY``: NIFTY 100 →
+    ``LARGE_CAP``, NIFTY MIDCAP 150 → ``MID_CAP``, other equity-style bhav rows →
+    ``SMALL_CAP``. Non-equities use ``NULL`` here so enrichment does not treat them as small-cap stocks.
 
     ``reference_json`` stores ``{"index_row": ..., "bhav_row": ...}`` (either side may
     be null) so future features can read extra NSE fields without new migrations.
@@ -639,7 +642,10 @@ class NseEquityReference(SQLModel, table=True):
     __tablename__ = "nse_equity_reference"
 
     symbol: str = Field(primary_key=True, max_length=32)
-    market_cap_class: str = Field(max_length=16, index=True)
+    # NULL when the row is not a classified equity (bonds, REITs, etc.).
+    market_cap_class: str | None = Field(default=None, max_length=16, index=True)
+    # Coarse instrument bucket from bhav ``SCTYSRS`` (e.g. EQUITY, REIT, NCD, SGB, …).
+    instrument_kind: str = Field(default="UNKNOWN", max_length=24, index=True)
     company_name: str | None = Field(default=None, max_length=512)
     industry: str | None = Field(default=None, max_length=256)
     isin: str | None = Field(default=None, max_length=16, index=True)

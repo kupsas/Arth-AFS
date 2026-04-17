@@ -112,6 +112,8 @@ def scraper_status():
       - price_last_error:      Last price-job error message (or null).
       - price_next_run_at:     Next scheduled 18:30 IST price refresh (or null).
       - is_price_job_running:  True while NSE/AMFI refresh is executing.
+      - weekly_market_*:       Same pattern for the Sunday 19:15 IST job (prices +
+                               ``nse_equity_reference`` + ``enrich_holdings``).
     """
     return get_status()
 

@@ -141,7 +141,7 @@ scraper/
   gmail_client.py    OAuth2 auth, token management, email fetching, HTML body extraction
   email_router.py    find_parser(): routes a message to the correct parser by sender + subject
   orchestrator.py    scrape_new_emails(): the main cycle (fetch → dedup → parse → classify → write)
-  scheduler.py       APScheduler wrapper: Gmail poll, daily price job, weekly inflation job
+  scheduler.py       APScheduler wrapper: Gmail poll, daily price job, weekly inflation + weekly market cache job
   email_parsers/
     base.py          BaseEmailParser ABC + _lookup_account() helper
     base_statement.py Shared helpers for statement PDF pipelines

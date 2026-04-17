@@ -11,7 +11,10 @@ from sqlmodel import Session, SQLModel, create_engine
 import api.models  # noqa: F401 — register all ORM tables for create_all
 
 from api.models import NseEquityReference
-from api.services.nse_equity_reference import refresh_nse_equity_reference
+from api.services.nse_equity_reference import (
+    instrument_kind_from_bhav_row,
+    refresh_nse_equity_reference,
+)
 
 
 @pytest.fixture(name="engine")
@@ -27,7 +30,26 @@ def _engine():
     eng.dispose()
 
 
-def test_refresh_partitions_large_mid_small(monkeypatch: pytest.MonkeyPatch, engine) -> None:
+def test_instrument_kind_from_bhav_row_series() -> None:
+    """Spot-check ``SCTYSRS`` → ``instrument_kind`` mapping (NSE uses STK for many types)."""
+    stk = {"FININSTRMTP": "STK"}
+    assert instrument_kind_from_bhav_row({**stk, "SCTYSRS": "RR"}) == "REIT"
+    assert instrument_kind_from_bhav_row({**stk, "SCTYSRS": "IV"}) == "INVIT"
+    assert instrument_kind_from_bhav_row({**stk, "SCTYSRS": "GB"}) == "SGB"
+    assert instrument_kind_from_bhav_row({**stk, "SCTYSRS": "GS"}) == "GSEC"
+    assert instrument_kind_from_bhav_row({**stk, "SCTYSRS": "TB"}) == "TBILL"
+    assert instrument_kind_from_bhav_row({**stk, "SCTYSRS": "SG"}) == "SDL"
+    assert instrument_kind_from_bhav_row({**stk, "SCTYSRS": "N1"}) == "NCD"
+    assert instrument_kind_from_bhav_row({**stk, "SCTYSRS": "NA"}) == "NCD"
+    assert instrument_kind_from_bhav_row({**stk, "SCTYSRS": "Z8"}) == "NCD"
+    assert instrument_kind_from_bhav_row({**stk, "SCTYSRS": "Y7"}) == "DEBT_STRUCTURED"
+    assert instrument_kind_from_bhav_row({**stk, "SCTYSRS": "E1"}) == "DEBT_STRUCTURED"
+    assert instrument_kind_from_bhav_row({**stk, "SCTYSRS": "EQ"}) == "EQUITY"
+    assert instrument_kind_from_bhav_row({**stk, "SCTYSRS": "P1"}) == "EQUITY"
+    assert instrument_kind_from_bhav_row({**stk, "SCTYSRS": "XX"}) == "UNKNOWN"
+
+
+def test_refresh_partitions_large_mid_small_and_kinds(monkeypatch: pytest.MonkeyPatch, engine) -> None:
     from api.services import nse_equity_reference as mod
 
     monkeypatch.setattr(mod.time, "sleep", lambda *_a, **_k: None)
@@ -40,8 +62,12 @@ def test_refresh_partitions_large_mid_small(monkeypatch: pytest.MonkeyPatch, eng
         mod,
         "load_nse_equity_bhav_full_rows",
         lambda _d: {
-            "RELIANCE": {"CLSPRIC": "2500"},
-            "TINYCAP": {"CLSPRIC": "1"},
+            "RELIANCE": {"CLSPRIC": "2500", "FININSTRMTP": "STK", "SCTYSRS": "EQ"},
+            "TINYCAP": {"CLSPRIC": "1", "FININSTRMTP": "STK", "SCTYSRS": "EQ"},
+            # Debt / hybrid rows — must appear in the table with the right ``instrument_kind``.
+            "BADNCD": {"CLSPRIC": "99", "FININSTRMTP": "STK", "SCTYSRS": "N1"},
+            "EMBASSY": {"CLSPRIC": "300", "FININSTRMTP": "STK", "SCTYSRS": "RR"},
+            "SGB29": {"CLSPRIC": "5000", "FININSTRMTP": "STK", "SCTYSRS": "GB"},
         },
     )
 
@@ -88,14 +114,24 @@ def test_refresh_partitions_large_mid_small(monkeypatch: pytest.MonkeyPatch, eng
     assert stats["large_cap"] == 1
     assert stats["mid_cap"] == 1
     assert stats["small_cap"] == 1
-    assert stats["symbols_total"] == 3
+    assert stats["symbols_total"] == 6
+    assert stats["instrument_kind"] == {
+        "EQUITY": 3,
+        "NCD": 1,
+        "REIT": 1,
+        "SGB": 1,
+    }
 
     with Session(engine) as session:
         r1 = session.get(NseEquityReference, "RELIANCE")
         r2 = session.get(NseEquityReference, "MIDCO")
         r3 = session.get(NseEquityReference, "TINYCAP")
-    assert r1 is not None and r1.market_cap_class == "LARGE_CAP"
-    assert r2 is not None and r2.market_cap_class == "MID_CAP"
-    assert r3 is not None and r3.market_cap_class == "SMALL_CAP"
-    assert r1.industry == "Oil"
-    assert r3.market_cap_class == "SMALL_CAP"
+        bad = session.get(NseEquityReference, "BADNCD")
+        reit = session.get(NseEquityReference, "EMBASSY")
+        sgb = session.get(NseEquityReference, "SGB29")
+    assert r1 is not None and r1.market_cap_class == "LARGE_CAP" and r1.instrument_kind == "EQUITY"
+    assert r2 is not None and r2.market_cap_class == "MID_CAP" and r2.instrument_kind == "EQUITY"
+    assert r3 is not None and r3.market_cap_class == "SMALL_CAP" and r3.instrument_kind == "EQUITY"
+    assert bad is not None and bad.market_cap_class is None and bad.instrument_kind == "NCD"
+    assert reit is not None and reit.market_cap_class is None and reit.instrument_kind == "REIT"
+    assert sgb is not None and sgb.market_cap_class is None and sgb.instrument_kind == "SGB"

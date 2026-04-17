@@ -60,6 +60,114 @@ def _index_exists(conn, name: str) -> bool:
     return row is not None
 
 
+def _table_exists(conn, table: str) -> bool:
+    row = conn.execute(
+        text("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = :t LIMIT 1"),
+        {"t": table},
+    ).fetchone()
+    return row is not None
+
+
+def _migrate_nse_equity_reference_schema(conn) -> None:
+    """Align ``nse_equity_reference`` with newer ORM: nullable cap + ``instrument_kind``.
+
+    Older DBs stored ``market_cap_class`` as NOT NULL; we need NULL for non-equities.
+    SQLite cannot relax NOT NULL in-place, so we rebuild when that column is still strict.
+    """
+    if not _table_exists(conn, "nse_equity_reference"):
+        return
+    info_rows = conn.execute(text("PRAGMA table_info(nse_equity_reference)")).fetchall()
+    cols = {r[1]: r for r in info_rows}
+    mc = cols.get("market_cap_class")
+    mc_not_null = mc is not None and mc[3] == 1
+    has_kind = "instrument_kind" in cols
+
+    if has_kind and not mc_not_null:
+        return
+
+    if not mc_not_null and not has_kind:
+        conn.execute(
+            text(
+                "ALTER TABLE nse_equity_reference ADD COLUMN instrument_kind "
+                "TEXT NOT NULL DEFAULT 'UNKNOWN'"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_nse_equity_reference_instrument_kind "
+                "ON nse_equity_reference (instrument_kind)"
+            )
+        )
+        return
+
+    insert_cols = [
+        "symbol",
+        "market_cap_class",
+        "instrument_kind",
+        "company_name",
+        "industry",
+        "isin",
+        "last_price",
+        "ffmc",
+        "reference_json",
+        "updated_at",
+    ]
+    select_bits: list[str] = []
+    for c in insert_cols:
+        if c == "instrument_kind":
+            select_bits.append(
+                "COALESCE(instrument_kind, 'UNKNOWN')" if has_kind else "'UNKNOWN'"
+            )
+        else:
+            select_bits.append(c)
+
+    conn.execute(text("DROP TABLE IF EXISTS nse_equity_reference__mig"))
+    conn.execute(
+        text(
+            """
+            CREATE TABLE nse_equity_reference__mig (
+                symbol TEXT NOT NULL PRIMARY KEY,
+                market_cap_class TEXT,
+                instrument_kind TEXT NOT NULL DEFAULT 'UNKNOWN',
+                company_name TEXT,
+                industry TEXT,
+                isin TEXT,
+                last_price REAL,
+                ffmc REAL,
+                reference_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            f"INSERT INTO nse_equity_reference__mig ({', '.join(insert_cols)}) "
+            f"SELECT {', '.join(select_bits)} FROM nse_equity_reference"
+        )
+    )
+    conn.execute(text("DROP TABLE nse_equity_reference"))
+    conn.execute(text("ALTER TABLE nse_equity_reference__mig RENAME TO nse_equity_reference"))
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_nse_equity_reference_market_cap_class "
+            "ON nse_equity_reference (market_cap_class)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_nse_equity_reference_isin "
+            "ON nse_equity_reference (isin)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_nse_equity_reference_instrument_kind "
+            "ON nse_equity_reference (instrument_kind)"
+        )
+    )
+
+
 def _backfill_goal_chart_keys(conn) -> None:
     """One-time style updates: map legacy goals to dashboard chart_key (idempotent)."""
     if not _column_exists(conn, "goals", "chart_key"):
@@ -316,6 +424,8 @@ def _apply_sqlite_patches() -> None:
             conn.execute(text("ALTER TABLE transactions ADD COLUMN classification_source TEXT"))
         if not _column_exists(conn, "transactions", "review_confidence"):
             conn.execute(text("ALTER TABLE transactions ADD COLUMN review_confidence TEXT"))
+
+        _migrate_nse_equity_reference_schema(conn)
 
 
 def _merge_starter_pack_for_all_users() -> None:
