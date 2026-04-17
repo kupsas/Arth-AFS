@@ -77,6 +77,7 @@ data/*.db-shm
 # Prefer a single folder: copy DBs into data/backups/ (also ignored via data/backups/ below).
 data/*bak*
 data/*.bak
+data/*backup*
 
 # Learned ICICI broker code → NSE ticker (machine-local; grows over time)
 data/icici_nse_symbol_overrides.json
