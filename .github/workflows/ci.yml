@@ -66,8 +66,10 @@ jobs:
             -q
         env:
           # Tests use in-memory SQLite; no real keys needed.
-          # Setting dummies prevents any code that reads os.getenv() from
-          # erroring out due to missing values.
+          # Classifier keys: pipeline/config prefers *_FOR_CLASSIFIER, then legacy names.
+          OPENAI_API_KEY_FOR_CLASSIFIER: dummy
+          ANTHROPIC_API_KEY_FOR_CLASSIFIER: dummy
+          GOOGLE_API_KEY_FOR_CLASSIFIER: dummy
           OPENAI_API_KEY: dummy
           ANTHROPIC_API_KEY: dummy
           GOOGLE_API_KEY: dummy
