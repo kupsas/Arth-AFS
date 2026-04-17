@@ -4,8 +4,8 @@ Fill optional classification fields on ``Holding`` rows for the holdings UI (Pha
 **Equity / ESOP / listed gold sleeve (NSE ticker)**
 - ``sector`` — NSE ``equityMetaInfo`` → ``industry``, **or** ``"ETF"`` for symbols ending
   in ``ETF`` / ``BEES`` (throttled ~3 req/s).
-- ``market_cap_class`` — defaults in :mod:`pipeline.market_cap_data` plus optional
-  ``data/nse_market_cap_overrides.json``.
+- ``market_cap_class`` — :class:`api.models.NseEquityReference` when populated by
+  ``refresh_nse_equity_reference``, else :mod:`pipeline.market_cap_data` / overrides JSON.
 
 **Mutual funds**
 - ``fund_category`` / ``fund_house`` — parsed from AMFI ``NAVAll.txt`` section headers
@@ -27,7 +27,7 @@ from typing import Any
 import httpx
 from sqlmodel import Session, col, select
 
-from api.models import Holding
+from api.models import Holding, NseEquityReference
 from pipeline.market_cap_data import market_cap_for_symbol
 from api.services.price_feed import (
     AMFI_NAV_ALL_URL,
@@ -168,6 +168,7 @@ def enrich_mutual_funds_from_amfi(
 
 
 def _apply_equity_sector_and_cap(
+    session: Session,
     h: Holding,
     nse: Any,
     *,
@@ -175,13 +176,17 @@ def _apply_equity_sector_and_cap(
     throttle: bool,
     last_call_ref: list[float],
 ) -> None:
-    """Set ``market_cap_class``, then ``sector`` (ETF label or NSE industry). Mutates ``h``."""
+    """Set ``market_cap_class``, then ``sector`` (cached NSE ref, ETF label, or live meta)."""
     rep = report
     sym_raw = (h.symbol or "").strip()
     nse_sym = canonical_nse_symbol(sym_raw)
 
+    ref = session.get(NseEquityReference, nse_sym)
+
     cap_changed = False
-    cap = market_cap_for_symbol(nse_sym)
+    cap = ref.market_cap_class if ref and ref.market_cap_class else None
+    if cap is None:
+        cap = market_cap_for_symbol(nse_sym)
     if cap is not None and h.market_cap_class != cap:
         h.market_cap_class = cap
         cap_changed = True
@@ -197,9 +202,20 @@ def _apply_equity_sector_and_cap(
         last_call_ref[0] = time.monotonic()
 
     sector_changed = False
+    cached_industry = (
+        ref.industry.strip()
+        if ref and ref.industry and isinstance(ref.industry, str) and ref.industry.strip()
+        else None
+    )
     if is_listed_etf_nse_symbol(nse_sym):
         if h.sector != SECTOR_LABEL_ETF:
             h.sector = SECTOR_LABEL_ETF
+            sector_changed = True
+            if rep is not None:
+                rep.equities_sector_updated += 1
+    elif cached_industry:
+        if h.sector != cached_industry:
+            h.sector = cached_industry
             sector_changed = True
             if rep is not None:
                 rep.equities_sector_updated += 1
@@ -257,7 +273,7 @@ def enrich_single_equity_classification(session: Session, h: Holding) -> None:
     nse = get_nse_client()
     last_ref = [0.0]
     _apply_equity_sector_and_cap(
-        h, nse, report=None, throttle=True, last_call_ref=last_ref
+        session, h, nse, report=None, throttle=True, last_call_ref=last_ref
     )
     session.add(h)
 
@@ -290,7 +306,7 @@ def enrich_equities_from_nse(
 
     for h in holdings:
         _apply_equity_sector_and_cap(
-            h, nse, report=rep, throttle=True, last_call_ref=last_ref
+            session, h, nse, report=rep, throttle=True, last_call_ref=last_ref
         )
         session.add(h)
 

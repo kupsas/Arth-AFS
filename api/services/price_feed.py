@@ -316,6 +316,52 @@ def load_nse_equity_bhav_map(trade_date: datetime.date) -> dict[str, float] | No
     return m if m else None
 
 
+def _bhav_full_rows(path: Path) -> dict[str, dict[str, str]]:
+    """Parse UDIFF equity bhavcopy into ``{TCKRSYMB: {COLUMN: cell}}`` (string cells)."""
+    out: dict[str, dict[str, str]] = {}
+    with open(path, newline="", encoding="utf-8", errors="replace") as f:
+        reader = csv.reader(f)
+        try:
+            header = next(reader)
+        except StopIteration:
+            return out
+        hmap = {name.upper(): i for i, name in enumerate(header)}
+        if "TCKRSYMB" not in hmap:
+            return out
+        ti = hmap["TCKRSYMB"]
+        for row in reader:
+            if len(row) <= ti:
+                continue
+            sym = row[ti].strip().upper()
+            if not sym:
+                continue
+            rec: dict[str, str] = {}
+            for col_name, idx in hmap.items():
+                if idx < len(row):
+                    rec[col_name] = row[idx]
+            out[sym] = rec
+    return out
+
+
+def load_nse_equity_bhav_full_rows(trade_date: datetime.date) -> dict[str, dict[str, str]] | None:
+    """Same bhav session file as closes; return every column per ``TCKRSYMB`` row.
+
+    Used to cache the full official row for small-cap names and to merge bhav fields
+    with Nifty index payloads for large/mid constituents.
+    """
+    nse = get_nse_client()
+    dt = datetime.datetime.combine(trade_date, datetime.time.min)
+    try:
+        path = nse.equityBhavcopy(dt)
+    except Exception as exc:
+        logger.debug("NSE bhavcopy (full rows) failed for %s: %s", trade_date, exc)
+        return None
+    m = _bhav_full_rows(Path(path))
+    if len(m) < _MIN_EQUITY_BHAV_SYMBOL_ROWS:
+        return None
+    return m
+
+
 def load_nse_equity_bhav_isin_map(trade_date: datetime.date) -> dict[str, str] | None:
     """Same bhav file as :func:`load_nse_equity_bhav_map`, but ``{ISIN: NSE symbol}``.
 

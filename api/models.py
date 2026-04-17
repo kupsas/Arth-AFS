@@ -14,6 +14,7 @@ Tables:
   - InflationRate     — cached CPI / sector inflation (Goals architecture V2)
   - LifeEvent         — flags for activation DSL (event:...) (Phase B.0)
   - Holding           — portfolio position snapshot (Phase A.0)
+  - NseEquityReference — cached NSE index + bhav snapshot per ticker (cap / industry)
   - InvestmentTransaction — broker/fund ledger rows (Phase A.0)
   - Liability         — loans and recurring obligations (Phase A.0)
   - Price             — daily close/NAV per symbol (Phase A.0)
@@ -36,7 +37,7 @@ Design notes:
 
 import datetime
 
-from sqlalchemy import Column, Index, String
+from sqlalchemy import Column, Index, String, Text
 from sqlmodel import Field, SQLModel
 
 from api.services.encryption import EncryptedStr
@@ -614,6 +615,37 @@ class Holding(SQLModel, table=True):
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )
+    updated_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# NseEquityReference — Nifty index + bhav snapshot (market cap, industry cache)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class NseEquityReference(SQLModel, table=True):
+    """One row per NSE equity ticker — populated by ``refresh_nse_equity_reference``.
+
+    ``market_cap_class`` follows SEBI-style buckets from index membership:
+    NIFTY 100 → ``LARGE_CAP``, NIFTY MIDCAP 150 → ``MID_CAP``, else ``SMALL_CAP``
+    (including names that appear only in the equity bhav file).
+
+    ``reference_json`` stores ``{"index_row": ..., "bhav_row": ...}`` (either side may
+    be null) so future features can read extra NSE fields without new migrations.
+    """
+
+    __tablename__ = "nse_equity_reference"
+
+    symbol: str = Field(primary_key=True, max_length=32)
+    market_cap_class: str = Field(max_length=16, index=True)
+    company_name: str | None = Field(default=None, max_length=512)
+    industry: str | None = Field(default=None, max_length=256)
+    isin: str | None = Field(default=None, max_length=16, index=True)
+    last_price: float | None = None
+    ffmc: float | None = None
+    reference_json: str = Field(sa_column=Column(Text, nullable=False))
     updated_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )

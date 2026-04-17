@@ -1,8 +1,8 @@
 """
 NSE symbol → LARGE_CAP / MID_CAP / SMALL_CAP for holdings UI.
 
-Defaults ship in code; optional JSON at ``data/nse_market_cap_overrides.json`` (gitignored)
-merges on top so you can extend caps without editing Python.
+Prefer :class:`api.models.NseEquityReference` (filled by ``scripts/refresh_nse_equity_reference.py``).
+This module is the **fallback**: code defaults plus optional ``data/nse_market_cap_overrides.json``.
 """
 
 from __future__ import annotations
