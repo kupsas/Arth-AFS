@@ -1,6 +1,21 @@
 # Scripts
 
-One-time setup and utility scripts. These are not part of the main pipeline or API — they're tools for first-run setup, database migration, and benchmark preparation.
+One-time setup and utility scripts. These are not part of the main pipeline or API — they are tools for migrations, benchmarks, maintenance, and debugging.
+
+## Buckets
+
+| Bucket | What belongs here | Where it is |
+|--------|-------------------|-------------|
+| **Supported maintenance** | Price history, weekly market refresh, NSE reference, holdings sync/enrich, merge prices test→prod | Top-level `*.py` in this folder |
+| **Legacy email backfills** | `backfill_*_emails.py` wrappers | Still here — each delegates to `scrape_historical.py` / `run_historical_backfill`; prefer **`scripts/scrape_historical.py`** or **`POST /api/scraper/backfill`** |
+| **Schema migrations** | `migrate_db.py`, `migrate_goals_v2.py` | Top-level — **backup first**; idempotent where documented |
+| **Archived** | Old phase migrations, one-off dedupe repair | [`archive/`](archive/README.md) |
+
+---
+
+## Archived (`scripts/archive/`)
+
+Rare upgrades and one-off repairs — see [`archive/README.md`](archive/README.md).
 
 ---
 
@@ -129,8 +144,9 @@ The `scripts/` folder has many **one-off** maintenance tools. Read the top of ea
 | `diagnose_portfolio_prices.py`, `validate_price_sources.py` | Debug missing marks or bad symbols |
 | `enrich_holdings.py`, `sync_all_holdings.py` | Holdings enrichment / sync |
 | `weekly_market_data_refresh.py` | Same weekly chain as the API scheduler (manual / cron if no server) |
-| `migrate_db.py`, `migrate_goals_v2.py`, `migrate_phase45.py` | Schema migrations (run with care; backup first) |
-| `compare_icici_trade_emails_to_db.py`, `remove_duplicate_pdf_email_transactions.py` | Reconciliation / dedup helpers |
+| `migrate_db.py`, `migrate_goals_v2.py` | Schema migrations (run with care; backup first) |
+| `migrate_phase45.py`, `remove_duplicate_pdf_email_transactions.py` | **Moved to** [`archive/`](archive/README.md) |
+| `compare_icici_trade_emails_to_db.py` | Reconciliation helper (ICICI trade emails vs DB) |
 
 Operator runbooks for **historical price backfill** and **test→prod price merge** are documented above (`backfill_price_history.py`, `merge_prices_from_db.py`).
 

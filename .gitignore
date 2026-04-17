@@ -44,6 +44,7 @@ docs/personal-data
 
 # Private strategic documents (personal financial goals, amounts, planning)
 docs/private/
+docs/product/
 
 # Generated benchmark CSVs — contain real transaction data (dates, amounts, narrations)
 # Re-generate with: python3 scripts/export_benchmark.py
@@ -73,7 +74,9 @@ data/*.db-wal
 data/*.db-shm
 
 # Manual / timestamped DB copies (e.g. arth.db.bak.YYYYMMDD_* and WAL/SHM siblings) — same sensitivity as *.db
+# Prefer a single folder: copy DBs into data/backups/ (also ignored via data/backups/ below).
 data/*bak*
+data/*.bak
 
 # Learned ICICI broker code → NSE ticker (machine-local; grows over time)
 data/icici_nse_symbol_overrides.json

@@ -414,12 +414,12 @@ def scrape_new_emails(
     # ── Iterate over each configured bank sender ──────────────────────────────
     for raw_sender in all_sender_emails(bank):
         sender = _normalise_sender(raw_sender)  # strips display name, lowercases
-        logger.info("── Scraping sender: %s", sender)
+        logger.debug("── Scraping sender: %s", sender)
 
         # Determine the lookback window (first run → SCRAPER_LOOKBACK_DAYS days ago;
         # subsequent runs → 1 day before the most recently received email).
         after_date = _get_lookback_date(session, sender, bank)
-        logger.info("   Querying emails since %s", after_date)
+        logger.debug("   Querying emails since %s", after_date)
 
         # ── Fetch email metadata from Gmail ───────────────────────────────────
         # This fetches subjects + IDs but NOT bodies — we download bodies only
@@ -436,7 +436,7 @@ def scrape_new_emails(
 
         # ── Filter out already-processed emails ───────────────────────────────
         new_messages = [m for m in messages if m.id not in already_done]
-        logger.info(
+        logger.debug(
             "   %d total, %d already processed, %d new to process",
             len(messages), len(messages) - len(new_messages), len(new_messages),
         )
@@ -457,7 +457,7 @@ def scrape_new_emails(
                 if status == "processed":
                     result.emails_processed += 1
                     result.txns_created += txn_count
-                    logger.info(
+                    logger.debug(
                         "   ✓ Processed '%s' → %d txn(s)", msg.subject[:70], txn_count
                     )
                 else:
@@ -544,7 +544,7 @@ def run_historical_backfill(
     # ── Mode: arbitrary Gmail query (subject filters, OR from: clauses, etc.) ─
     if gmail_query is not None:
         full_query = f"{gmail_query.strip()} after:{after_s} before:{before_s}"
-        logger.info("Historical backfill (custom query): %s", full_query[:200])
+        logger.debug("Historical backfill (custom query): %s", full_query[:200])
         try:
             messages = client.search_messages(
                 full_query,
@@ -559,7 +559,7 @@ def run_historical_backfill(
 
         result.emails_found += len(messages)
         new_messages = [m for m in messages if m.id not in already_done]
-        logger.info(
+        logger.debug(
             "   %d total, %d already processed, %d new to process",
             len(messages),
             len(messages) - len(new_messages),
@@ -614,7 +614,7 @@ def run_historical_backfill(
     for raw_sender in senders:
         sender_norm = _normalise_sender(raw_sender)
         query = f"from:{raw_sender} after:{after_s} before:{before_s}"
-        logger.info("Backfill query: %s", query)
+        logger.debug("Backfill query: %s", query)
 
         try:
             messages = client.search_messages(
@@ -630,6 +630,12 @@ def run_historical_backfill(
 
         result.emails_found += len(messages)
         new_messages = [m for m in messages if m.id not in already_done]
+        logger.debug(
+            "   %s — %d total, %d new to process",
+            sender_norm,
+            len(messages),
+            len(new_messages),
+        )
 
         for msg in new_messages:
             if dry_run:
@@ -666,4 +672,11 @@ def run_historical_backfill(
                 except Exception:
                     pass
 
+    logger.info(
+        "Historical backfill (per-sender) complete — processed: %d, skipped: %d, failed: %d, new txns: %d",
+        result.emails_processed,
+        result.emails_skipped,
+        result.emails_failed,
+        result.txns_created,
+    )
     return result
