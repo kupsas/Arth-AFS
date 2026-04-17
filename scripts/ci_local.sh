@@ -22,16 +22,17 @@ export GOOGLE_API_KEY="${GOOGLE_API_KEY:-dummy}"
 export APP_ENV="${APP_ENV:-test}"
 
 echo "==> ruff"
-python3 -m ruff check pipeline/ api/ scraper/ tests/
+python3 -m ruff check pipeline/ api/ scraper/ agent/ tests/
 
 echo "==> mypy"
-python3 -m mypy pipeline/ api/ scraper/
+python3 -m mypy pipeline/ api/ scraper/ agent/
 
 echo "==> pytest (coverage)"
 python3 -m pytest tests/ \
   -m "not slow" \
   --cov=pipeline \
   --cov=api \
+  --cov=agent \
   --cov-report=term-missing \
   --cov-fail-under=35 \
   -q
