@@ -35,9 +35,17 @@ def should_auto_review_email(confidence: ReviewConfidence) -> bool:
     Controlled by ``ARTH_EMAIL_AUTO_REVIEW`` (default ``1``): when disabled, never
     auto-marks. When enabled, ``HIGH`` confidence rows are auto-reviewed; set
     ``ARTH_EMAIL_AUTO_REVIEW_INCLUDE_MEDIUM=1`` to also auto-review ``MEDIUM``.
+
+    For manual QA of the review UI, ``ARTH_REVIEW_QUEUE_INCLUDE_HIGH=1`` keeps
+    ``HIGH`` rows in the queue (``is_reviewed=False``) instead of auto-approving them.
+    Remove or unset that variable when you only want ``MEDIUM`` and ``LOW`` in the queue.
     """
     raw = (os.getenv("ARTH_EMAIL_AUTO_REVIEW") or "1").strip().lower()
     if raw in ("0", "false", "no", "off"):
+        return False
+
+    show_high = (os.getenv("ARTH_REVIEW_QUEUE_INCLUDE_HIGH") or "").strip().lower()
+    if confidence == "HIGH" and show_high in ("1", "true", "yes", "on"):
         return False
 
     if confidence == "HIGH":
