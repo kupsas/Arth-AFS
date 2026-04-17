@@ -85,9 +85,11 @@ data/nse_market_cap_overrides.json
 data/gmail_credentials.json
 data/gmail_token.json
 
-# Real bank alert HTML (PII / account hints) — keep on your machine only.
-# Use scripts/discover_emails.py to populate locally; never commit samples.
-tests/fixtures/email_samples/
+# Local find/replace map used when syncing real Gmail HTML into fixtures (may contain PII substrings).
+data/email_fixture_redactions.json
+
+# Committed HTML under tests/fixtures/email_samples/ is synthetic / scrubbed for CI.
+# After `scripts/sync_email_parser_fixtures.py` with --no-redact, re-review before commit.
 
 # Next.js dashboard build artifacts and nested git repo
 dashboard/node_modules/

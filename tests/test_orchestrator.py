@@ -5,8 +5,8 @@ Strategy:
   - GmailClient is injected as a MagicMock — no real Gmail API calls.
   - In-memory SQLite (StaticPool) — no filesystem side-effects.
   - LLM is disabled by patching pipeline.config.LLM_MODEL = "none".
-  - Real HTML fixture files are used for email bodies so we test the full
-    parse → transform → classify → write pipeline end-to-end.
+  - HTML fixture files under ``tests/fixtures/email_samples/`` supply email bodies
+    so we exercise the full parse → transform → classify → write path end-to-end.
 
 Four key scenarios:
   1. Transaction email  → ProcessedEmail(status='processed') + Transaction(source_type='email')
@@ -31,13 +31,6 @@ from scraper.gmail_client import GmailMessage
 from scraper.orchestrator import scrape_new_emails
 
 FIXTURES = Path(__file__).parent / "fixtures" / "email_samples"
-
-# These tests require real bank email HTML samples which are gitignored (PII).
-# They run locally but are automatically skipped in CI where those files don't exist.
-pytestmark = pytest.mark.skipif(
-    not FIXTURES.exists(),
-    reason="email_samples fixtures not found (gitignored — local-only tests)",
-)
 
 # Sender addresses that appear in ALL_SENDERS (scraper/config.py)
 HDFC_SENDER  = "alerts@hdfcbank.net"
