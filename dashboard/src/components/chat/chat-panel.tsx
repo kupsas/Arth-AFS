@@ -1,6 +1,11 @@
 "use client";
 
-import type { ChatMessageUi, LiveTool } from "@/lib/chat-types";
+import type {
+  ActivitySegment,
+  ChatMessageUi,
+  LiveTool,
+  ToolCallUi,
+} from "@/lib/chat-types";
 
 import { ChatInput } from "./chat-input";
 import { MessageList } from "./message-list";
@@ -16,7 +21,12 @@ export function ChatPanel({
   messages,
   connectionOk,
   isGenerating,
+  isResponseStreaming,
   liveTools,
+  liveThinking = "",
+  isThinking = false,
+  liveActivitySegments = [],
+  liveWipTools = [],
   lastError,
   onSend,
   onStop,
@@ -24,7 +34,12 @@ export function ChatPanel({
   messages: ChatMessageUi[];
   connectionOk: boolean;
   isGenerating: boolean;
+  isResponseStreaming?: boolean;
   liveTools?: LiveTool[];
+  liveThinking?: string;
+  isThinking?: boolean;
+  liveActivitySegments?: ActivitySegment[];
+  liveWipTools?: ToolCallUi[];
   lastError: string | null;
   onSend: (text: string) => void;
   onStop: () => void;
@@ -67,7 +82,12 @@ export function ChatPanel({
       <MessageList
         messages={messages}
         isGenerating={isGenerating}
+        isResponseStreaming={isResponseStreaming}
         liveTools={liveTools}
+        liveThinking={liveThinking}
+        isThinking={isThinking}
+        liveActivitySegments={liveActivitySegments}
+        liveWipTools={liveWipTools}
       />
 
       <ChatInput

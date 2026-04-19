@@ -19,10 +19,13 @@ from agent.events import (
     ErrorEvent,
     LlmStepEvent,
     ResponseEvent,
+    ThinkingDoneEvent,
+    ThinkingEvent,
+    TokenEvent,
     ToolCallCompleted,
     ToolCallStarted,
 )
-from agent.llm import chat_completion
+from agent.llm import chat_completion, streaming_chat_completion
 from agent.memory import ConversationMemory
 from agent.prompts import load_system_prompt
 from agent.run_logger import AgentRunLogger
@@ -103,6 +106,50 @@ def _extract_reasoning_from_message(msg: Any) -> str | None:
     return None
 
 
+def _final_text_assistant_index(fragments: list[dict[str, Any]]) -> int | None:
+    """Index of the last assistant message without tool_calls (natural-language reply)."""
+    for j in range(len(fragments) - 1, -1, -1):
+        m = fragments[j]
+        if m.get("role") != "assistant":
+            continue
+        if m.get("tool_calls"):
+            continue
+        return j
+    return None
+
+
+def _thinking_joined_from_timeline(timeline: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for seg in timeline:
+        if str(seg.get("kind")) != "thinking":
+            continue
+        c = seg.get("content")
+        if isinstance(c, str) and c.strip():
+            parts.append(c.strip())
+    return "\n\n---\n\n".join(parts)
+
+
+def _attach_arth_metadata_to_final_assistant(
+    fragments: list[dict[str, Any]],
+    timeline: list[dict[str, Any]],
+    thinking_parts_fallback: list[str],
+) -> None:
+    """Persist chronological thinking/tool segments on the final assistant row (dashboard UI)."""
+    idx = _final_text_assistant_index(fragments)
+    if idx is None:
+        return
+    msg = fragments[idx]
+    if timeline:
+        msg["_arth_timeline"] = timeline
+        joined = _thinking_joined_from_timeline(timeline)
+        if joined.strip():
+            msg["_arth_thinking"] = joined
+        return
+    combined = "\n\n---\n\n".join(p for p in thinking_parts_fallback if p and str(p).strip())
+    if combined.strip():
+        msg["_arth_thinking"] = combined
+
+
 def _tool_intents_from_serialized(serialized: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for tc in serialized:
@@ -164,17 +211,58 @@ async def run_agent_turn(
         run_logger.log_final_system_prompt_once(system_prompt)
 
     turn_fragments: list[dict[str, Any]] = []
+    turn_reasoning_parts: list[str] = []
+    # Ordered segments: {"kind": "thinking"|"tools", ...} — chronological ReAct trace for the UI.
+    turn_timeline: list[dict[str, Any]] = []
     tool_batches = 0
     llm_step = 0
 
     while True:
         llm_step += 1
-        response = await chat_completion(
-            messages=messages,
-            tools=tool_openai,
-            cost_tracker=cost_tracker,
-            usage_call_type="agent",
-        )
+        step_thinking_buf = ""
+        # Prefer streaming so the dashboard can render token deltas. Tool-call
+        # turns suppress text emission as soon as tool deltas appear (see ``llm``).
+        stream_emitted = False
+
+        async def _emit_token(delta: str) -> None:
+            nonlocal stream_emitted
+            stream_emitted = True
+            await _emit_event(event_callback, TokenEvent(token=delta))
+
+        async def _emit_thinking_delta(delta: str) -> None:
+            nonlocal step_thinking_buf
+            step_thinking_buf += delta
+            await _emit_event(event_callback, ThinkingEvent(content=delta))
+
+        async def _emit_thinking_done() -> None:
+            await _emit_event(event_callback, ThinkingDoneEvent())
+
+        thinking_chunks_were_streamed = False
+        try:
+            response, thinking_chunks_were_streamed = await streaming_chat_completion(
+                messages=messages,
+                tools=tool_openai,
+                cost_tracker=cost_tracker,
+                usage_call_type="agent",
+                on_text_delta=_emit_token,
+                on_thinking_delta=_emit_thinking_delta,
+                on_thinking_done=_emit_thinking_done,
+            )
+        except Exception as e:
+            logger.warning(
+                "Streaming completion failed (%s) — falling back to non-streaming",
+                e,
+                exc_info=logger.isEnabledFor(logging.DEBUG),
+            )
+            if stream_emitted:
+                # Partial tokens may already be on the wire; a second completion would duplicate.
+                raise
+            response = await chat_completion(
+                messages=messages,
+                tools=tool_openai,
+                cost_tracker=cost_tracker,
+                usage_call_type="agent",
+            )
         choice = response.choices[0]
         msg = choice.message
         finish = str(choice.finish_reason or "").strip().lower()
@@ -188,6 +276,17 @@ async def run_agent_turn(
         else:
             content = None
         reasoning = _extract_reasoning_from_message(msg)
+        if reasoning:
+            turn_reasoning_parts.append(reasoning.strip())
+        if not thinking_chunks_were_streamed and reasoning:
+            await _emit_event(event_callback, ThinkingEvent(content=reasoning))
+            await _emit_event(event_callback, ThinkingDoneEvent())
+
+        step_thinking_for_timeline = step_thinking_buf.strip()
+        if not step_thinking_for_timeline and reasoning:
+            step_thinking_for_timeline = str(reasoning).strip()
+        if step_thinking_for_timeline:
+            turn_timeline.append({"kind": "thinking", "content": step_thinking_for_timeline})
 
         tcalls = getattr(msg, "tool_calls", None)
         if tcalls or finish == "tool_calls":
@@ -226,6 +325,9 @@ async def run_agent_turn(
                 final_assistant = {"role": "assistant", "content": text}
                 messages.append(final_assistant)
                 turn_fragments.append(final_assistant)
+                _attach_arth_metadata_to_final_assistant(
+                    turn_fragments, turn_timeline, turn_reasoning_parts
+                )
                 memory.extend_messages(turn_fragments)
                 await _emit_event(event_callback, ResponseEvent(content=text))
                 if run_logger is not None:
@@ -240,6 +342,7 @@ async def run_agent_turn(
             messages.append(assistant_part)
             turn_fragments.append(assistant_part)
 
+            tools_for_timeline: list[dict[str, Any]] = []
             for tc in serialized:
                 t0 = time.perf_counter()
                 name = tc["function"]["name"]
@@ -267,6 +370,14 @@ async def run_agent_turn(
                     safe = {"status": "success", "data": safe}
                 body = wrap_tool_output(name, safe)
                 dur_ms = int((time.perf_counter() - t0) * 1000)
+                tools_for_timeline.append(
+                    {
+                        "name": name,
+                        "arguments": parsed_args,
+                        "result": safe,
+                        "duration_ms": dur_ms,
+                    }
+                )
                 await _emit_event(
                     event_callback,
                     ToolCallCompleted(
@@ -286,6 +397,9 @@ async def run_agent_turn(
                 tool_msg = {"role": "tool", "tool_call_id": tid, "content": body}
                 messages.append(tool_msg)
                 turn_fragments.append(tool_msg)
+
+            if tools_for_timeline:
+                turn_timeline.append({"kind": "tools", "tools": tools_for_timeline})
 
             continue
 
@@ -315,6 +429,7 @@ async def run_agent_turn(
         final_assistant = {"role": "assistant", "content": text}
         messages.append(final_assistant)
         turn_fragments.append(final_assistant)
+        _attach_arth_metadata_to_final_assistant(turn_fragments, turn_timeline, turn_reasoning_parts)
         memory.extend_messages(turn_fragments)
         await _emit_event(event_callback, ResponseEvent(content=text))
         if run_logger is not None:

@@ -32,6 +32,7 @@ from agent.events import (
     LlmStepEvent,
     ResponseEvent,
     ScreeningBlockedEvent,
+    ThinkingDoneEvent,
     ThinkingEvent,
     TokenEvent,
     ToolCallCompleted,
@@ -146,6 +147,8 @@ def _event_to_wire(ev: AgentEvent) -> dict[str, Any]:
     """Map agent dataclass events to JSON the dashboard understands."""
     if isinstance(ev, ThinkingEvent):
         return {"type": "thinking", "content": ev.content}
+    if isinstance(ev, ThinkingDoneEvent):
+        return {"type": "thinking_done"}
     if isinstance(ev, LlmStepEvent):
         return {
             "type": "llm_step",

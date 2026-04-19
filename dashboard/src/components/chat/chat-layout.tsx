@@ -1,9 +1,11 @@
 "use client";
 
 import type {
+  ActivitySegment,
   ChatMessageUi,
   ChatSessionSummary,
   LiveTool,
+  ToolCallUi,
 } from "@/lib/chat-types";
 
 import { ChatPanel } from "./chat-panel";
@@ -16,7 +18,12 @@ export function ChatLayout({
   messages,
   connectionOk,
   isGenerating,
+  isResponseStreaming,
   liveTools,
+  liveThinking,
+  isThinking,
+  liveActivitySegments,
+  liveWipTools,
   lastError,
   onNewChat,
   onSelectSession,
@@ -30,7 +37,12 @@ export function ChatLayout({
   messages: ChatMessageUi[];
   connectionOk: boolean;
   isGenerating: boolean;
+  isResponseStreaming?: boolean;
   liveTools?: LiveTool[];
+  liveThinking?: string;
+  isThinking?: boolean;
+  liveActivitySegments?: ActivitySegment[];
+  liveWipTools?: ToolCallUi[];
   lastError: string | null;
   onNewChat: () => void;
   onSelectSession: (id: string) => void;
@@ -53,7 +65,12 @@ export function ChatLayout({
           messages={messages}
           connectionOk={connectionOk}
           isGenerating={isGenerating}
+          isResponseStreaming={isResponseStreaming}
           liveTools={liveTools}
+          liveThinking={liveThinking}
+          isThinking={isThinking}
+          liveActivitySegments={liveActivitySegments}
+          liveWipTools={liveWipTools}
           lastError={lastError}
           onSend={onSend}
           onStop={onStop}

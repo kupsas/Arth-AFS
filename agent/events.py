@@ -19,6 +19,13 @@ class ThinkingEvent:
 
 
 @dataclass
+class ThinkingDoneEvent:
+    """Tells the UI to collapse the live thinking block (reasoning phase ended)."""
+
+    pass
+
+
+@dataclass
 class LlmStepEvent:
     """
     One model forward pass inside the ReAct loop (before tools run, if any).
@@ -84,6 +91,7 @@ class ScreeningBlockedEvent:
 # Union type for type hints on callbacks
 AgentEvent = (
     ThinkingEvent
+    | ThinkingDoneEvent
     | LlmStepEvent
     | ToolCallStarted
     | ToolCallCompleted

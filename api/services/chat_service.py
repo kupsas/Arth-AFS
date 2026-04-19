@@ -107,6 +107,17 @@ def _row_from_openai_dict(session_id: str, m: dict[str, Any]) -> ChatMessage:
 
     tool_name = m.get("name")  # rarely present; OpenAI tool role uses tool_call_id only
 
+    # Arth-only: model reasoning + chronological activity (not sent to LLM on replay).
+    meta: dict[str, Any] = {}
+    arth = m.get("_arth_thinking")
+    if isinstance(arth, str) and arth.strip():
+        meta["_arth_thinking"] = arth
+    tl = m.get("_arth_timeline")
+    if isinstance(tl, list) and tl:
+        meta["_arth_timeline"] = tl
+
+    metadata_json: str | None = json.dumps(meta, ensure_ascii=False) if meta else None
+
     return ChatMessage(
         session_id=session_id,
         role=role,
@@ -114,7 +125,7 @@ def _row_from_openai_dict(session_id: str, m: dict[str, Any]) -> ChatMessage:
         tool_calls_json=tool_calls_json,
         tool_call_id=tool_call_id,
         tool_name=str(tool_name) if tool_name else None,
-        metadata_json=None,
+        metadata_json=metadata_json,
         created_at=_utc_now(),
     )
 
@@ -134,6 +145,16 @@ def _openai_dict_from_row(row: ChatMessage) -> dict[str, Any]:
         # OpenAI format requires content for tool messages
         if "content" not in m:
             m["content"] = ""
+    if row.metadata_json:
+        try:
+            meta = json.loads(row.metadata_json)
+            if isinstance(meta, dict):
+                if isinstance(meta.get("_arth_thinking"), str):
+                    m["_arth_thinking"] = meta["_arth_thinking"]
+                if isinstance(meta.get("_arth_timeline"), list):
+                    m["_arth_timeline"] = meta["_arth_timeline"]
+        except json.JSONDecodeError:
+            pass
     return m
 
 

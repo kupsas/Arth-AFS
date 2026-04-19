@@ -37,7 +37,12 @@ function ChatPageInner() {
     messages,
     connection,
     isGenerating,
+    isResponseStreaming,
     liveTools,
+    liveThinking,
+    isThinking,
+    liveActivitySegments,
+    liveWipTools,
     lastError,
     sendMessage,
     stopGenerating,
@@ -89,7 +94,12 @@ function ChatPageInner() {
         messages={messages}
         connectionOk={connectionOk}
         isGenerating={isGenerating}
+        isResponseStreaming={isResponseStreaming}
         liveTools={liveTools}
+        liveThinking={liveThinking}
+        isThinking={isThinking}
+        liveActivitySegments={liveActivitySegments}
+        liveWipTools={liveWipTools}
         lastError={lastError}
         onNewChat={onNewChat}
         onSelectSession={onSelectSession}

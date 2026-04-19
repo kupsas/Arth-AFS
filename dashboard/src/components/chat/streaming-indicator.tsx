@@ -2,40 +2,96 @@
 
 /**
  * Shown while the agent is still working (submitted, not yet ``done``).
- * When the server streams ``tool_call_*`` events, we list each tool name
- * (read-only labels) so the wait feels informative — like Cursor’s step log.
+ * Prefers a chronological lane (thinking → tools → thinking → …) when the hook
+ * supplies ``liveActivitySegments`` + optional in-flight tools; otherwise falls
+ * back to the legacy flat thinking strip + tool name list.
  */
 
-import type { LiveTool } from "@/lib/chat-types";
+import type { ActivitySegment, LiveTool, ToolCallUi } from "@/lib/chat-types";
+import { formatToolLabel } from "@/lib/format-tool-label";
 import { cn } from "@/lib/utils";
 
-/** Turn ``get_spending_by_category`` into a short human-ish label for the strip. */
-function formatToolLabel(rawName: string): string {
-  const s = rawName.trim();
-  if (!s) return "tool";
-  return s
-    .replace(/_/g, " ")
-    .replace(/\s+/g, " ")
-    .split(" ")
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-    .join(" ");
-}
+import { ThinkingBlock } from "./thinking-block";
+import { ToolCallGroup } from "./tool-call-group";
 
 export function StreamingIndicator({
   className,
   liveTools,
+  liveThinking = "",
+  isThinking = false,
+  /** When the assistant bubble is already growing from ``token`` frames, hide this strip. */
+  isResponseStreaming = false,
+  /** Completed interleaved segments for this turn (thinking ↔ tools). */
+  liveActivitySegments = [] as ActivitySegment[],
+  /**
+   * Tools for the *current* step after the last flushed boundary — same lane as
+   * ``liveActivitySegments``, still in progress.
+   */
+  liveWipSegmentTools = [] as ToolCallUi[],
 }: {
   className?: string;
   /** Tool names emitted over the socket during this turn (running → done). */
   liveTools?: LiveTool[];
+  /** Ephemeral model reasoning text (WebSocket ``thinking`` frames). */
+  liveThinking?: string;
+  /** True while reasoning chunks are still arriving for the current step. */
+  isThinking?: boolean;
+  isResponseStreaming?: boolean;
+  liveActivitySegments?: ActivitySegment[];
+  liveWipSegmentTools?: ToolCallUi[];
 }) {
   const tools = liveTools ?? [];
+  const useChronological =
+    liveActivitySegments.length > 0 ||
+    liveWipSegmentTools.length > 0 ||
+    liveThinking.trim().length > 0;
+
+  if (isResponseStreaming) {
+    return null;
+  }
+
+  if (useChronological) {
+    return (
+      <div
+        className={cn("flex flex-col gap-2 text-xs text-muted-foreground", className)}
+        aria-live="polite"
+      >
+        {liveActivitySegments.map((seg, idx) =>
+          seg.kind === "thinking" ? (
+            <ThinkingBlock
+              key={`seg-${idx}`}
+              content={seg.content}
+              isLive={false}
+              persisted={false}
+            />
+          ) : (
+            <ToolCallGroup key={`seg-${idx}`} tools={seg.tools} />
+          ),
+        )}
+        {liveThinking.trim().length > 0 && (
+          <ThinkingBlock content={liveThinking} isLive={isThinking} />
+        )}
+        {liveWipSegmentTools.length > 0 && <ToolCallGroup tools={liveWipSegmentTools} />}
+        <div className="flex items-center gap-1.5">
+          <span className="inline-flex gap-0.5">
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/80 [animation-delay:-0.2s]" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/80 [animation-delay:-0.1s]" />
+            <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/80" />
+          </span>
+          <span>Arth is thinking…</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
       className={cn("flex flex-col gap-2 text-xs text-muted-foreground", className)}
       aria-live="polite"
     >
+      {liveThinking.trim().length > 0 && (
+        <ThinkingBlock content={liveThinking} isLive={isThinking} />
+      )}
       <div className="flex items-center gap-1.5">
         <span className="inline-flex gap-0.5">
           <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/80 [animation-delay:-0.2s]" />
@@ -72,7 +128,7 @@ export function StreamingIndicator({
                     : "font-medium text-foreground"
                 }
               >
-                {formatToolLabel(t.name)}
+                {formatToolLabel(t.name, i)}
               </span>
             </li>
           ))}

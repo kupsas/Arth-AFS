@@ -92,6 +92,10 @@ AGENT_GEMINI_EXTRA_THINKING: bool = os.getenv(
     "AGENT_GEMINI_EXTRA_THINKING", "false"
 ).strip().lower() in ("1", "true", "yes")
 
+# OpenAI / Anthropic-style reasoning effort (LiteLLM ``reasoning_effort``). Empty = off.
+# Values: low | medium | high — extra output tokens / cost when enabled.
+AGENT_REASONING_EFFORT: str = os.getenv("AGENT_REASONING_EFFORT", "").strip().lower()
+
 # Request timeout for each LLM call (seconds)
 LLM_REQUEST_TIMEOUT: float = float(os.getenv("LLM_REQUEST_TIMEOUT", "120"))
 

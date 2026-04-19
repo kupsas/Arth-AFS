@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiViaSameOrigin, buildChatWebSocketUrl } from "@/lib/api-base";
 import type {
+  ActivitySegment,
   ChatMessageUi,
   ClientChatWireMessage,
   LiveTool,
@@ -35,24 +36,102 @@ function uuid(): string {
   return crypto.randomUUID?.() ?? `id-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function cloneToolUi(t: ToolCallUi): ToolCallUi {
+  return {
+    name: t.name,
+    arguments: { ...t.arguments },
+    ...(t.result !== undefined
+      ? {
+          result: { ...t.result } as Record<string, unknown>,
+          duration_ms: t.duration_ms,
+        }
+      : {}),
+  };
+}
+
 export function useChat(
   sessionIdProp: string | undefined,
   onSessionReady?: (sessionId: string) => void,
 ) {
   const onReadyRef = useRef(onSessionReady);
-  onReadyRef.current = onSessionReady;
+  useEffect(() => {
+    onReadyRef.current = onSessionReady;
+  }, [onSessionReady]);
   const [messages, setMessages] = useState<ChatMessageUi[]>([]);
   const [connection, setConnection] = useState<ChatConnectionStatus>("connecting");
   const [isGenerating, setIsGenerating] = useState(false);
+  /** True once we have received at least one ``token`` frame for the current turn (hides the thinking strip). */
+  const [isResponseStreaming, setIsResponseStreaming] = useState(false);
   /** Tool names shown live under “Arth is thinking…” while the turn runs (mirrors WS events). */
   const [liveTools, setLiveTools] = useState<LiveTool[]>([]);
+  /** Ephemeral model reasoning (WebSocket ``thinking``); cleared each turn / step boundary. */
+  const [liveThinking, setLiveThinking] = useState("");
+  /** True while ``thinking`` chunks are arriving before ``thinking_done``. */
+  const [isThinking, setIsThinking] = useState(false);
+  /** Interleaved thinking + tool segments completed so far this turn (chronological lane). */
+  const [liveActivitySegments, setLiveActivitySegments] = useState<ActivitySegment[]>([]);
+  /** Tools in the current ReAct step after ``toolsMarkRef`` (in-flight, for the live lane). */
+  const [liveWipTools, setLiveWipTools] = useState<ToolCallUi[]>([]);
   const [lastError, setLastError] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
+  /**
+   * After ``thinking_done``, the next ``thinking`` frame starts a new ReAct step —
+   * replace ``liveThinking`` instead of appending.  Ref tracks “same step” vs “new step”.
+   */
+  const isThinkingLiveRef = useRef(false);
+  /**
+   * Full reasoning text for the current user turn (all steps), appended every ``thinking`` chunk.
+   * Copied onto the final assistant ``ChatMessageUi.thinking`` on ``response``, then cleared.
+   */
+  const turnThinkingRef = useRef("");
+  /** Reasoning accumulated for the *current* ``thinking`` burst (until ``thinking_done``). */
+  const turnStepThinkingRef = useRef("");
+  /** Completed segments for this turn — mirrors what we persist as ``_arth_timeline``. */
+  const activityTimelineRef = useRef<ActivitySegment[]>([]);
+  /**
+   * Index into ``liveAssistantRef.tools``: tools at or after this index belong to the current
+   * ReAct step; earlier entries are already flushed into ``activityTimelineRef``.
+   */
+  const toolsMarkRef = useRef(0);
   /** Assistant row being filled for the current turn (tools + final text). */
   const liveAssistantRef = useRef<{ id: string; tools: ToolCallUi[] } | null>(
     null,
   );
+  /** Id of the assistant bubble we append ``token`` deltas into (cleared on ``response`` / errors). */
+  const streamDraftIdRef = useRef<string | null>(null);
+
+  const flushPendingToolsToActivity = useCallback(() => {
+    const live = liveAssistantRef.current;
+    const tools = live?.tools ?? [];
+    if (tools.length <= toolsMarkRef.current) return;
+    const slice = tools.slice(toolsMarkRef.current).map(cloneToolUi);
+    activityTimelineRef.current = [
+      ...activityTimelineRef.current,
+      { kind: "tools", tools: slice },
+    ];
+    setLiveActivitySegments([...activityTimelineRef.current]);
+    toolsMarkRef.current = tools.length;
+  }, []);
+
+  const pushActivitySegment = useCallback((seg: ActivitySegment) => {
+    activityTimelineRef.current = [...activityTimelineRef.current, seg];
+    setLiveActivitySegments([...activityTimelineRef.current]);
+  }, []);
+
+  const syncWipTools = useCallback(() => {
+    const live = liveAssistantRef.current;
+    const tools = live?.tools ?? [];
+    setLiveWipTools(tools.slice(toolsMarkRef.current).map(cloneToolUi));
+  }, []);
+
+  const resetTurnActivity = useCallback(() => {
+    activityTimelineRef.current = [];
+    setLiveActivitySegments([]);
+    toolsMarkRef.current = 0;
+    turnStepThinkingRef.current = "";
+    setLiveWipTools([]);
+  }, []);
 
   /** Hydrate transcript when switching threads (REST — same rows the agent loads server-side). */
   useEffect(() => {
@@ -126,8 +205,45 @@ export function useChat(
             { id: uuid(), role: "assistant", content: msg },
           ]);
           setIsGenerating(false);
+          setIsResponseStreaming(false);
           liveAssistantRef.current = null;
+          streamDraftIdRef.current = null;
           setLiveTools([]);
+          isThinkingLiveRef.current = false;
+          setLiveThinking("");
+          setIsThinking(false);
+          turnThinkingRef.current = "";
+          resetTurnActivity();
+          return;
+        }
+
+        if (typ === "thinking") {
+          const chunk = String(data.content ?? "");
+          if (!chunk) return;
+          setIsGenerating(true);
+          if (!isThinkingLiveRef.current) {
+            flushPendingToolsToActivity();
+            turnStepThinkingRef.current = "";
+          }
+          turnStepThinkingRef.current += chunk;
+          turnThinkingRef.current += chunk;
+          isThinkingLiveRef.current = true;
+          setLiveThinking(turnStepThinkingRef.current);
+          setIsThinking(true);
+          syncWipTools();
+          return;
+        }
+
+        if (typ === "thinking_done") {
+          const buf = turnStepThinkingRef.current.trim();
+          turnStepThinkingRef.current = "";
+          if (buf) {
+            pushActivitySegment({ kind: "thinking", content: buf });
+          }
+          isThinkingLiveRef.current = false;
+          setLiveThinking("");
+          setIsThinking(false);
+          syncWipTools();
           return;
         }
 
@@ -149,6 +265,54 @@ export function useChat(
             ...prev,
             { name: String(data.tool_name ?? ""), status: "running" },
           ]);
+          syncWipTools();
+          return;
+        }
+
+        if (typ === "token") {
+          const piece = String((data as { token?: string }).token ?? "");
+          if (!piece) return;
+          setIsGenerating(true);
+          setIsResponseStreaming(true);
+          if (!liveAssistantRef.current) {
+            liveAssistantRef.current = { id: uuid(), tools: [] };
+          }
+          const live = liveAssistantRef.current;
+          const existingDraft = streamDraftIdRef.current;
+          if (!existingDraft) {
+            streamDraftIdRef.current = live.id;
+            const toolCalls =
+              live.tools.length > 0
+                ? live.tools.map((t) => ({
+                    name: t.name,
+                    arguments: { ...t.arguments },
+                    ...(t.result !== undefined
+                      ? {
+                          result: { ...t.result } as Record<string, unknown>,
+                          duration_ms: t.duration_ms,
+                        }
+                      : {}),
+                  }))
+                : undefined;
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: live.id,
+                role: "assistant",
+                content: piece,
+                isStreaming: true,
+                ...(toolCalls && toolCalls.length > 0 ? { toolCalls } : {}),
+              },
+            ]);
+            return;
+          }
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === existingDraft
+                ? { ...m, content: m.content + piece, isStreaming: true }
+                : m,
+            ),
+          );
           return;
         }
 
@@ -182,48 +346,140 @@ export function useChat(
             }
             return next;
           });
+          syncWipTools();
           return;
         }
 
         if (typ === "response") {
           const text = String(data.content ?? "");
-          setMessages((prev) => {
-            const live = liveAssistantRef.current;
-            liveAssistantRef.current = null;
-            if (live) {
+          /**
+           * Read refs here synchronously — not inside ``setMessages``.
+           * The next WebSocket frame is often ``done``, which clears refs; React may
+           * run the state updater later, so reading refs inside the updater loses tools.
+           */
+          const live = liveAssistantRef.current;
+          const draftId = streamDraftIdRef.current;
+
+          const toolsSnapshot = live?.tools ?? [];
+          const finalActivity: ActivitySegment[] = [...activityTimelineRef.current];
+          if (toolsSnapshot.length > toolsMarkRef.current) {
+            finalActivity.push({
+              kind: "tools",
+              tools: toolsSnapshot.slice(toolsMarkRef.current).map(cloneToolUi),
+            });
+          }
+          const stepLeft = turnStepThinkingRef.current.trim();
+          if (stepLeft) {
+            finalActivity.push({ kind: "thinking", content: stepLeft });
+          }
+
+          const thinkingText = turnThinkingRef.current.trim();
+          turnThinkingRef.current = "";
+          turnStepThinkingRef.current = "";
+
+          streamDraftIdRef.current = null;
+          liveAssistantRef.current = null;
+          setIsResponseStreaming(false);
+          resetTurnActivity();
+
+          const toolCallsFromLive =
+            live && live.tools.length > 0
+              ? live.tools.map((t) => ({
+                  name: t.name,
+                  arguments: { ...t.arguments },
+                  ...(t.result !== undefined
+                    ? {
+                        result: { ...t.result } as Record<string, unknown>,
+                        duration_ms: t.duration_ms,
+                      }
+                    : {}),
+                }))
+              : undefined;
+
+          const streamExtras =
+            finalActivity.length > 0
+              ? { activity: finalActivity }
+              : {
+                  ...(thinkingText ? { thinking: thinkingText } : {}),
+                  ...(toolCallsFromLive && toolCallsFromLive.length > 0
+                    ? { toolCalls: toolCallsFromLive }
+                    : {}),
+                };
+
+          // Streamed assistant text: patch the draft row (``token`` frames already built it).
+          if (draftId) {
+            setMessages((prev) => {
+              const ix = prev.findIndex((m) => m.id === draftId);
+              if (ix >= 0) {
+                return prev.map((m, j) =>
+                  j === ix
+                    ? {
+                        ...m,
+                        role: "assistant",
+                        content: text,
+                        isStreaming: false,
+                        ...streamExtras,
+                      }
+                    : m,
+                );
+              }
               return [
                 ...prev,
                 {
-                  id: live.id,
-                  role: "assistant",
+                  id: draftId,
+                  role: "assistant" as const,
                   content: text,
-                  toolCalls: live.tools.length ? live.tools : undefined,
+                  ...streamExtras,
                 },
               ];
-            }
-            return [...prev, { id: uuid(), role: "assistant", content: text }];
-          });
+            });
+            return;
+          }
+
+          const assistantId = live?.id ?? uuid();
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: assistantId,
+              role: "assistant",
+              content: text,
+              ...streamExtras,
+            },
+          ]);
           return;
         }
 
         if (typ === "error") {
           const msg = String(data.message ?? "Error");
+          liveAssistantRef.current = null;
+          streamDraftIdRef.current = null;
+          setIsResponseStreaming(false);
           setMessages((prev) => [
             ...prev,
             { id: uuid(), role: "assistant", content: msg },
           ]);
           setLiveTools([]);
+          isThinkingLiveRef.current = false;
+          setLiveThinking("");
+          setIsThinking(false);
+          turnThinkingRef.current = "";
+          resetTurnActivity();
           return;
         }
 
         if (typ === "done") {
           setIsGenerating(false);
-          liveAssistantRef.current = null;
+          setIsResponseStreaming(false);
           setLiveTools([]);
+          isThinkingLiveRef.current = false;
+          setLiveThinking("");
+          setIsThinking(false);
+          turnThinkingRef.current = "";
+          resetTurnActivity();
           return;
         }
 
-        // llm_step / token — UI ignores (final ``response`` carries text).
+        // llm_step — UI ignores (``token`` + ``response`` carry assistant text).
       };
     }
 
@@ -248,7 +504,13 @@ export function useChat(
         if (wsRef.current === ws) wsRef.current = null;
       }
     };
-  }, [sessionIdProp]);
+  }, [
+    sessionIdProp,
+    flushPendingToolsToActivity,
+    pushActivitySegment,
+    syncWipTools,
+    resetTurnActivity,
+  ]);
 
   const sendMessage = useCallback((raw: string) => {
     const ws = wsRef.current;
@@ -261,11 +523,20 @@ export function useChat(
       { id: uuid(), role: "user", content },
     ]);
     setIsGenerating(true);
+    setIsResponseStreaming(false);
     setLiveTools([]);
+    isThinkingLiveRef.current = false;
+    setLiveThinking("");
+    setIsThinking(false);
+    turnThinkingRef.current = "";
+    resetTurnActivity();
+    // New user turn — drop any stale assistant draft (e.g. stopped mid-stream).
+    liveAssistantRef.current = null;
+    streamDraftIdRef.current = null;
 
     const payload: ClientChatWireMessage = { type: "send_message", content };
     ws.send(JSON.stringify(payload));
-  }, []);
+  }, [resetTurnActivity]);
 
   const stopGenerating = useCallback(() => {
     const ws = wsRef.current;
@@ -278,7 +549,12 @@ export function useChat(
     messages,
     connection,
     isGenerating,
+    isResponseStreaming,
     liveTools,
+    liveThinking,
+    isThinking,
+    liveActivitySegments,
+    liveWipTools,
     lastError,
     sendMessage,
     stopGenerating,
