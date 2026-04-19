@@ -4,10 +4,11 @@ ReAct-style agent loop: the model may call tools until it returns a final answer
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from httpx import AsyncClient
@@ -41,6 +42,17 @@ CONVERSATION_LIMIT_REPLY = (
 
 def _noop_event(_: AgentEvent) -> None:
     return None
+
+
+# Callback may be sync (CLI, evals) or async (dashboard WebSocket).
+AgentEventCallback = Callable[[AgentEvent], None | Awaitable[None]]
+
+
+async def _emit_event(cb: AgentEventCallback, ev: AgentEvent) -> None:
+    """Invoke the subscriber; await if it returns a coroutine (async dashboard UI)."""
+    result = cb(ev)
+    if inspect.isawaitable(result):
+        await result  # type: ignore[arg-type]
 
 
 def _serialize_tool_calls(tool_calls: Any) -> list[dict[str, Any]]:
@@ -110,7 +122,7 @@ async def run_agent_turn(
     memory: ConversationMemory,
     client: AsyncClient,
     user_profile: str,
-    event_callback: Callable[[AgentEvent], None] = _noop_event,
+    event_callback: AgentEventCallback = _noop_event,
     run_logger: AgentRunLogger | None = None,
     cost_tracker: Any | None = None,
 ) -> str:
@@ -133,7 +145,7 @@ async def run_agent_turn(
         if run_logger is not None:
             run_logger.log_user_message(user_message)
             run_logger.log_note("MAX_CONVERSATION_TURNS reached — user message not stored in memory")
-        event_callback(ResponseEvent(content=text))
+        await _emit_event(event_callback, ResponseEvent(content=text))
         return text
 
     tools = get_all_tools()
@@ -194,7 +206,8 @@ async def run_agent_turn(
                     reasoning=reasoning,
                     tool_intents=tool_intents,
                 )
-            event_callback(
+            await _emit_event(
+                event_callback,
                 LlmStepEvent(
                     step=llm_step,
                     model=model_used,
@@ -202,7 +215,7 @@ async def run_agent_turn(
                     content=content,
                     reasoning=reasoning,
                     tool_intents=tool_intents,
-                )
+                ),
             )
 
             if not serialized:
@@ -214,7 +227,7 @@ async def run_agent_turn(
                 messages.append(final_assistant)
                 turn_fragments.append(final_assistant)
                 memory.extend_messages(turn_fragments)
-                event_callback(ResponseEvent(content=text))
+                await _emit_event(event_callback, ResponseEvent(content=text))
                 if run_logger is not None:
                     run_logger.log_note("unreadable tool_calls — returning apology text")
                     run_logger.log_final_assistant(text)
@@ -236,12 +249,13 @@ async def run_agent_turn(
                     parsed_args: dict[str, Any] = json.loads(args or "{}")
                 except json.JSONDecodeError:
                     parsed_args = {"_invalid_json": args}
-                event_callback(
+                await _emit_event(
+                    event_callback,
                     ToolCallStarted(
                         tool_name=name,
                         arguments=parsed_args,
                         tool_call_id=tid or None,
-                    )
+                    ),
                 )
                 spec = get_tool(name)
                 if spec is None:
@@ -253,13 +267,14 @@ async def run_agent_turn(
                     safe = {"status": "success", "data": safe}
                 body = wrap_tool_output(name, safe)
                 dur_ms = int((time.perf_counter() - t0) * 1000)
-                event_callback(
+                await _emit_event(
+                    event_callback,
                     ToolCallCompleted(
                         tool_name=name,
                         result=safe,
                         duration_ms=dur_ms,
                         tool_call_id=tid or None,
-                    )
+                    ),
                 )
                 if run_logger is not None:
                     run_logger.log_tool_result(
@@ -284,7 +299,8 @@ async def run_agent_turn(
                 reasoning=reasoning,
                 tool_intents=[],
             )
-        event_callback(
+        await _emit_event(
+            event_callback,
             LlmStepEvent(
                 step=llm_step,
                 model=model_used,
@@ -292,7 +308,7 @@ async def run_agent_turn(
                 content=content,
                 reasoning=reasoning,
                 tool_intents=[],
-            )
+            ),
         )
 
         text = content if content is not None else ""
@@ -300,7 +316,7 @@ async def run_agent_turn(
         messages.append(final_assistant)
         turn_fragments.append(final_assistant)
         memory.extend_messages(turn_fragments)
-        event_callback(ResponseEvent(content=text))
+        await _emit_event(event_callback, ResponseEvent(content=text))
         if run_logger is not None:
             run_logger.log_final_assistant(text)
         return text
@@ -309,7 +325,7 @@ async def run_agent_turn(
         "I hit the tool-call safety limit for this question. "
         "Try narrowing the question (one time period or one account) and ask again."
     )
-    event_callback(ErrorEvent(message=apology, recoverable=True))
+    await _emit_event(event_callback, ErrorEvent(message=apology, recoverable=True))
     if turn_fragments:
         memory.extend_messages(turn_fragments)
     memory.extend_messages([{"role": "assistant", "content": apology}])

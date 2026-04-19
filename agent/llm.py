@@ -7,9 +7,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import litellm
 from litellm import acompletion
 
 from agent import config as cfg
+
+# Must run after ``import litellm`` (library reads this flag at call time).
+litellm.suppress_debug_info = True
 
 logger = logging.getLogger(__name__)
 
