@@ -70,18 +70,6 @@ def _simulation_debug_enabled() -> bool:
     return False
 
 
-def _normalize_simulation_goals(goals: list[SimulationGoal]) -> list[SimulationGoal]:
-    """Legacy ``GROWTH`` rows map to POINT_IN_TIME (same lump-sum engine path)."""
-
-    out: list[SimulationGoal] = []
-    for g in goals:
-        if (g.goal_class or "").strip().upper() == "GROWTH":
-            out.append(g.model_copy(update={"goal_class": GC_POINT}))
-        else:
-            out.append(g)
-    return out
-
-
 def _recurring_is_mandatory_bill(goal: SimulationGoal) -> bool:
     """True if this recurring goal must be funded before PIT / discretionary recurring."""
     if goal.goal_class.upper() != GC_RECURRING:
@@ -108,7 +96,7 @@ class SimulationGoal(BaseModel):
     name: str
     goal_class: str = Field(
         ...,
-        description="POINT_IN_TIME | RECURRING_CASH_FLOW (legacy GROWTH is coerced to POINT_IN_TIME)",
+        description="POINT_IN_TIME | RECURRING_CASH_FLOW",
     )
     target_amount: float | None = None
     target_date: datetime.date | None = None
@@ -839,7 +827,7 @@ def allocate_surplus(
     """
     if not goals:
         return {}
-    goals = _normalize_simulation_goals(goals)
+    goals = list(goals)
     td = today or datetime.date.today()
     month_start = td.replace(day=1)
     remaining = max(0.0, float(surplus))
@@ -1486,7 +1474,7 @@ def simulate(params: SimulationParams) -> SimulationResult:
     uvicorn. Logs go to ``data/logs/arth.log`` at DEBUG (stdout stays INFO unless you
     lower the stream level).
     """
-    params = params.model_copy(update={"goals": _normalize_simulation_goals(list(params.goals))})
+    params = params.model_copy(update={"goals": list(params.goals)})
 
     dbg = _simulation_debug_enabled()
     if dbg:

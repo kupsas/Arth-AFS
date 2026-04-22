@@ -1,5 +1,5 @@
 """
-Goals tools — list, detail, surplus, and hierarchy via ``/api/goals*`` and ``/api/surplus``.
+Goals tools — list, detail, surplus via ``/api/goals*`` and ``/api/surplus``.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ GOAL_TARGET_AMOUNT_BASIS_NOTE = (
         "Use when the user asks about goals, goal order, which goal matters most, or "
         "progress toward named goals at a glance. Read-only. "
         "**Each goal's target_amount is in today's money (INR), not a future nominal value at the goal date.** "
-        "For one goal's deep dive (ancestors, descendants), use get_goal_detail."
+        "For one goal's deep dive, use get_goal_detail."
     ),
 )
 async def get_goals_overview(
@@ -120,9 +120,8 @@ def _months_remaining(target_date_str: str | None) -> int | None:
 @tool(
     name="get_goal_detail",
     description=(
-        "Deep detail for **one** goal: progress, targets, tier, plus ancestor and descendant "
-        "goal names (no graph ids). Accepts fuzzy ``goal_name_or_id`` "
-        "(e.g. 'emergency fund', 'house'). Read-only. "
+        "Deep detail for **one** goal: progress, targets, tier, optional decomposition parent. "
+        "Accepts fuzzy ``goal_name_or_id`` (e.g. 'emergency fund', 'house'). Read-only. "
         "**target_amount is in today's money (INR), not the future nominal amount at target_date.** "
         "For all goals + system ranks, use get_goals_overview."
     ),
@@ -144,47 +143,35 @@ async def get_goal_detail(
     g.raise_for_status()
     goal = g.json()
 
-    an = await client.get(f"/api/goals/{gid}/ancestors")
-    an.raise_for_status()
-    ancestors = an.json()
+    parent_summary: dict[str, Any] | None = None
+    pid = goal.get("parent_goal_id")
+    if isinstance(pid, int) and pid > 0:
+        pr = await client.get(f"/api/goals/{pid}")
+        if pr.status_code == 200:
+            pg = pr.json()
+            parent_summary = {
+                "id": pg.get("id"),
+                "name": pg.get("name"),
+                "computed_percentage": pg.get("computed_percentage"),
+            }
 
-    de = await client.get(f"/api/goals/{gid}/descendants")
-    de.raise_for_status()
-    descendants = de.json()
-
-    return format_goal_detail_for_agent(goal, ancestors, descendants)
+    return format_goal_detail_for_agent(goal, parent_summary)
 
 
 def format_goal_detail_for_agent(
     goal: dict[str, Any],
-    ancestors: list[dict[str, Any]],
-    descendants: list[dict[str, Any]],
+    parent_goal: dict[str, Any] | None,
 ) -> dict[str, Any]:
     td = str(goal.get("target_date")) if goal.get("target_date") else None
     monthly_need = goal.get("computed_monthly_need") or goal.get("monthly_need")
 
-    anc_names = [
-        {
-            "name": a.get("name"),
-            "computed_percentage": a.get("computed_percentage"),
-        }
-        for a in ancestors
-    ]
-    des_names = [
-        {
-            "name": d.get("name"),
-            "computed_percentage": d.get("computed_percentage"),
-        }
-        for d in descendants
-    ]
     return {
         "status": "success",
         "target_amount_basis": GOAL_TARGET_AMOUNT_BASIS_NOTE,
         "goal": _slim_goal_core(goal),
         "months_remaining": _months_remaining(td),
         "monthly_need_last_snapshot": monthly_need,
-        "ancestors": anc_names,
-        "descendants": des_names,
+        "parent_goal": parent_goal,
     }
 
 
@@ -236,45 +223,5 @@ def format_surplus_allocation_for_agent(data: dict[str, Any]) -> dict[str, Any]:
         "computation_method": data.get("computation_method"),
         "month_details": slim_months,
         "warnings": data.get("warnings") or [],
-        "currency": "INR",
-    }
-
-
-@tool(
-    name="get_goal_tree",
-    description=(
-        "Goal hierarchy (pyramid tiers L1–L4 + untiered) with progress % per goal. "
-        "Omits database ids and link edges — names and progress only. "
-        "When combining with other goal tools, remember **target amounts are in today's money (INR)**. "
-        "Use for 'how do my goals relate'. For a flat priority-ordered list, use get_goals_overview."
-    ),
-)
-async def get_goal_tree(client: AsyncClient) -> dict[str, Any]:
-    r = await client.get("/api/goals/tree")
-    r.raise_for_status()
-    tree = r.json()
-    return format_goal_tree_for_agent(tree)
-
-
-def format_goal_tree_for_agent(tree: dict[str, Any]) -> dict[str, Any]:
-    tiers_out: list[dict[str, Any]] = []
-    for label in ("l1", "l2", "l3", "l4", "untiered"):
-        goals = tree.get(label) or []
-        tier_goals: list[dict[str, Any]] = []
-        for g in goals:
-            if not isinstance(g, dict):
-                continue
-            tier_goals.append(
-                {
-                    "name": g.get("name"),
-                    "computed_percentage": g.get("computed_percentage"),
-                    "goal_type": g.get("goal_type"),
-                }
-            )
-        tiers_out.append({"tier": label.upper(), "goals": tier_goals})
-    return {
-        "status": "success",
-        "target_amount_basis": GOAL_TARGET_AMOUNT_BASIS_NOTE,
-        "tiers": tiers_out,
         "currency": "INR",
     }
