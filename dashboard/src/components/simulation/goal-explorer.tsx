@@ -53,17 +53,12 @@ import { Progress } from "@/components/ui/progress";
 import { CHART_GOAL_LINE, CHART_SERIES_COLORS } from "@/lib/chart-colors";
 import {
   monthsBetweenCalendar,
-  nominalTargetFromTodaysRupees,
   parseISODateLocal,
   pickEffectiveInflationPct,
   recurrenceAmountToMonthlyInr,
 } from "@/lib/goal-target-money";
 import { formatCurrency, formatInrChartAxis } from "@/lib/utils";
-import type {
-  GoalProjection,
-  MonthlySnapshot,
-  SimulationGoal,
-} from "@/lib/types";
+import type { GoalProjection, SimulationGoal } from "@/lib/types";
 
 const CHART_SAMPLE = 3;
 
@@ -158,74 +153,6 @@ function recurrencePeriodMonths(freq: string | undefined | null): number {
   if (f === "QUARTERLY") return 3;
   if (f === "ANNUAL" || f === "YEARLY") return 12;
   return 1;
-}
-
-/**
- * Same idea as `_compute_recurring_funding_stats` in simulation.py: only the months from
- * first positive `monthly_need` through last — so QUARTERLY/ANNUAL chunks line up with when
- * the obligation actually runs (not from simulation month 0).
- */
-function recurringBillableSegment(trajectory: MonthlySnapshot[]): MonthlySnapshot[] {
-  let start = -1;
-  let end = -1;
-  for (let i = 0; i < trajectory.length; i++) {
-    if ((trajectory[i]?.monthly_need ?? 0) > 1e-6) {
-      start = i;
-      break;
-    }
-  }
-  if (start < 0) return [];
-  for (let i = trajectory.length - 1; i >= start; i--) {
-    if ((trajectory[i]?.monthly_need ?? 0) > 1e-6) {
-      end = i;
-      break;
-    }
-  }
-  return trajectory.slice(start, end + 1);
-}
-
-/**
- * Simulated pot at the goal deadline: last trajectory month with month ≤ deadline YYYY-MM.
- * If the run ends before the deadline month, `truncated` is true (corpus is last simulated month).
- */
-function corpusAtOrBeforeDeadline(
-  trajectory: MonthlySnapshot[],
-  deadlineYm: string,
-): { value: number; monthYm: string; truncated: boolean } | null {
-  if (!trajectory.length) return null;
-  let best: MonthlySnapshot | null = null;
-  for (const s of trajectory) {
-    const mk = s.month.slice(0, 7);
-    if (mk <= deadlineYm) {
-      best = s;
-    }
-  }
-  if (!best) return null;
-  const lastYm = trajectory[trajectory.length - 1]!.month.slice(0, 7);
-  return {
-    value: best.cumulative_value,
-    monthYm: best.month.slice(0, 7),
-    truncated: lastYm < deadlineYm,
-  };
-}
-
-/** Largest (need − contribution) within any billing chunk on the billable segment (recurring). */
-function worstPeriodDeficitInr(
-  trajectory: MonthlySnapshot[],
-  freq: string | null | undefined,
-): number | null {
-  const pm = recurrencePeriodMonths(freq);
-  const segment = recurringBillableSegment(trajectory);
-  if (!segment.length) return null;
-  let worst = 0;
-  for (let i = 0; i < segment.length; i += pm) {
-    const chunk = segment.slice(i, i + pm);
-    const need = chunk.reduce((a, s) => a + (s.monthly_need ?? 0), 0);
-    const contrib = chunk.reduce((a, s) => a + s.monthly_contribution, 0);
-    if (need <= 1e-6) continue;
-    worst = Math.max(worst, need - contrib);
-  }
-  return worst > 1e-6 ? worst : null;
 }
 
 function SortableGoalRow({
@@ -385,12 +312,8 @@ export function GoalExplorer({
       recAmt > 0 ? recurrenceAmountToMonthlyInr(recAmt, freq) : 0;
 
     if (isRecurring) {
-      const worst =
-        p.worst_period_deficit ??
-        worstPeriodDeficitInr(
-          p.monthly_trajectory ?? [],
-          g.recurrence_frequency,
-        );
+      // Worst-period gap is computed in api/services/simulation.py (_compute_recurring_funding_stats).
+      const worst = p.worst_period_deficit;
       const fr = p.funding_rate;
       const h = pctHeadline(p, gc);
       return (
@@ -493,30 +416,21 @@ export function GoalExplorer({
       goalSpecific: g.inflation_rate ?? null,
       headlinePct: generalInflationRate,
     });
-    const nominalAtDeadline =
-      tgt > 0 && monthsToDeadline != null && monthsToDeadline > 0
-        ? nominalTargetFromTodaysRupees(tgt, monthsToDeadline, effInfl)
-        : null;
+    /** Nominal target at deadline — from the simulation engine (_pit_deadline_financials), not client compounding. */
+    const inflAdjAtDeadline = p.inflation_adjusted_target_at_deadline;
 
     const lumpGc = normalizedGoalClass(g);
     const hasDeadlineYm = Boolean(td && td.length >= 7);
     const deadlineYm = hasDeadlineYm ? td!.slice(0, 7) : "";
-    const atDeadlineMonth =
-      lumpGc === "POINT_IN_TIME" && hasDeadlineYm
-        ? corpusAtOrBeforeDeadline(p.monthly_trajectory ?? [], deadlineYm)
-        : null;
 
-    /** For one-time / growth goals with a deadline: corpus and gap at that month — not end of full simulation horizon. */
+    /** PIT with deadline: engine returns corpus / inflated target / shortfall at that month. Otherwise end-of-horizon. */
     let corpusLabel = "Simulated corpus (end of run)";
     let corpusValue = p.projected_final_amount;
     let shortfallLabel = "Shortfall vs end target";
     let shortfallValue = p.shortfall;
     let deadlineCorpusNote: string | null = null;
 
-    if (
-      p.corpus_at_deadline != null
-      && p.inflation_adjusted_target_at_deadline != null
-    ) {
+    if (p.corpus_at_deadline != null && inflAdjAtDeadline != null) {
       corpusLabel = "Simulated corpus (deadline month)";
       corpusValue = p.corpus_at_deadline;
       shortfallLabel = "Shortfall vs inflation-adjusted target (at deadline)";
@@ -530,26 +444,12 @@ export function GoalExplorer({
           `Simulation horizon ends before your deadline (${deadlineYm}). ` +
           `Corpus is the balance as of the last simulated month.`;
       }
-    } else if (atDeadlineMonth) {
-      corpusLabel = "Simulated corpus (deadline month)";
-      corpusValue = atDeadlineMonth.value;
-      if (atDeadlineMonth.truncated) {
-        deadlineCorpusNote =
-          `Simulation horizon ends before your deadline (${deadlineYm}). ` +
-          `Corpus is the balance as of the last simulated month (${atDeadlineMonth.monthYm}).`;
-      }
-      if (nominalAtDeadline != null) {
-        shortfallLabel = "Shortfall vs inflation-adjusted target (at deadline)";
-        shortfallValue = Math.max(0, nominalAtDeadline - atDeadlineMonth.value);
-      }
     }
 
-    /** Gap as % of inflation-adjusted target — only when shortfall is vs that same nominal (deadline month). */
+    /** Gap as % of inflation-adjusted target at deadline (same basis as shortfall_at_deadline). */
     const shortfallPctOfInflationAdjustedTarget =
-      atDeadlineMonth != null &&
-      nominalAtDeadline != null &&
-      nominalAtDeadline > 0
-        ? (shortfallValue / nominalAtDeadline) * 100
+      inflAdjAtDeadline != null && inflAdjAtDeadline > 0
+        ? (shortfallValue / inflAdjAtDeadline) * 100
         : null;
 
     const chartData = lumpSumChartRows(p, g);
@@ -573,12 +473,12 @@ export function GoalExplorer({
             <dt className="text-muted-foreground">Deadline</dt>
             <dd>{td ?? "—"}</dd>
           </div>
-          {nominalAtDeadline != null ? (
+          {inflAdjAtDeadline != null ? (
             <div>
               <dt className="text-muted-foreground">
                 Inflation-adjusted target (~{effInfl}%/yr)
               </dt>
-              <dd className="tabular-nums">{formatCurrency(nominalAtDeadline)}</dd>
+              <dd className="tabular-nums">{formatCurrency(inflAdjAtDeadline)}</dd>
             </div>
           ) : null}
           <div>
