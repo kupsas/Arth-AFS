@@ -1,24 +1,37 @@
 """
 Onboarding wizard API (Track 2).
 
-State endpoints are fully wired to :class:`~api.models.OnboardingState`.
-Discovery, backfill, classification batches, and gap analysis are **stubs** until
-later phases implement the orchestrator (see project plan).
+State endpoints persist :class:`~api.models.OnboardingState`. Discovery and
+chunk-based backfill are implemented in Phase 2 (``scraper.discovery``,
+``scraper.onboarding_orchestrator``). Classification batches and gap analysis
+gain fuller behaviour in later phases.
 """
 
 from __future__ import annotations
 
 import datetime
 import json
+import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
 from api.auth import get_current_user
 from api.database import get_session
 from api.models import AppUser, OnboardingState
+from scraper.discovery import discover_sources, discovered_sources_to_json
+from scraper.gmail_client import GmailClient, GmailReauthRequiredError
+from scraper.config_loader import get_bank_senders_config
+from scraper.onboarding_orchestrator import (
+    count_classification_unknowns,
+    pause_backfill_state,
+    resume_backfill_state,
+    run_onboarding_backfill,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -38,6 +51,27 @@ def _get_or_create_state(session: Session, user_id: str) -> OnboardingState:
     session.add(row)
     session.flush()
     return row
+
+
+def _gmail_client_connected() -> GmailClient:
+    """Return an authenticated Gmail client or raise HTTP errors."""
+    client = GmailClient()
+    try:
+        client.authenticate(allow_interactive_oauth=False)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except GmailReauthRequiredError as e:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "message": str(e),
+                "hint": "Complete Gmail OAuth via POST /api/scraper/oauth/init on this machine.",
+            },
+        ) from e
+    except Exception as e:
+        logger.exception("Gmail authentication failed")
+        raise HTTPException(status_code=503, detail=f"Gmail authentication failed: {e}") from e
+    return client
 
 
 class OnboardingStateResponse(BaseModel):
@@ -115,40 +149,198 @@ def onboarding_discover(
     session: Session = Depends(get_session),
     current_user: str = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Placeholder — Phase 2 wires Gmail discovery here."""
-    _ = session, current_user
-    return {
-        "status": "not_implemented",
-        "sources": [],
-        "message": "Discovery engine lands in phase 2 (scraper.discovery).",
+    """Scan Gmail for configured bank senders (fast existence + rough counts)."""
+    bank = get_bank_senders_config(session, current_user)
+    client = _gmail_client_connected()
+
+    rows = discover_sources(client, bank)
+    payload_list = discovered_sources_to_json(rows)
+    envelope = {
+        "discovered_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        "sources": payload_list,
     }
+
+    row = _get_or_create_state(session, current_user)
+    row.discovery_results_json = json.dumps(envelope)
+    row.updated_at = datetime.datetime.now(datetime.UTC)
+    session.add(row)
+    session.commit()
+
+    return {"status": "ok", **envelope}
+
+
+class BackfillAdvanceBody(BaseModel):
+    """Advance chunk-based onboarding backfill."""
+
+    chunk_size: int = Field(default=10, ge=1, le=100)
+    after: datetime.date | None = Field(
+        default=None,
+        description="Inclusive Gmail after: date (defaults to wide historical window).",
+    )
+    before: datetime.date | None = Field(
+        default=None,
+        description="Exclusive Gmail before: date (defaults to tomorrow).",
+    )
+    resume_after_classification: bool = Field(
+        default=False,
+        description="Clear needs_classification gate after user fixed merchant rules.",
+    )
+    resume_from_pause: bool = Field(
+        default=False,
+        description="Clear paused status before processing the next chunk.",
+    )
+
+
+class BackfillProgressResponse(BaseModel):
+    """Public progress snapshot for REST polling (Phase 2 plan schema)."""
+
+    source: str
+    status: str
+    emails_found: int = 0
+    emails_processed: int = 0
+    transactions_parsed: int = 0
+    unknowns_pending: int = 0
+    error_message: str | None = None
+
+
+def _strip_internal_keys(d: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in d.items() if not str(k).startswith("_")}
+
+
+def _merge_and_save_backfill(
+    session: Session,
+    user_id: str,
+    source_key: str,
+    progress_blob: dict[str, Any],
+) -> None:
+    row = _get_or_create_state(session, user_id)
+    all_bf = _parse_json_object(row.backfill_progress_json, {})
+    all_bf[source_key] = progress_blob
+    row.backfill_progress_json = json.dumps(all_bf)
+    row.updated_at = datetime.datetime.now(datetime.UTC)
+    session.add(row)
 
 
 @router.post("/backfill/{source}")
 def onboarding_backfill(
     source: str,
+    body: BackfillAdvanceBody | None = None,
     *,
     session: Session = Depends(get_session),
     current_user: str = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Placeholder — Phase 2 adds the backfill orchestrator."""
-    _ = session, current_user
-    return {
-        "status": "not_implemented",
-        "source": source,
-        "message": "Backfill orchestrator lands in phase 2.",
-    }
+    """Process up to ``chunk_size`` Gmail messages for ``source`` (pipeline source_key)."""
+    body = body or BackfillAdvanceBody()
+    source_key = source.strip()
+    if not source_key:
+        raise HTTPException(status_code=400, detail="source must not be empty")
+
+    row = _get_or_create_state(session, current_user)
+    all_bf = _parse_json_object(row.backfill_progress_json, {})
+    existing = dict(all_bf.get(source_key) or {})
+
+    client = _gmail_client_connected()
+
+    try:
+        result = run_onboarding_backfill(
+            session=session,
+            user_id=current_user,
+            source_key=source_key,
+            gmail_client=client,
+            existing_progress=existing,
+            chunk_size=body.chunk_size,
+            after=body.after,
+            before=body.before,
+            resume_after_classification=body.resume_after_classification,
+            resume_from_pause=body.resume_from_pause,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    merged_progress = result.progress
+    _merge_and_save_backfill(session, current_user, source_key, merged_progress)
+    session.commit()
+
+    public = _strip_internal_keys(merged_progress)
+    return public
 
 
-@router.get("/backfill/{source}/progress")
+@router.get("/backfill/{source}/progress", response_model=BackfillProgressResponse)
 def onboarding_backfill_progress(
     source: str,
     *,
     session: Session = Depends(get_session),
     current_user: str = Depends(get_current_user),
+) -> BackfillProgressResponse:
+    """Poll backfill progress; unknowns_pending is recomputed from the DB on each GET."""
+    source_key = source.strip()
+    row = _get_or_create_state(session, current_user)
+    all_bf = _parse_json_object(row.backfill_progress_json, {})
+    blob = dict(all_bf.get(source_key) or {})
+
+    unknowns_live = count_classification_unknowns(
+        session, user_id=current_user, source_key=source_key
+    )
+    if blob:
+        blob["unknowns_pending"] = unknowns_live
+        all_bf[source_key] = blob
+        row.backfill_progress_json = json.dumps(all_bf)
+        row.updated_at = datetime.datetime.now(datetime.UTC)
+        session.add(row)
+        session.commit()
+
+    status = str(blob.get("status") or "idle")
+    return BackfillProgressResponse(
+        source=source_key,
+        status=status,
+        emails_found=int(blob.get("emails_found") or 0),
+        emails_processed=int(blob.get("emails_processed") or 0),
+        transactions_parsed=int(blob.get("transactions_parsed") or 0),
+        unknowns_pending=unknowns_live,
+        error_message=blob.get("error_message"),
+    )
+
+
+@router.post("/backfill/{source}/pause")
+def onboarding_backfill_pause(
+    source: str,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ) -> dict[str, Any]:
-    _ = session, current_user
-    return {"source": source, "status": "idle", "percent": 0.0}
+    """Pause chunk processing — the next POST /backfill must pass resume_from_pause=true."""
+    source_key = source.strip()
+    row = _get_or_create_state(session, current_user)
+    all_bf = _parse_json_object(row.backfill_progress_json, {})
+    blob = dict(all_bf.get(source_key) or {})
+    blob = pause_backfill_state(blob)
+    all_bf[source_key] = blob
+    row.backfill_progress_json = json.dumps(all_bf)
+    row.updated_at = datetime.datetime.now(datetime.UTC)
+    session.add(row)
+    session.commit()
+    return _strip_internal_keys(blob)
+
+
+@router.post("/backfill/{source}/resume")
+def onboarding_backfill_resume_state(
+    source: str,
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Clear paused-only status so POST /backfill can run the next chunk."""
+    source_key = source.strip()
+    row = _get_or_create_state(session, current_user)
+    all_bf = _parse_json_object(row.backfill_progress_json, {})
+    blob = dict(all_bf.get(source_key) or {})
+    blob = resume_backfill_state(blob)
+    all_bf[source_key] = blob
+    row.backfill_progress_json = json.dumps(all_bf)
+    row.updated_at = datetime.datetime.now(datetime.UTC)
+    session.add(row)
+    session.commit()
+    return _strip_internal_keys(blob)
 
 
 @router.post("/classify")
