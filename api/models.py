@@ -385,7 +385,7 @@ class Goal(SQLModel, table=True):
     goal_class: str | None = Field(
         default=None,
         max_length=32,
-        description="POINT_IN_TIME | RECURRING_CASH_FLOW | GROWTH",
+        description="POINT_IN_TIME | RECURRING_CASH_FLOW",
     )
     recurrence_amount: float | None = Field(
         default=None,

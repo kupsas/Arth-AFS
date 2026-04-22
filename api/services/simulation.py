@@ -28,7 +28,6 @@ logger = logging.getLogger(__name__)
 # ── Goal class constants (aligned with pipeline / API) ───────────────────────
 GC_POINT = "POINT_IN_TIME"
 GC_RECURRING = "RECURRING_CASH_FLOW"
-GC_GROWTH = "GROWTH"
 
 GoalSimStatus = Literal["ON_TRACK", "AT_RISK", "BEHIND", "ACHIEVED", "IMPOSSIBLE"]
 
@@ -73,6 +72,18 @@ def _simulation_debug_enabled() -> bool:
     return False
 
 
+def _normalize_simulation_goals(goals: list[SimulationGoal]) -> list[SimulationGoal]:
+    """Legacy ``GROWTH`` rows map to POINT_IN_TIME (same lump-sum engine path)."""
+
+    out: list[SimulationGoal] = []
+    for g in goals:
+        if (g.goal_class or "").strip().upper() == "GROWTH":
+            out.append(g.model_copy(update={"goal_class": GC_POINT}))
+        else:
+            out.append(g)
+    return out
+
+
 def _recurring_is_mandatory_bill(goal: SimulationGoal) -> bool:
     """True if this recurring goal must be funded before PIT / discretionary recurring."""
     if goal.goal_class.upper() != GC_RECURRING:
@@ -99,7 +110,7 @@ class SimulationGoal(BaseModel):
     name: str
     goal_class: str = Field(
         ...,
-        description="POINT_IN_TIME | RECURRING_CASH_FLOW | GROWTH",
+        description="POINT_IN_TIME | RECURRING_CASH_FLOW (legacy GROWTH is coerced to POINT_IN_TIME)",
     )
     target_amount: float | None = None
     target_date: datetime.date | None = None
@@ -184,7 +195,7 @@ class MonthlySnapshot(BaseModel):
     target_at_month: float | None = None
     monthly_need: float | None = Field(
         None,
-        description="Engine amortized need this month (PIT dynamic PMT, recurring monthly need, GROWTH 0).",
+        description="Engine amortized need this month (PIT dynamic PMT, recurring monthly need).",
     )
 
 
@@ -424,13 +435,9 @@ def _compute_recurring_funding_stats(
 
 
 def _sort_goals_for_allocation(goals: list[SimulationGoal]) -> list[SimulationGoal]:
-    """Non-GROWTH first (by allocation_priority), then GROWTH (by allocation_priority)."""
+    """Lower ``allocation_priority`` first (1 = highest priority)."""
 
-    def key(g: SimulationGoal) -> tuple[int, int]:
-        is_growth = 1 if g.goal_class.upper() == GC_GROWTH else 0
-        return (is_growth, g.allocation_priority)
-
-    return sorted(goals, key=key)
+    return sorted(goals, key=lambda g: g.allocation_priority)
 
 
 def _pick_overflow_goal_index(
@@ -454,16 +461,13 @@ def _overflow_candidate_indices_simulate(
     completed: list[bool],
     current_month: datetime.date,
 ) -> list[int]:
-    """Goals that may absorb post-minimum surplus: PIT still open, or GROWTH — not RECURRING."""
+    """Goals that may absorb post-minimum surplus: open POINT_IN_TIME only — not RECURRING."""
     out: list[int] = []
     for i in ordered_indices:
         if completed[i]:
             continue
         g = goals[i]
         gc = g.goal_class.upper()
-        if gc == GC_GROWTH:
-            out.append(i)
-            continue
         if gc == GC_POINT:
             if g.target_amount is None or g.target_date is None:
                 continue
@@ -579,7 +583,7 @@ def _apply_minimum_monthly_contribution_floor(
 ) -> float:
     """Zero allocations in ``(0, MIN)``; add freed cash to the overflow sink or return spill.
 
-    Returns rupees **not** placed on any goal (no open PIT/GROWTH sink), to add to unallocated.
+    Returns rupees **not** placed on any goal (no open PIT sink), to add to unallocated.
     """
     min_inr = MIN_MONTHLY_GOAL_CONTRIBUTION_INR
     freed = 0.0
@@ -620,9 +624,7 @@ def _allocate_surplus_apply_minimum_floor(
     cand_j: list[int] = []
     for j, g in enumerate(ordered):
         gc = g.goal_class.upper()
-        if gc == GC_GROWTH:
-            cand_j.append(j)
-        elif gc == GC_POINT:
+        if gc == GC_POINT:
             if g.target_amount is None or g.target_date is None:
                 continue
             if months_between(month_start, g.target_date) <= 0:
@@ -754,11 +756,11 @@ def allocate_surplus(
     child education): each active goal takes min(monthly need, remaining surplus),
     in ``allocation_priority`` order.
 
-    **Pass 2 — PIT + discretionary recurring**: same min(need, remaining) rule among
-    non-GROWTH goals. Discretionary recurring does *not* jump ahead of PIT.
+    **Pass 2 — PIT + discretionary recurring**: same min(need, remaining) rule.
+    Discretionary recurring does *not* jump ahead of PIT.
 
     **Pass 3 — overflow** to one sink: lowest ``allocation_priority`` among open PIT
-    and GROWTH. RECURRING goals never absorb overflow (capped at their need).
+    goals. RECURRING goals never absorb overflow (capped at their need).
 
     When a POINT_IN_TIME goal has ``inflation_rate is None``, *general_inflation_rate*
     is used (same rule as :func:`simulate`). When *salary_growth_rate* is positive,
@@ -766,6 +768,7 @@ def allocate_surplus(
     """
     if not goals:
         return {}
+    goals = _normalize_simulation_goals(goals)
     td = today or datetime.date.today()
     month_start = td.replace(day=1)
     remaining = max(0.0, float(surplus))
@@ -794,8 +797,6 @@ def allocate_surplus(
     # Pass 2: PIT + discretionary recurring (compete by allocation_priority).
     for g in ordered:
         gc = g.goal_class.upper()
-        if gc == GC_GROWTH:
-            continue
         if gc == GC_RECURRING:
             if _recurring_is_mandatory_bill(g):
                 continue
@@ -835,15 +836,13 @@ def allocate_surplus(
             out[g.name] += take
             remaining -= take
 
-    # Remaining surplus → single highest-priority overflow sink (PIT still open, or GROWTH).
+    # Remaining surplus → single lowest allocation_priority among open PIT goals.
     # RECURRING goals never take more than their monthly need (EMI-style).
     if remaining > 0:
         cand_j: list[int] = []
         for j, g in enumerate(ordered):
             gc = g.goal_class.upper()
-            if gc == GC_GROWTH:
-                cand_j.append(j)
-            elif gc == GC_POINT:
+            if gc == GC_POINT:
                 if g.target_amount is None or g.target_date is None:
                     continue
                 if months_between(month_start, g.target_date) <= 0:
@@ -1088,13 +1087,7 @@ def _simulate_inner(
 
         remaining_surplus = max(0.0, active_surplus + extra)
 
-        ordered_indices = sorted(
-            by_idx,
-            key=lambda idx: (
-                1 if goals[idx].goal_class.upper() == GC_GROWTH else 0,
-                goals[idx].allocation_priority,
-            ),
-        )
+        ordered_indices = sorted(by_idx, key=lambda idx: goals[idx].allocation_priority)
 
         alloc_this_month: dict[int, float] = {i: 0.0 for i in range(n_goals)}
 
@@ -1125,8 +1118,6 @@ def _simulate_inner(
                 continue
             g = goals[i]
             gc = g.goal_class.upper()
-            if gc == GC_GROWTH:
-                continue
 
             if gc == GC_RECURRING:
                 if _recurring_is_mandatory_bill(g):
@@ -1166,7 +1157,7 @@ def _simulate_inner(
                 remaining_surplus -= take
 
         # Post-minimum surplus → one overflow bucket: lowest allocation_priority among
-        # POINT_IN_TIME (still chasing) and GROWTH. RECURRING does not absorb overflow.
+        # open POINT_IN_TIME goals. RECURRING does not absorb overflow.
         if remaining_surplus > 0:
             cand = _overflow_candidate_indices_simulate(
                 goals, ordered_indices, completed, current_month
@@ -1207,8 +1198,6 @@ def _simulate_inner(
                 if ccap is not None:
                     nd = min(nd, ccap)
                 need_by_idx[ii] = nd
-            elif gcls == GC_GROWTH:
-                need_by_idx[ii] = 0.0
             else:
                 need_by_idx[ii] = 0.0
         _redistribute_excess_to_shortfalls(goals, alloc_this_month, need_by_idx, completed)
@@ -1280,9 +1269,7 @@ def _simulate_inner(
                     beneficiaries = [
                         goals[j].name
                         for j in ordered_indices
-                        if j != i
-                        and not completed[j]
-                        and goals[j].goal_class.upper() != GC_GROWTH
+                        if j != i and not completed[j]
                     ]
                     cascade_events.append(
                         CascadeEvent(
@@ -1411,6 +1398,8 @@ def simulate(params: SimulationParams) -> SimulationResult:
     uvicorn. Logs go to ``data/logs/arth.log`` at DEBUG (stdout stays INFO unless you
     lower the stream level).
     """
+    params = params.model_copy(update={"goals": _normalize_simulation_goals(list(params.goals))})
+
     dbg = _simulation_debug_enabled()
     if dbg:
         logger.debug(

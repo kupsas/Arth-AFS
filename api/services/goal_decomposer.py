@@ -455,7 +455,7 @@ def suggest_goals_from_patterns(session: Session, user_id: str) -> list[GoalSugg
                     source_pattern_id=p.id or 0,
                     counterparty=p.counterparty,
                     suggested_name="SIP / investment target",
-                    goal_class="GROWTH",
+                    goal_class="POINT_IN_TIME",
                     goal_type="INVESTMENT",
                     recurrence_amount=amt,
                     recurrence_frequency="MONTHLY",

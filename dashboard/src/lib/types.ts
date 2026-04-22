@@ -542,11 +542,10 @@ export interface GoalUpdate {
 // Simulation sandbox (Sub-Plan H) — mirrors api/services/simulation.py
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** POINT_IN_TIME | RECURRING_CASH_FLOW | GROWTH */
+/** POINT_IN_TIME | RECURRING_CASH_FLOW */
 export type SimulationGoalClass =
   | "POINT_IN_TIME"
-  | "RECURRING_CASH_FLOW"
-  | "GROWTH";
+  | "RECURRING_CASH_FLOW";
 
 /** ON_TRACK | AT_RISK | BEHIND | ACHIEVED | IMPOSSIBLE */
 export type GoalSimStatus =
@@ -606,7 +605,7 @@ export interface MonthlySnapshot {
   monthly_contribution: number;
   monthly_return: number;
   target_at_month?: number | null;
-  /** Engine amortized need this month (PIT dynamic PMT, recurring monthly need, GROWTH 0). */
+  /** Engine amortized need this month (PIT dynamic PMT, recurring monthly need). */
   monthly_need?: number | null;
 }
 

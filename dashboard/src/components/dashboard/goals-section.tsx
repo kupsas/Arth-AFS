@@ -1,7 +1,7 @@
 /**
  * GoalsSection — compact list of financial goals (name, goal “kind”, target, progress, notes).
  *
- * The sheet uses `goal_class`-style choices (one-time, recurring, growth, spending cap);
+ * The sheet uses `goal_class`-style choices (one-time / investment lump sum, recurring, spending cap);
  * the client maps each choice to API `goal_type` + `goal_class` on create/update.
  */
 
@@ -219,12 +219,6 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
 
     if (uiKind === "POINT_IN_TIME") {
       const sb = parseOptFloat(startingBalance)
-      if (sb !== undefined) update.starting_balance = sb
-      const inf = parseOptFloat(goalInflation)
-      if (inf !== undefined) update.goal_specific_inflation_rate = inf
-    }
-    if (uiKind === "GROWTH") {
-      const sb = parseOptFloat(startingBalance)
       if (sb !== undefined) {
         update.starting_balance = sb
         update.current_value = sb
@@ -290,9 +284,7 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
               />
             </div>
 
-            {(uiKind === "POINT_IN_TIME" ||
-              uiKind === "GROWTH" ||
-              uiKind === "RECURRING_CASH_FLOW") && (
+            {(uiKind === "POINT_IN_TIME" || uiKind === "RECURRING_CASH_FLOW") && (
               <div className="flex flex-col gap-1.5 rounded-md border border-border bg-muted/20 px-3 py-2.5">
                 <p className="text-xs font-medium text-foreground">Category (inflation)</p>
                 <p className="text-sm text-muted-foreground">{labelForStoredGoalSubtype(goal.goal_subtype)}</p>
@@ -329,7 +321,7 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
               </div>
             ) : null}
 
-            {(uiKind === "POINT_IN_TIME" || uiKind === "GROWTH") && !isExpenseLimit ? (
+            {uiKind === "POINT_IN_TIME" && !isExpenseLimit ? (
               <GoalTargetMoneyHint
                 rawTargetInput={targetAmount}
                 targetDate={targetDate}
@@ -339,38 +331,12 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
             ) : null}
 
             {uiKind === "POINT_IN_TIME" && (
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor={`edit-start-${goal.id}`}>Already saved (₹)</Label>
-                  <Input
-                    id={`edit-start-${goal.id}`}
-                    type="number"
-                    placeholder="0"
-                    value={startingBalance}
-                    onChange={(e) => setStartingBalance(e.target.value)}
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor={`edit-infl-${goal.id}`}>Goal inflation % (optional)</Label>
-                  <Input
-                    id={`edit-infl-${goal.id}`}
-                    type="number"
-                    step="0.1"
-                    placeholder="e.g. 6"
-                    value={goalInflation}
-                    onChange={(e) => setGoalInflation(e.target.value)}
-                  />
-                </div>
-              </div>
-            )}
-
-            {uiKind === "GROWTH" && (
               <>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="flex flex-col gap-2">
-                    <Label htmlFor={`edit-sb-${goal.id}`}>Current corpus (₹)</Label>
+                    <Label htmlFor={`edit-start-${goal.id}`}>Already saved / corpus (₹)</Label>
                     <Input
-                      id={`edit-sb-${goal.id}`}
+                      id={`edit-start-${goal.id}`}
                       type="number"
                       placeholder="0"
                       value={startingBalance}
@@ -390,11 +356,12 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
                   </div>
                 </div>
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor={`edit-ginfl-${goal.id}`}>Goal inflation % (optional)</Label>
+                  <Label htmlFor={`edit-infl-${goal.id}`}>Goal inflation % (optional)</Label>
                   <Input
-                    id={`edit-ginfl-${goal.id}`}
+                    id={`edit-infl-${goal.id}`}
                     type="number"
                     step="0.1"
+                    placeholder="e.g. 6"
                     value={goalInflation}
                     onChange={(e) => setGoalInflation(e.target.value)}
                   />
@@ -611,7 +578,7 @@ function GoalCard({ goal }: { goal: Goal }) {
         </div>
       </div>
 
-      {(uiKind === "POINT_IN_TIME" || uiKind === "GROWTH") &&
+      {uiKind === "POINT_IN_TIME" &&
         !isExpenseLimit &&
         goal.target_amount != null &&
         goal.target_amount > 0 && (
@@ -803,7 +770,7 @@ function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) 
                   const next = v as GoalUiKind
                   setForm((f) => {
                     let nextSubtype = f.goal_subtype
-                    if (next === "POINT_IN_TIME" || next === "GROWTH") {
+                    if (next === "POINT_IN_TIME") {
                       nextSubtype = f.goal_subtype || "CUSTOM"
                     } else {
                       nextSubtype = undefined
@@ -842,7 +809,7 @@ function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) 
               </Select>
             </div>
 
-            {(kind === "POINT_IN_TIME" || kind === "GROWTH") && (
+            {kind === "POINT_IN_TIME" && (
               <div className="flex flex-col gap-2">
                 <Label htmlFor="add-infl-category">Category (inflation)</Label>
                 <p className="text-xs text-muted-foreground leading-snug">
@@ -898,7 +865,7 @@ function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) 
               </div>
             ) : null}
 
-            {kind === "POINT_IN_TIME" || kind === "GROWTH" ? (
+            {kind === "POINT_IN_TIME" ? (
               <GoalTargetMoneyHint
                 rawTargetInput={
                   form.target_amount != null ? String(form.target_amount) : ""
@@ -917,48 +884,12 @@ function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) 
             ) : null}
 
             {kind === "POINT_IN_TIME" && (
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="add-sb">Already saved (₹)</Label>
-                  <Input
-                    id="add-sb"
-                    type="number"
-                    placeholder="0"
-                    value={form.starting_balance ?? ""}
-                    onChange={(e) =>
-                      setField(
-                        "starting_balance",
-                        e.target.value ? parseFloat(e.target.value) : undefined,
-                      )
-                    }
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="add-infl">Goal inflation % (optional)</Label>
-                  <Input
-                    id="add-infl"
-                    type="number"
-                    step="0.1"
-                    placeholder="e.g. 6"
-                    value={form.goal_specific_inflation_rate ?? ""}
-                    onChange={(e) =>
-                      setField(
-                        "goal_specific_inflation_rate",
-                        e.target.value ? parseFloat(e.target.value) : undefined,
-                      )
-                    }
-                  />
-                </div>
-              </div>
-            )}
-
-            {kind === "GROWTH" && (
               <>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="flex flex-col gap-2">
-                    <Label htmlFor="add-corpus">Current corpus (₹)</Label>
+                    <Label htmlFor="add-sb">Already saved / corpus (₹)</Label>
                     <Input
-                      id="add-corpus"
+                      id="add-sb"
                       type="number"
                       placeholder="0"
                       value={form.starting_balance ?? ""}
@@ -988,11 +919,12 @@ function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) 
                   </div>
                 </div>
                 <div className="flex flex-col gap-2">
-                  <Label htmlFor="add-ginfl">Goal inflation % (optional)</Label>
+                  <Label htmlFor="add-infl">Goal inflation % (optional)</Label>
                   <Input
-                    id="add-ginfl"
+                    id="add-infl"
                     type="number"
                     step="0.1"
+                    placeholder="e.g. 6"
                     value={form.goal_specific_inflation_rate ?? ""}
                     onChange={(e) =>
                       setField(

@@ -23,7 +23,6 @@ from api.models import Goal, Holding
 from api.services.goal_decomposer import add_months, months_between
 from api.services.liquidity_service import check_liquidity_mismatch
 from api.services.simulation import (
-    GC_GROWTH,
     GC_POINT,
     GC_RECURRING,
     GoalSimStatus,
@@ -90,13 +89,35 @@ def _recurring(
     )
 
 
-def _growth(name: str, *, tid: int, priority: int, ret: float = 10.0) -> SimulationGoal:
+def _closed_sink_placeholder(name: str, *, tid: int, priority: int, ret: float = 10.0) -> SimulationGoal:
+    """Past-deadline, over-funded PIT — no pass-2 need (mirrors old GROWTH in CSV scenarios)."""
+
     return SimulationGoal(
         id=tid,
         name=name,
-        goal_class=GC_GROWTH,
+        goal_class=GC_POINT,
+        target_amount=100.0,
+        target_date=datetime.date(2000, 1, 1),
+        starting_balance=1_000_000.0,
         allocation_priority=priority,
         expected_return_rate=ret,
+        inflation_rate=0.0,
+    )
+
+
+def _open_overflow_sink_pit(name: str, *, tid: int, priority: int, ret: float = 10.0) -> SimulationGoal:
+    """Far horizon PIT that still absorbs surplus in S8-style edge tests."""
+
+    return SimulationGoal(
+        id=tid,
+        name=name,
+        goal_class=GC_POINT,
+        target_amount=1e15,
+        target_date=datetime.date(2100, 1, 1),
+        starting_balance=0.0,
+        allocation_priority=priority,
+        expected_return_rate=ret,
+        inflation_rate=0.0,
     )
 
 
@@ -191,7 +212,7 @@ class TestRulesInflation:
         t_explicit = _inflation_target_at_month(1_000_000.0, _effective_goal_inflation(g65, 99.0), 0)
         assert t_none == pytest.approx(t_explicit)
 
-        gr = _growth("G", tid=2, priority=2)
+        gr = _closed_sink_placeholder("G", tid=2, priority=2)
         p = _params([g, gr], 20_000.0, months=120, general_inflation=6.5, as_of=datetime.date(2026, 1, 1))
         r = simulate(p)
         pit = next(x for x in r.projections if x.goal_name == "H")
@@ -231,7 +252,7 @@ class TestRulesParams:
     """Rules — Params."""
 
     def test_r_prm_1_salary_growth_every_12_months(self) -> None:
-        g = _growth("G", tid=1, priority=1)
+        g = _open_overflow_sink_pit("G", tid=1, priority=1)
         p = _params(
             [g],
             100_000.0,
@@ -255,7 +276,7 @@ class TestRulesParams:
             ret=0.0,
             infl=0.0,
         )
-        gr = _growth("Rest", tid=2, priority=2)
+        gr = _closed_sink_placeholder("Rest", tid=2, priority=2)
         inflow = OneTimeEvent(amount=100_000.0, date=datetime.date(2026, 3, 15), description="in")
         outflow = OneTimeEvent(amount=50_000.0, date=datetime.date(2026, 3, 20), description="out")
         p = _params(
@@ -291,7 +312,7 @@ class TestRulesParams:
 
     def test_r_prm_4_compare_scenarios_structure(self) -> None:
         g = _pit("X", tid=1, target=800_000.0, target_date=datetime.date(2032, 1, 1), priority=1)
-        gr = _growth("G", tid=2, priority=2)
+        gr = _closed_sink_placeholder("G", tid=2, priority=2)
         base = _params([g, gr], 20_000.0, months=80, as_of=datetime.date(2026, 1, 1))
         var = _params([g, gr], 35_000.0, months=80, as_of=datetime.date(2026, 1, 1))
         comps = compare_scenarios(base, [var])
@@ -304,7 +325,7 @@ class TestRulesParams:
     def test_r_prm_5_allocate_surplus_returns_dict(self) -> None:
         goals = [
             _pit("A", tid=1, target=400_000.0, target_date=datetime.date(2029, 1, 1), priority=1),
-            _growth("G", tid=2, priority=2),
+            _closed_sink_placeholder("G", tid=2, priority=2),
         ]
         out = allocate_surplus(goals, 80_000.0, today=datetime.date(2026, 1, 1), general_inflation_rate=6.0)
         assert abs(sum(out.values()) - 80_000.0) < 1.0
@@ -319,7 +340,7 @@ class TestSingleGoalBasic:
 
     def test_s1_1_simple_point_in_time_projection(self) -> None:
         # Engine uses PMT-needed (not fixed ₹50k); tight deadline ⇒ high need ⇒ full surplus use.
-        # Single PIT — no GROWTH bucket (CSV assumes all surplus can go to this goal).
+        # Single PIT — all surplus funds this goal until it completes.
         today = datetime.date(2026, 1, 1)
         td = add_months(today, 32)
         g = _pit("G", tid=1, target=2_000_000.0, target_date=td, priority=1, start=500_000.0, ret=10.0, infl=0.0)
@@ -378,7 +399,7 @@ class TestSingleGoalBasic:
             end_date=datetime.date(2046, 1, 1),
             priority=1,
         )
-        gr = _growth("Rest", tid=2, priority=2)
+        gr = _closed_sink_placeholder("Rest", tid=2, priority=2)
         r = simulate(_params([emi, gr], 150_000.0, months=12, as_of=today))
         emi_p = next(p for p in r.projections if p.goal_name == "EMI")
         assert emi_p.monthly_allocation == pytest.approx(55_000.0, abs=5_000.0)
@@ -394,7 +415,7 @@ class TestMultiGoalCascade:
         today = datetime.date(2026, 1, 1)
         g1 = _pit("G1", tid=1, target=500_000.0, target_date=add_months(today, 12), priority=1, infl=0.0)
         g2 = _pit("G2", tid=2, target=3_000_000.0, target_date=add_months(today, 60), priority=2, infl=0.0)
-        gr = _growth("Pool", tid=3, priority=3)
+        gr = _closed_sink_placeholder("Pool", tid=3, priority=3)
         r = simulate(_params([g1, g2, gr], 150_000.0, months=120, as_of=today))
         p1 = next(p for p in r.projections if p.goal_name == "G1")
         p2 = next(p for p in r.projections if p.goal_name == "G2")
@@ -406,7 +427,7 @@ class TestMultiGoalCascade:
         g1 = _pit("G1", tid=1, target=300_000.0, target_date=add_months(today, 6), priority=1, infl=0.0)
         g2 = _pit("G2", tid=2, target=500_000.0, target_date=add_months(today, 18), priority=2, infl=0.0)
         g3 = _pit("G3", tid=3, target=3_000_000.0, target_date=add_months(today, 60), priority=3, infl=0.0)
-        gr = _growth("Pool", tid=4, priority=4)
+        gr = _closed_sink_placeholder("Pool", tid=4, priority=4)
         r = simulate(_params([g1, g2, g3, gr], 150_000.0, months=120, as_of=today))
         assert any(e.completed_goal == "G1" for e in r.cascade_events)
         assert {p.goal_name for p in r.projections if p.status == "ACHIEVED"} >= {"G1"}
@@ -416,7 +437,7 @@ class TestMultiGoalCascade:
         g1 = _pit("G1", tid=1, target=1_000_000.0, target_date=add_months(today, 6), priority=1, start=0.0, ret=0.0, infl=0.0)
         g2 = _pit("G2", tid=2, target=500_000.0, target_date=add_months(today, 12), priority=2, start=0.0, ret=0.0, infl=0.0)
         g3 = _pit("G3", tid=3, target=3_000_000.0, target_date=add_months(today, 60), priority=3, start=0.0, ret=0.0, infl=0.0)
-        gr = _growth("Pool", tid=4, priority=4)
+        gr = _closed_sink_placeholder("Pool", tid=4, priority=4)
         r = simulate(_params([g1, g2, g3, gr], 150_000.0, months=120, as_of=today))
         p1 = next(p for p in r.projections if p.goal_name == "G1")
         p2 = next(p for p in r.projections if p.goal_name == "G2")
@@ -432,7 +453,7 @@ class TestMultiGoalCascade:
         # Same ₹ target; different deadlines so PMT needs differ. Priority picks who is funded first.
         ga = _pit("A", tid=1, target=800_000.0, target_date=add_months(today, 24), priority=1, infl=0.0)
         gb = _pit("B", tid=2, target=800_000.0, target_date=add_months(today, 120), priority=2, infl=0.0)
-        gr = _growth("Pool", tid=3, priority=3)
+        gr = _closed_sink_placeholder("Pool", tid=3, priority=3)
         ga2 = _pit("A", tid=1, target=800_000.0, target_date=add_months(today, 120), priority=2, infl=0.0)
         gb2 = _pit("B", tid=2, target=800_000.0, target_date=add_months(today, 24), priority=1, infl=0.0)
         o1 = allocate_surplus([ga, gb, gr], 40_000.0, today=today, general_inflation_rate=6.0)
@@ -446,7 +467,7 @@ class TestMultiGoalCascade:
         g1 = _pit("G1", tid=1, target=800_000.0, target_date=td, priority=1, infl=0.0)
         g2 = _pit("G2", tid=2, target=800_000.0, target_date=td, priority=2, infl=0.0)
         g3 = _pit("G3", tid=3, target=800_000.0, target_date=td, priority=3, infl=0.0)
-        gr = _growth("Pool", tid=4, priority=4)
+        gr = _closed_sink_placeholder("Pool", tid=4, priority=4)
         r3 = simulate(_params([g1, g2, g3, gr], 25_000.0, months=100, as_of=today))
         r2 = simulate(_params([g1, g3, gr], 25_000.0, months=100, as_of=today))
         g1_3 = next(p for p in r3.projections if p.goal_name == "G1")
@@ -470,7 +491,7 @@ class TestReturnRates:
         months_list: list[int] = []
         for ret in (0.0, 8.0, 12.0, 15.0):
             g = _pit("G", tid=1, target=1_000_000.0, target_date=td, priority=1, start=0.0, ret=ret, infl=0.0)
-            gr = _growth("Pool", tid=2, priority=2)
+            gr = _closed_sink_placeholder("Pool", tid=2, priority=2)
             r = simulate(_params([g, gr], 50_000.0, months=150, as_of=today))
             pit = next(p for p in r.projections if p.goal_name == "G")
             mc = _months_from_start_to_date(today, pit.projected_completion_date)
@@ -483,7 +504,7 @@ class TestReturnRates:
         today = datetime.date(2026, 1, 1)
         g1 = _pit("Short", tid=1, target=200_000.0, target_date=add_months(today, 12), priority=1, ret=6.0, infl=0.0)
         g2 = _pit("Long", tid=2, target=2_000_000.0, target_date=add_months(today, 240), priority=2, ret=12.0, infl=0.0)
-        gr = _growth("Pool", tid=3, priority=3)
+        gr = _closed_sink_placeholder("Pool", tid=3, priority=3)
         r = simulate(_params([g1, g2, gr], 80_000.0, months=120, as_of=today))
         p1 = next(p for p in r.projections if p.goal_name == "Short")
         p2 = next(p for p in r.projections if p.goal_name == "Long")
@@ -506,7 +527,7 @@ class TestInflationScenarios:
         assert inflated == pytest.approx(21_589_250.0, rel=0.01)
         today = datetime.date(2026, 1, 1)
         g = _pit("House", tid=1, target=raw, target_date=add_months(today, 120), priority=1, ret=8.0, infl=8.0)
-        gr = _growth("Pool", tid=2, priority=2)
+        gr = _closed_sink_placeholder("Pool", tid=2, priority=2)
         r = simulate(_params([g, gr], 200_000.0, months=180, as_of=today))
         pit = next(p for p in r.projections if p.goal_name == "House")
         assert pit.status in ("ACHIEVED", "ON_TRACK", "AT_RISK")
@@ -522,7 +543,7 @@ class TestInflationScenarios:
             ret=6.0,
             infl=0.0,
         )
-        gr = _growth("Pool", tid=2, priority=2)
+        gr = _closed_sink_placeholder("Pool", tid=2, priority=2)
         r = simulate(_params([g, gr], 100_000.0, months=48, general_inflation=7.0, as_of=today))
         pit = next(p for p in r.projections if p.goal_name == "Wed")
         assert _effective_goal_inflation(
@@ -539,7 +560,7 @@ class TestInflationScenarios:
         today = datetime.date(2026, 1, 1)
         g1 = _pit("H", tid=1, target=1_000_000.0, target_date=add_months(today, 120), priority=1, infl=8.0)
         g2 = _pit("T", tid=2, target=1_000_000.0, target_date=add_months(today, 120), priority=2, infl=6.0)
-        gr = _growth("Pool", tid=3, priority=3)
+        gr = _closed_sink_placeholder("Pool", tid=3, priority=3)
         m = 60
         t1 = _inflation_target_at_month(1_000_000.0, 8.0, m)
         t2 = _inflation_target_at_month(1_000_000.0, 6.0, m)
@@ -586,7 +607,7 @@ class TestSurplusChanges:
         today = datetime.date(2026, 1, 1)
         td = datetime.date(2030, 1, 1)
         g = _pit("G", tid=1, target=2_000_000.0, target_date=td, priority=1, infl=0.0)
-        gr = _growth("Pool", tid=2, priority=2)
+        gr = _closed_sink_placeholder("Pool", tid=2, priority=2)
         r_hi = simulate(_params([g, gr], 150_000.0, months=80, as_of=today))
         r_lo = simulate(_params([g, gr], 80_000.0, months=80, as_of=today))
         p_hi = next(p for p in r_hi.projections if p.goal_name == "G")
@@ -606,7 +627,7 @@ class TestSurplusChanges:
             ret=8.0,
             infl=0.0,
         )
-        gr = _growth("Pool", tid=2, priority=2)
+        gr = _closed_sink_placeholder("Pool", tid=2, priority=2)
         r = simulate(_params([g, gr], 0.0, months=60, as_of=today))
         pit = next(p for p in r.projections if p.goal_name == "G")
         assert pit.projected_final_amount > 400_000.0
@@ -615,7 +636,7 @@ class TestSurplusChanges:
     def test_s5_4_one_time_outflow_clamps_surplus_for_month(self) -> None:
         today = datetime.date(2026, 1, 1)
         g = _pit("G", tid=1, target=1_000_000.0, target_date=datetime.date(2030, 1, 1), priority=1, infl=0.0)
-        gr = _growth("Pool", tid=2, priority=2)
+        gr = _closed_sink_placeholder("Pool", tid=2, priority=2)
         out = OneTimeEvent(amount=200_000.0, date=datetime.date(2026, 6, 10), description="hit")
         r = simulate(_params([g, gr], 150_000.0, months=12, outflows=[out], as_of=today))
         june = next(m for m in r.net_worth_projection if m.month == datetime.date(2026, 6, 1))
@@ -666,7 +687,7 @@ class TestRecurringPlusPointInTime:
             priority=1,
         )
         pit = _pit("Big", tid=2, target=3_000_000.0, target_date=datetime.date(2036, 1, 1), priority=2, infl=0.0)
-        gr = _growth("Pool", tid=3, priority=3)
+        gr = _closed_sink_placeholder("Pool", tid=3, priority=3)
         r_short = simulate(_params([emi, pit, gr], 150_000.0, months=36, as_of=today))
         emi_long = _recurring(
             "EMI",
@@ -782,7 +803,7 @@ class TestLiquidity:
             ret=8.0,
             infl=0.0,
         )
-        gr = _growth("Pool", tid=2, priority=2)
+        gr = _closed_sink_placeholder("Pool", tid=2, priority=2)
         r = simulate(_params([gsim, gr], 100_000.0, months=200, as_of=today))
         assert r.projections[0].status in ("AT_RISK", "BEHIND", "ON_TRACK", "ACHIEVED")
 
@@ -824,7 +845,7 @@ class TestLiquidity:
     def test_s7_3_zero_starting_pure_surplus(self) -> None:
         today = datetime.date(2026, 1, 1)
         g = _pit("G", tid=1, target=900_000.0, target_date=datetime.date(2031, 1, 1), priority=1, start=0.0, infl=0.0)
-        gr = _growth("Pool", tid=2, priority=2)
+        gr = _closed_sink_placeholder("Pool", tid=2, priority=2)
         r = simulate(_params([g, gr], 40_000.0, months=100, as_of=today))
         assert r.projections[0].projected_final_amount > 0
 
@@ -835,17 +856,17 @@ class TestLiquidity:
 class TestEdgeCases:
     """Edge Cases."""
 
-    def test_s8_1_only_growth_goal(self) -> None:
-        g = _growth("Grow", tid=1, priority=1, ret=12.0)
+    def test_s8_1_only_open_overflow_sink_pit(self) -> None:
+        g = _open_overflow_sink_pit("Grow", tid=1, priority=1, ret=12.0)
         r = simulate(_params([g], 150_000.0, months=60, as_of=datetime.date(2026, 1, 1)))
         assert r.projections[0].projected_completion_date is None
-        assert r.projections[0].status == "ON_TRACK"
+        assert r.projections[0].projected_final_amount > 8_000_000.0
 
-    def test_s8_2_all_pit_achieved_surplus_to_growth(self) -> None:
+    def test_s8_2_all_pit_achieved_surplus_to_sink(self) -> None:
         today = datetime.date(2026, 1, 1)
         g1 = _pit("A", tid=1, target=100_000.0, target_date=add_months(today, 12), priority=1, start=120_000.0, infl=0.0)
         g2 = _pit("B", tid=2, target=50_000.0, target_date=add_months(today, 12), priority=2, start=60_000.0, infl=0.0)
-        gr = _growth("Pool", tid=3, priority=3)
+        gr = _closed_sink_placeholder("Pool", tid=3, priority=3)
         r = simulate(_params([g1, g2, gr], 80_000.0, months=24, as_of=today))
         statuses = {p.goal_name: p.status for p in r.projections}
         assert statuses.get("A") == "ACHIEVED"
@@ -863,7 +884,7 @@ class TestEdgeCases:
             ret=0.0,
             infl=0.0,
         )
-        gr = _growth("Pool", tid=2, priority=2)
+        gr = _closed_sink_placeholder("Pool", tid=2, priority=2)
         r = simulate(_params([g, gr], 100_000.0, months=24, as_of=today))
         pit = next(p for p in r.projections if p.goal_name == "G")
         assert pit.status == "ACHIEVED"
@@ -883,7 +904,7 @@ class TestEdgeCases:
             ret=10.0,
             infl=0.0,
         )
-        gr = _growth("Pool", tid=2, priority=2)
+        gr = _closed_sink_placeholder("Pool", tid=2, priority=2)
         r = simulate(_params([g, gr], 200_000.0, months=300, as_of=today))
         for row in r.net_worth_projection[-5:]:
             assert row.total_value == row.total_value  # finite
@@ -894,7 +915,7 @@ class TestEdgeCases:
         td = datetime.date(2035, 1, 1)
         g_lo = _pit("G", tid=1, target=2_000_000.0, target_date=td, priority=1, infl=0.0)
         g_hi = _pit("G", tid=1, target=2_500_000.0, target_date=td, priority=1, infl=0.0)
-        gr = _growth("Pool", tid=2, priority=2)
+        gr = _closed_sink_placeholder("Pool", tid=2, priority=2)
         r_lo = simulate(_params([g_lo, gr], 50_000.0, months=150, as_of=today))
         r_hi = simulate(_params([g_hi, gr], 50_000.0, months=150, as_of=today))
         d_lo = next(p for p in r_lo.projections if p.goal_name == "G").projected_completion_date
@@ -913,7 +934,7 @@ class TestMultiUser:
         today = datetime.date(2026, 1, 1)
         # Full goal 1M; user's 50% → 500k target in simulation
         g = _pit("Trip", tid=1, target=500_000.0, target_date=datetime.date(2028, 1, 1), priority=1, infl=0.0)
-        gr = _growth("Pool", tid=2, priority=2)
+        gr = _closed_sink_placeholder("Pool", tid=2, priority=2)
         r = simulate(_params([g, gr], 40_000.0, months=60, as_of=today))
         pit = next(p for p in r.projections if p.goal_name == "Trip")
         assert pit.status == "ACHIEVED"
@@ -923,7 +944,7 @@ class TestMultiUser:
         td = datetime.date(2030, 1, 1)
         g_50 = _pit("X", tid=1, target=500_000.0, target_date=td, priority=1, infl=0.0)
         g_70 = _pit("X", tid=1, target=700_000.0, target_date=td, priority=1, infl=0.0)
-        gr = _growth("Pool", tid=2, priority=2)
+        gr = _closed_sink_placeholder("Pool", tid=2, priority=2)
         r50 = simulate(_params([g_50, gr], 35_000.0, months=100, as_of=today))
         r70 = simulate(_params([g_70, gr], 35_000.0, months=100, as_of=today))
         d50 = next(p for p in r50.projections if p.goal_name == "X").projected_completion_date

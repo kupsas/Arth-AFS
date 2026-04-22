@@ -5,7 +5,7 @@
  *
  * Left: draggable list of goal names (priority order). Drag to reorder → updates
  * allocation_priority via onReorderList (same as legacy ↑↓ buttons).
- * Right: read-only metrics + glide vs simulated chart for POINT_IN_TIME / GROWTH;
+ * Right: read-only metrics + glide vs simulated chart for POINT_IN_TIME;
  * recurring goals show period funding stats (no chart — recurring “corpus” line is misleading).
  */
 
@@ -100,10 +100,10 @@ function statusVariant(
   return "outline";
 }
 
-/** PIT + GROWTH: scope chart to target month when deadline is set (same as RunRateChart). */
+/** PIT: scope chart to target month when deadline is set (same as RunRateChart). */
 function targetDateForLumpSumChart(goal: SimulationGoal): string | null {
   const gc = normalizedGoalClass(goal);
-  if (gc !== "POINT_IN_TIME" && gc !== "GROWTH") return null;
+  if (gc !== "POINT_IN_TIME") return null;
   const td = goal.target_date?.trim();
   return td || null;
 }
@@ -456,7 +456,7 @@ export function GoalExplorer({
       );
     }
 
-    // POINT_IN_TIME, GROWTH, or other non-recurring — lump-sum style readout + chart
+    // POINT_IN_TIME or other non-recurring — lump-sum style readout + chart
     const tgt = g.target_amount ?? 0;
     const td = g.target_date?.trim();
     const end = td ? parseISODateLocal(td) : null;
@@ -475,7 +475,7 @@ export function GoalExplorer({
     const hasDeadlineYm = Boolean(td && td.length >= 7);
     const deadlineYm = hasDeadlineYm ? td!.slice(0, 7) : "";
     const atDeadlineMonth =
-      (lumpGc === "POINT_IN_TIME" || lumpGc === "GROWTH") && hasDeadlineYm
+      lumpGc === "POINT_IN_TIME" && hasDeadlineYm
         ? corpusAtOrBeforeDeadline(p.monthly_trajectory ?? [], deadlineYm)
         : null;
 
