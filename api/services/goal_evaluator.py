@@ -1,10 +1,9 @@
 """
-Goal Progress Evaluator — Phase 4.5d
+Goal Progress Evaluator — Phase 4.5d + Track 3 cache
 
-Computes a single headline progress percentage for a Goal record (for dashboard
-lists). Simulation-accurate ``projected_completion_pct`` / ``periods_met_pct`` will
-arrive from the sim-on-write cache; until then this uses simple ratios (current vs
-target, or spend vs limit for EXPENSE_LIMIT).
+- ``EXPENSE_LIMIT``: spend vs cap from the transactions table (live, not surplus-sim).
+- All other goal types: read from :mod:`api.services.goal_status_cache` (full multi-goal
+  simulation on cache miss; fingerprint reuse on hit).
 """
 
 from __future__ import annotations
@@ -15,6 +14,7 @@ import logging
 from sqlmodel import Session, func, select
 
 from api.models import Goal, Transaction
+from api.services.goal_status_cache import progress_from_cache_or_naive
 from api.services.chart_metrics import (
     CHART_KEY_EXPENSE_NEED_WANT_STACK,
     expense_limit_sum_for_chart_key,
@@ -57,25 +57,25 @@ def expense_limit_spent_for_goal(
 def compute_progress(goal: Goal, session: Session) -> dict:
     """Return a progress snapshot for the given goal (no categorical labels)."""
     if goal.goal_type == "EXPENSE_LIMIT":
-        current_value = _compute_expense_limit(goal, session)
-    else:
-        current_value = goal.current_value or 0.0
+        return _compute_expense_limit_progress(goal, session)
+    return progress_from_cache_or_naive(goal, session)
 
+
+def _compute_expense_limit_progress(goal: Goal, session: Session) -> dict:
+    """Spend vs monthly/annual cap — orthogonal to surplus simulation."""
+    current_value = _compute_expense_limit(goal, session)
     target = goal.target_amount or 0.0
-
     if target > 0:
-        if goal.goal_type == "EXPENSE_LIMIT":
-            # How much of the cap is used (higher = closer to / over the limit)
-            percentage = (current_value / target) * 100
-        else:
-            percentage = (current_value / target) * 100
+        percentage = (current_value / target) * 100
     else:
         percentage = 0.0
-
     return {
         "current_value": round(current_value, 2),
         "target_amount": goal.target_amount,
         "percentage": round(percentage, 1),
+        "status_data": None,
+        "projected_completion_pct": None,
+        "periods_met_pct": None,
     }
 
 

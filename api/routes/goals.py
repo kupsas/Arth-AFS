@@ -14,9 +14,10 @@ and are registered before this router so static paths win.
 
 Progress computation:
   - EXPENSE_LIMIT goals: auto-computed from transactions DB (current month spend)
-  - All other goal types: use goal.current_value vs goal.target_amount
-  - Response includes ``computed_percentage`` (0–100+), separate from
-    ``activation_status`` (PENDING / ACTIVE / COMPLETED).
+  - Other goals: sim-on-write cache (full multi-goal ``simulate``) — see
+    ``POST /api/goals/refresh-status`` to force a rebuild.
+  - Response includes ``computed_percentage`` plus optional ``status_data`` /
+    ``projected_completion_pct`` / ``periods_met_pct`` from the cache.
 """
 
 from __future__ import annotations
@@ -58,6 +59,11 @@ from api.services.chart_metrics import (
     validate_chart_key_for_goal,
 )
 from api.services.goal_evaluator import compute_progress
+from api.services.goal_status_cache import (
+    delete_goal_status_row_for_goal,
+    refresh_goal_statuses,
+    simulation_fingerprint,
+)
 from api.services.priority_scorer import PriorityResult, compute_priority_scores
 
 logger = logging.getLogger(__name__)
@@ -537,6 +543,27 @@ def list_goals(
 
 
 # ───────────────────────────────────────────────────────────────────────────
+# POST /refresh-status — rebuild sim-on-write goal_status_cache (debug / manual)
+# Must stay before /{goal_id} so "refresh-status" is not parsed as an integer id.
+# ───────────────────────────────────────────────────────────────────────────
+
+
+@router.post("/refresh-status")
+def refresh_goal_simulation_cache(
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> dict:
+    """Re-run full simulation and repopulate per-goal progress cache for this user."""
+    n = refresh_goal_statuses(session, current_user, force=True)
+    session.commit()
+    return {
+        "refreshed_goals": n,
+        "simulation_hash": simulation_fingerprint(session, current_user),
+    }
+
+
+# ───────────────────────────────────────────────────────────────────────────
 # POST /{id}/decompose — preview or create sub-goals (Sub-Plan D)
 # Registered before /priorities and /{goal_id} static siblings.
 # ───────────────────────────────────────────────────────────────────────────
@@ -910,6 +937,7 @@ def delete_goal(
     goal = session.get(Goal, goal_id)
     if not _goal_owned(goal, current_user):
         raise HTTPException(status_code=404, detail=f"Goal {goal_id} not found")
+    delete_goal_status_row_for_goal(session, goal_id)
     session.delete(goal)
     session.commit()
 
@@ -1002,6 +1030,9 @@ def _goal_to_dict(
         "goal_subtype": goal.goal_subtype,
         "computed_current_value": progress["current_value"],
         "computed_percentage": progress["percentage"],
+        "status_data": progress.get("status_data"),
+        "projected_completion_pct": progress.get("projected_completion_pct"),
+        "periods_met_pct": progress.get("periods_met_pct"),
         "created_at": goal.created_at.isoformat() if goal.created_at else None,
         "updated_at": goal.updated_at.isoformat() if goal.updated_at else None,
     }

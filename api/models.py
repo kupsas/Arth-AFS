@@ -11,6 +11,7 @@ Tables:
   - RecurringPattern  — auto-detected recurring transaction patterns (Phase 4.5c)
   - Goal              — user-defined financial goals (Phase 4.5d, hierarchy Phase B.0)
   - GoalLink          — parent/child causal links between goals (Phase B.0)
+  - GoalStatusCache   — sim-on-write snapshot per goal (Track 3: dashboard % without re-sim)
   - InflationRate     — cached CPI / sector inflation (Goals architecture V2)
   - LifeEvent         — flags for activation DSL (event:...) (Phase B.0)
   - Holding           — portfolio position snapshot (Phase A.0)
@@ -437,6 +438,38 @@ class Goal(SQLModel, table=True):
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )
     updated_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# GoalStatusCache — full-simulation progress snapshot (Track 3)
+# ───────────────────────────────────────────────────────────────────────────
+
+
+class GoalStatusCache(SQLModel, table=True):
+    """One row per goal: last full ``simulate()`` projection fields + invalidation hash.
+
+    Rows are rebuilt when goals/transactions/holdings change (fingerprint mismatch) or
+    when the user calls ``POST /api/goals/refresh-status``. ``monthly_trajectory`` is
+    not stored here — only headline % and supporting scalars (see ``status_data`` JSON).
+    """
+
+    __tablename__ = "goal_status_cache"
+
+    id: int | None = Field(default=None, primary_key=True)
+    goal_id: int = Field(foreign_key="goals.id", unique=True, index=True)
+    user_id: str = Field(index=True)
+    goal_class: str = Field(
+        max_length=32,
+        description="POINT_IN_TIME | RECURRING_CASH_FLOW (effective class at compute time).",
+    )
+    percentage: float = Field(
+        description="Headline progress: projected_completion_pct (PIT) or periods_met_pct (recurring).",
+    )
+    status_data: str = Field(sa_column=Column(Text, nullable=False))
+    simulation_hash: str = Field(index=True, max_length=64)
+    computed_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )
 
