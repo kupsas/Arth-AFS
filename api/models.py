@@ -10,7 +10,6 @@ Tables:
                         message ID so the same email is never processed twice
   - RecurringPattern  — auto-detected recurring transaction patterns (Phase 4.5c)
   - Goal              — user-defined financial goals (Phase 4.5d, hierarchy Phase B.0)
-  - GoalLink          — parent/child causal links between goals (Phase B.0)
   - GoalStatusCache   — sim-on-write snapshot per goal (Track 3: dashboard % without re-sim)
   - InflationRate     — cached CPI / sector inflation (Goals architecture V2)
   - LifeEvent         — flags for activation DSL (event:...) (Phase B.0)
@@ -320,6 +319,14 @@ class Goal(SQLModel, table=True):
 
     user_id: str = Field(index=True)  # always set from authenticated user on create
 
+    # Decomposition: child goals created from POST .../decompose?auto_create=true (replaces goal_links).
+    parent_goal_id: int | None = Field(
+        default=None,
+        foreign_key="goals.id",
+        index=True,
+        description="Parent goal id when this row was created as a decomposition child; NULL otherwise.",
+    )
+
     # Manual override for non-auto-computable goals (updated by PATCH /api/goals/{id})
     current_value: float | None = None
 
@@ -470,41 +477,6 @@ class GoalStatusCache(SQLModel, table=True):
     status_data: str = Field(sa_column=Column(Text, nullable=False))
     simulation_hash: str = Field(index=True, max_length=64)
     computed_at: datetime.datetime = Field(
-        default_factory=lambda: datetime.datetime.now(datetime.UTC),
-    )
-
-
-# ───────────────────────────────────────────────────────────────────────────
-# GoalLink — directed edges in the goal pyramid (Phase B.0)
-# ───────────────────────────────────────────────────────────────────────────
-
-
-class GoalLink(SQLModel, table=True):
-    """Relationship between two goals owned by the same user.
-
-    link_type values: DECOMPOSES_INTO | DEPENDS_ON | CONTRIBUTES_TO
-    Cycles and duplicate (parent, child, type) triples are rejected in application code (B.1).
-    """
-
-    __tablename__ = "goal_links"
-    __table_args__ = (
-        Index(
-            "uq_goal_link_parent_child_type",
-            "parent_goal_id",
-            "child_goal_id",
-            "link_type",
-            unique=True,
-        ),
-    )
-
-    id: int | None = Field(default=None, primary_key=True)
-    parent_goal_id: int = Field(foreign_key="goals.id", index=True)
-    child_goal_id: int = Field(foreign_key="goals.id", index=True)
-    link_type: str = Field(max_length=32)
-    description: str | None = Field(default=None, max_length=500)
-    contribution_amount: float | None = Field(default=None, ge=0)
-    user_id: str = Field(index=True)
-    created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )
 

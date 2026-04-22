@@ -408,8 +408,6 @@ export type GoalActivationStatus = "PENDING" | "ACTIVE" | "COMPLETED";
 
 export type SensitivityToReturns = "LOW" | "MEDIUM" | "HIGH";
 
-export type GoalLinkType = "DECOMPOSES_INTO" | "DEPENDS_ON" | "CONTRIBUTES_TO";
-
 /** From `resolve_goal_inflation` — category vs headline CPI EMA. */
 export interface GoalInflationResolution {
   annual_pct: number;
@@ -434,6 +432,8 @@ export interface Goal {
   /** Defaults to MONTHLY when omitted (older API responses). */
   progress_cadence?: ProgressCadence;
   user_id: string;
+  /** Set when this goal was created as a decomposition child of another goal. */
+  parent_goal_id?: number | null;
   current_value: number | null;    // manually entered
   notes: string | null;
   /** Phase B — optional on legacy rows; API returns null when unset. */
@@ -729,39 +729,6 @@ export interface PriorityResult {
 export interface GoalReorderItem {
   goal_id: number;
   allocation_priority: number;
-}
-
-/** One edge in the goal pyramid — mirrors api/routes/goal_links.py */
-export interface GoalLink {
-  id: number;
-  parent_goal_id: number;
-  child_goal_id: number;
-  link_type: GoalLinkType | string;
-  description: string | null;
-  contribution_amount: number | null;
-  user_id: string;
-  created_at: string | null;
-}
-
-export interface GoalLinkCreate {
-  parent_goal_id: number;
-  child_goal_id: number;
-  link_type: GoalLinkType | string;
-  description?: string | null;
-  contribution_amount?: number | null;
-}
-
-/**
- * GET /api/goals/tree — goals grouped by tier bucket (l1…l4) plus untiered and links.
- * Each goal includes the same fields as GET /api/goals (including computed progress).
- */
-export interface GoalTree {
-  l1: Goal[];
-  l2: Goal[];
-  l3: Goal[];
-  l4: Goal[];
-  untiered: Goal[];
-  links: GoalLink[];
 }
 
 /** GET /api/life-events — milestones referenced by activation_condition event:… atoms. */

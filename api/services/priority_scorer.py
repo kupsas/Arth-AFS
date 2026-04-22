@@ -84,8 +84,6 @@ class PriorityResult(BaseModel):
 def _effective_goal_class(goal: Goal) -> str:
     """Resolve goal_class; infer from goal_type when unset (legacy rows)."""
     gc = (goal.goal_class or "").strip().upper()
-    if gc == "GROWTH":
-        return "POINT_IN_TIME"
     if gc in ("POINT_IN_TIME", "RECURRING_CASH_FLOW"):
         return gc
     # Legacy inference

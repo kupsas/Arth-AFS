@@ -78,7 +78,6 @@ export function defaultAddGoalForm(): AddGoalFormState {
  */
 export function simulationGoalClassToGoalType(gc: string): GoalType {
   const u = gc.toUpperCase()
-  if (u === "GROWTH") return "INVESTMENT"
   if (u === "RECURRING_CASH_FLOW") return "DEBT_PAYOFF"
   return "SAVINGS"
 }
@@ -89,7 +88,6 @@ export function simulationGoalClassToGoalType(gc: string): GoalType {
 export function inferGoalUiKind(goal: Goal): GoalUiKind {
   if (goal.goal_type === "EXPENSE_LIMIT") return "EXPENSE_LIMIT"
   if (goal.goal_class === "RECURRING_CASH_FLOW") return "RECURRING_CASH_FLOW"
-  if (goal.goal_class === "GROWTH") return "POINT_IN_TIME"
   if (goal.goal_class === "POINT_IN_TIME") return "POINT_IN_TIME"
   if (goal.goal_type === "INVESTMENT") return "POINT_IN_TIME"
   if (goal.goal_type === "DEBT_PAYOFF") return "RECURRING_CASH_FLOW"

@@ -9,8 +9,7 @@ DELETE /api/goals/{id}      — delete a goal
 
 B.3: Hierarchy fields (tier, pyramid_id, activation_*, allocations) are validated
 on write. ``user_id`` is always taken from the session — never from the request body
-or cross-user query params. Tree/allocation/ancestors routes live in ``goal_tree.py``
-and are registered before this router so static paths win.
+or cross-user query params.
 
 Progress computation:
   - EXPENSE_LIMIT goals: auto-computed from transactions DB (current month spend)
@@ -33,7 +32,7 @@ from sqlmodel import Session, col, select
 
 from api.auth import get_current_user
 from api.database import get_session
-from api.models import Goal, GoalLink
+from api.models import Goal
 from api.services.goal_decomposer import (
     LoanParams,
     decompose_debt_goal,
@@ -41,7 +40,6 @@ from api.services.goal_decomposer import (
     parent_has_decompose_children,
     spec_to_goal_row,
 )
-from api.services.goal_graph import validate_link
 from api.services.inflation_service import (
     resolve_goal_inflation,
     simulation_inflation_ema_span,
@@ -636,28 +634,18 @@ def decompose_goal(
 
     created_ids: list[int] = []
     for spec in result.sub_goals:
-        child = spec_to_goal_row(spec, user_id=current_user)
+        child = spec_to_goal_row(spec, user_id=current_user, parent_goal_id=goal_id)
         session.add(child)
-        session.flush()
-        if child.id is None:
-            raise HTTPException(status_code=500, detail="Failed to allocate child goal id")
-        validate_link(session, goal_id, child.id, current_user)
-        link = GoalLink(
-            parent_goal_id=goal_id,
-            child_goal_id=child.id,
-            link_type="DECOMPOSES_INTO",
-            user_id=current_user,
-            description="Created by goal decomposition",
-        )
-        session.add(link)
         try:
             session.flush()
         except IntegrityError as e:
             session.rollback()
             raise HTTPException(
                 status_code=400,
-                detail="Could not create decomposition link (duplicate or constraint).",
+                detail="Could not persist decomposition child goal.",
             ) from e
+        if child.id is None:
+            raise HTTPException(status_code=500, detail="Failed to allocate child goal id")
         created_ids.append(child.id)
 
     session.commit()
@@ -1028,6 +1016,7 @@ def _goal_to_dict(
         "starting_balance": goal.starting_balance,
         "system_priority_score": goal.system_priority_score,
         "goal_subtype": goal.goal_subtype,
+        "parent_goal_id": goal.parent_goal_id,
         "computed_current_value": progress["current_value"],
         "computed_percentage": progress["percentage"],
         "status_data": progress.get("status_data"),
