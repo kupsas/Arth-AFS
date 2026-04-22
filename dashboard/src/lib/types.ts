@@ -1338,3 +1338,29 @@ export interface OnboardingGoalTemplatesResponse {
   templates: OnboardingGoalTemplate[];
   headline_preview?: OnboardingTemplatePreview;
 }
+
+/** GET /api/onboarding/state — persisted wizard snapshot. */
+export interface OnboardingStateResponse {
+  current_step: string;
+  completed_steps: unknown[];
+  discovery_results: Record<string, unknown>;
+  backfill_progress: Record<string, unknown>;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** GET /api/onboarding/backfill-sources — ordered pipeline keys from bank config. */
+export interface OnboardingBackfillSourceRow {
+  source_key: string;
+  source_type: string;
+}
+
+/** GET /api/metrics/classification-stats — coarse automation provenance mix. */
+export interface ClassificationStatsResponse {
+  total_transactions: number;
+  rules_pct: number;
+  llm_pct: number;
+  user_confirmed_pct: number;
+  unclassified_pct: number;
+  other_pct: number;
+}

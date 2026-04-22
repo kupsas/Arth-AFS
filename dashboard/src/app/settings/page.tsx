@@ -9,9 +9,11 @@
  */
 
 import * as React from "react"
-import { Pencil, Trash2 } from "lucide-react"
+import { useQueryClient } from "@tanstack/react-query"
+import { Link2, Pencil, Trash2 } from "lucide-react"
 
 import { UploadButton } from "@/components/dashboard/upload-button"
+import { OnboardingWizard } from "@/components/onboarding/onboarding-wizard"
 import { ReminderExamplePicker } from "@/components/settings/reminder-example-picker"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -41,6 +43,11 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
+import { classificationStatsKey, useClassificationStats } from "@/hooks/use-classification-stats"
+import {
+  onboardingBackfillSourcesKey,
+  onboardingStateKey,
+} from "@/hooks/use-onboarding"
 import {
   useCreateReminder,
   useDeleteReminder,
@@ -61,6 +68,7 @@ function parseAnchorInput(text: string): string[] {
 }
 
 export default function SettingsPage() {
+  const queryClient = useQueryClient()
   const { data: reminders, isLoading } = useReminders()
   const createMut = useCreateReminder()
   const updateMut = useUpdateReminder()
@@ -84,6 +92,9 @@ export default function SettingsPage() {
   const [editAnchorText, setEditAnchorText] = React.useState("")
   /** After loading a reminder into the sheet, skip re-derive until example IDs change. */
   const editExampleIdsSyncRef = React.useRef<string | null>(null)
+  /** Gmail / backfill wizard launched from **Connect account** (Track 2 Phase 5c). */
+  const [connectOpen, setConnectOpen] = React.useState(false)
+  const classificationStats = useClassificationStats()
 
   React.useEffect(() => {
     if (!editing) {
@@ -193,6 +204,100 @@ export default function SettingsPage() {
 
   return (
     <div className="max-w-2xl flex flex-col gap-8">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Connect account</CardTitle>
+          <p className="text-sm text-muted-foreground font-normal">
+            Re-run Gmail discovery, chunk backfill, inline classification pauses, and gap review —
+            the same steps as first-run onboarding, without leaving Settings.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <Button type="button" variant="secondary" className="gap-2" onClick={() => setConnectOpen(true)}>
+            <Link2 className="size-4" aria-hidden />
+            Connect account
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Sheet open={connectOpen} onOpenChange={setConnectOpen}>
+        <SheetContent className="w-full sm:max-w-3xl overflow-y-auto flex flex-col">
+          <SheetHeader>
+            <SheetTitle>Connect account</SheetTitle>
+            <SheetDescription>
+              Uses your existing session. When you tap **Finish** at the end we refresh ledger caches.
+            </SheetDescription>
+          </SheetHeader>
+          <div className="flex-1 overflow-y-auto pr-1 pt-2">
+            <OnboardingWizard
+              mode="settings"
+              onFinished={() => {
+                setConnectOpen(false)
+                void queryClient.invalidateQueries({ queryKey: ["transactions"] })
+                void queryClient.invalidateQueries({ queryKey: [...classificationStatsKey] })
+                void queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
+                void queryClient.invalidateQueries({ queryKey: [...onboardingBackfillSourcesKey] })
+              }}
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Classification mix</CardTitle>
+          <p className="text-sm text-muted-foreground font-normal">
+            Share of transactions by automation provenance (rules vs LLM vs your edits vs still blank).
+          </p>
+        </CardHeader>
+        <CardContent className="text-sm space-y-2">
+          {classificationStats.isLoading && (
+            <p className="text-muted-foreground">Loading stats…</p>
+          )}
+          {classificationStats.isError && (
+            <p className="text-destructive" role="alert">
+              Could not load classification stats.
+            </p>
+          )}
+          {classificationStats.data && classificationStats.data.total_transactions === 0 && (
+            <p className="text-muted-foreground">No transactions in your database yet.</p>
+          )}
+          {classificationStats.data && classificationStats.data.total_transactions > 0 && (
+            <ul className="space-y-1.5 list-none pl-0">
+              <li>
+                <span className="text-muted-foreground">Rules</span>{" "}
+                <span className="font-medium tabular-nums">{classificationStats.data.rules_pct}%</span>
+              </li>
+              <li>
+                <span className="text-muted-foreground">LLM</span>{" "}
+                <span className="font-medium tabular-nums">{classificationStats.data.llm_pct}%</span>
+              </li>
+              <li>
+                <span className="text-muted-foreground">User-confirmed</span>{" "}
+                <span className="font-medium tabular-nums">
+                  {classificationStats.data.user_confirmed_pct}%
+                </span>
+              </li>
+              <li>
+                <span className="text-muted-foreground">Unclassified</span>{" "}
+                <span className="font-medium tabular-nums">
+                  {classificationStats.data.unclassified_pct}%
+                </span>
+              </li>
+              {classificationStats.data.other_pct > 0 && (
+                <li>
+                  <span className="text-muted-foreground">Other</span>{" "}
+                  <span className="font-medium tabular-nums">{classificationStats.data.other_pct}%</span>
+                </li>
+              )}
+              <li className="text-xs text-muted-foreground pt-2">
+                Based on {classificationStats.data.total_transactions.toLocaleString()} total rows.
+              </li>
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Statement upload</CardTitle>

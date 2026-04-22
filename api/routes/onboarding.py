@@ -35,7 +35,7 @@ from api.services.user_classification import (
     merge_starter_pack_for_user,
 )
 from pipeline import config as pipeline_cfg
-from scraper.config_loader import get_bank_senders_config
+from scraper.config_loader import BankSendersConfig, get_bank_senders_config
 from scraper.discovery import discover_sources, discovered_sources_to_json
 from scraper.gap_detector import detect_gaps
 from scraper.gmail_client import GmailClient, GmailReauthRequiredError
@@ -50,6 +50,26 @@ from scraper.onboarding_orchestrator import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Order for chunk backfill: savings first, then credit cards, then brokers (Track 2 wizard).
+_SOURCE_TYPE_RANK: dict[str, int] = {"savings": 0, "credit_card": 1, "broker": 2}
+
+
+def _ordered_backfill_sources(bank: BankSendersConfig) -> list[dict[str, str]]:
+    """Unique ``source_key`` values from bank config, ordered for the onboarding wizard."""
+    best: dict[str, tuple[int, str]] = {}
+    for _sender, cfg in bank.items():
+        st_raw = str(cfg.get("source_type") or "unknown").lower().strip()
+        rank = _SOURCE_TYPE_RANK.get(st_raw, 5)
+        for acct in cfg.get("accounts", {}).values():
+            sk = str(acct.get("source_key") or "").strip()
+            if not sk:
+                continue
+            prev = best.get(sk)
+            if prev is None or rank < prev[0]:
+                best[sk] = (rank, st_raw)
+    ordered = sorted(best.items(), key=lambda kv: (kv[1][0], kv[0]))
+    return [{"source_key": sk, "source_type": st} for sk, (_r, st) in ordered]
 
 
 def _parse_json_object(raw: str, default: Any) -> Any:
@@ -157,6 +177,17 @@ def patch_onboarding_state(
         created_at=row.created_at.isoformat() if row.created_at else None,
         updated_at=row.updated_at.isoformat() if row.updated_at else None,
     )
+
+
+@router.get("/backfill-sources")
+def onboarding_backfill_sources(
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> list[dict[str, str]]:
+    """Pipeline ``source_key`` list derived from the user's bank-sender config (wizard order)."""
+    bank = get_bank_senders_config(session, current_user)
+    return _ordered_backfill_sources(bank)
 
 
 @router.post("/discover")
