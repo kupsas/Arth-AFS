@@ -15,6 +15,7 @@ GET /api/metrics/monthly-trend       — month-by-month income vs expense for la
 GET /api/metrics/accounts-summary    — per-account inflow/outflow totals (all time)
 GET /api/metrics/negative-surplus-months — months where spending exceeded income (Q11)
 GET /api/metrics/by-spend-category   — spending broken down by NEED/WANT/SAVING/INVESTMENT
+GET /api/metrics/classification-stats — rules vs LLM vs user vs unclassified (Track 2 Phase 5d)
 """
 
 from __future__ import annotations
@@ -113,6 +114,17 @@ class NegativeSurplusResponse(BaseModel):
     total_months: int
     deficit_months: list[DeficitMonthRow]
     total_deficit: float  # sum of |net| across deficit months (positive number)
+
+
+class ClassificationStatsResponse(BaseModel):
+    """Coarse distribution of ``transactions.classification_source`` for the session user."""
+
+    total_transactions: int
+    rules_pct: float
+    llm_pct: float
+    user_confirmed_pct: float
+    unclassified_pct: float
+    other_pct: float
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -536,6 +548,68 @@ def get_negative_surplus_months(
         total_months=months,
         deficit_months=deficit_months,
         total_deficit=round(sum(abs(m.net) for m in deficit_months), 2),
+    )
+
+
+def _bucket_classification_source(src: str | None) -> str:
+    """Align with ``scripts/compare_onboarding.py`` — coarse buckets for UI."""
+    if src is None or not str(src).strip():
+        return "unclassified"
+    u = str(src).strip().upper()
+    if u.startswith("RULES"):
+        return "rules"
+    if u.startswith("LLM"):
+        return "llm"
+    if u.startswith("USER"):
+        return "user"
+    return "other"
+
+
+@router.get("/classification-stats", response_model=ClassificationStatsResponse)
+def get_classification_stats(
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+):
+    """How transactions were classified: rules engine, LLM, user edits, or still blank."""
+    q = (
+        select(Transaction.classification_source, func.count(Transaction.id))
+        .where(Transaction.user_id == current_user)
+        .group_by(Transaction.classification_source)
+    )
+    rows = session.exec(q).all()
+    buckets: dict[str, int] = {
+        "rules": 0,
+        "llm": 0,
+        "user": 0,
+        "unclassified": 0,
+        "other": 0,
+    }
+    total = 0
+    for src, cnt in rows:
+        b = _bucket_classification_source(src)
+        buckets[b] = buckets.get(b, 0) + int(cnt)
+        total += int(cnt)
+    if total == 0:
+        return ClassificationStatsResponse(
+            total_transactions=0,
+            rules_pct=0.0,
+            llm_pct=0.0,
+            user_confirmed_pct=0.0,
+            unclassified_pct=0.0,
+            other_pct=0.0,
+        )
+
+    def pct(n: int) -> float:
+        return round(100.0 * n / total, 1)
+
+    return ClassificationStatsResponse(
+        total_transactions=total,
+        rules_pct=pct(buckets["rules"]),
+        llm_pct=pct(buckets["llm"]),
+        user_confirmed_pct=pct(buckets["user"]),
+        unclassified_pct=pct(buckets["unclassified"]),
+        other_pct=pct(buckets["other"]),
     )
 
 

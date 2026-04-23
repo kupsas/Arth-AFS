@@ -79,6 +79,9 @@ import type {
   GoalReorderItem,
   OnboardingGapsResponse,
   OnboardingGoalTemplatesResponse,
+  OnboardingStateResponse,
+  OnboardingBackfillSourceRow,
+  ClassificationStatsResponse,
 } from "@/lib/types";
 
 import { buildApiUrl } from "@/lib/api-base";
@@ -921,6 +924,90 @@ export function fetchOnboardingGoalTemplates(params?: {
   template_id?: string;
 }): Promise<OnboardingGoalTemplatesResponse> {
   return get<OnboardingGoalTemplatesResponse>("/api/onboarding/goal-templates", params);
+}
+
+/** GET /api/onboarding/state */
+export function fetchOnboardingState(): Promise<OnboardingStateResponse> {
+  return get<OnboardingStateResponse>("/api/onboarding/state");
+}
+
+/** PATCH /api/onboarding/state */
+export function patchOnboardingState(
+  body: Partial<{
+    current_step: string;
+    completed_steps: unknown[];
+    discovery_results: Record<string, unknown>;
+    backfill_progress: Record<string, unknown>;
+  }>,
+): Promise<OnboardingStateResponse> {
+  return patch<OnboardingStateResponse>("/api/onboarding/state", body);
+}
+
+/** POST /api/onboarding/discover */
+export function postOnboardingDiscover(): Promise<Record<string, unknown>> {
+  return post<Record<string, unknown>>("/api/onboarding/discover", {});
+}
+
+/** GET /api/onboarding/backfill-sources */
+export function fetchOnboardingBackfillSources(): Promise<OnboardingBackfillSourceRow[]> {
+  return get<OnboardingBackfillSourceRow[]>("/api/onboarding/backfill-sources");
+}
+
+/** POST /api/onboarding/backfill/{source} */
+export function postOnboardingBackfillChunk(
+  source: string,
+  body?: {
+    chunk_size?: number;
+    resume_after_classification?: boolean;
+    resume_from_pause?: boolean;
+  },
+): Promise<Record<string, unknown>> {
+  return post<Record<string, unknown>>(
+    `/api/onboarding/backfill/${encodeURIComponent(source)}`,
+    body ?? {},
+  );
+}
+
+/** GET /api/onboarding/backfill/{source}/progress */
+export function fetchOnboardingBackfillProgress(
+  source: string,
+): Promise<{
+  source: string;
+  status: string;
+  emails_found: number;
+  emails_processed: number;
+  transactions_parsed: number;
+  unknowns_pending: number;
+  error_message: string | null;
+}> {
+  return get(`/api/onboarding/backfill/${encodeURIComponent(source)}/progress`);
+}
+
+/** POST /api/onboarding/backfill/{source}/resume — clear paused-only gate. */
+export function postOnboardingBackfillResume(source: string): Promise<Record<string, unknown>> {
+  return post<Record<string, unknown>>(
+    `/api/onboarding/backfill/${encodeURIComponent(source)}/resume`,
+    {},
+  );
+}
+
+/** POST /api/onboarding/complete */
+export function postOnboardingComplete(): Promise<{ ok: boolean; current_step: string }> {
+  return post<{ ok: boolean; current_step: string }>("/api/onboarding/complete", {});
+}
+
+/** GET /api/onboarding/classifier-status */
+export function fetchOnboardingClassifierStatus(): Promise<{
+  llm_model: string;
+  has_any_api_key: boolean;
+  unknown_threshold: number;
+}> {
+  return get("/api/onboarding/classifier-status");
+}
+
+/** GET /api/metrics/classification-stats */
+export function fetchClassificationStats(): Promise<ClassificationStatsResponse> {
+  return get<ClassificationStatsResponse>("/api/metrics/classification-stats");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

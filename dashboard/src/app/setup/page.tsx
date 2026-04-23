@@ -1,16 +1,23 @@
 "use client";
 
 /**
- * First-run setup wizard (DESKTOP_PREREQS item 3).
+ * First-run setup (DESKTOP_PREREQS item 3) + Track 2 onboarding wizard (Phase 5b).
  *
- * Flow: register (if no users) → sign in → optional PDF secrets → Gmail OAuth → finish.
- * Bank sender mappings are seeded from the server on first DB init; edit via
- * GET/POST /api/scraper-config or future settings UI.
+ * Flow:
+ *   1. If the SQLite DB has **no** users yet → simple registration form.
+ *   2. If users exist but the browser has **no** session → nudge to ``/login``.
+ *   3. Once authenticated, optionally collect PDF passwords (same as before).
+ *   4. Then mount ``OnboardingWizard`` — Gmail discovery, identity, chunk backfill,
+ *      inline classification pauses, gap detection, goals, and completion.
+ *
+ * The wizard itself lives in ``src/components/onboarding/onboarding-wizard.tsx`` so we
+ * can reuse it from Settings → **Connect account** without duplicating logic.
  */
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
 
+import { OnboardingWizard } from "@/components/onboarding/onboarding-wizard";
 import { Button } from "@/components/ui/button";
 import {
   completeSetupWizard,
@@ -97,32 +104,14 @@ export default function SetupPage() {
     }
   }
 
-  async function onOAuth() {
-    setError(null);
-    try {
-      const res = await fetch(buildApiUrl("/api/scraper/oauth/init"), {
-        method: "POST",
-        credentials: "include",
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        setError((body as { detail?: string }).detail ?? "OAuth init failed");
-        return;
-      }
-      setStep(4);
-    } catch {
-      setError("Could not reach the API. Is it running?");
-    }
-  }
-
-  async function onFinish() {
+  async function onWizardFinished() {
     setError(null);
     try {
       await completeSetupWizard();
       router.replace("/");
       router.refresh();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Could not complete setup");
+      setError(err instanceof Error ? err.message : "Could not finalize setup flags");
     }
   }
 
@@ -136,11 +125,15 @@ export default function SetupPage() {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-background p-4">
-      <div className="w-full max-w-lg rounded-xl border bg-card p-8 shadow-sm">
-        <h1 className="text-xl font-semibold">Welcome to Arth</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Local-first setup — your data stays on this machine.
-        </p>
+      <div className="w-full max-w-4xl rounded-xl border bg-card p-6 sm:p-10 shadow-sm">
+        {step < 3 && (
+          <>
+            <h1 className="text-xl font-semibold">Welcome to Arth</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Local-first setup — your data stays on this machine.
+            </p>
+          </>
+        )}
 
         {error && (
           <p className="mt-4 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -149,7 +142,7 @@ export default function SetupPage() {
         )}
 
         {step === 0 && (
-          <form onSubmit={onRegister} className="mt-6 space-y-4">
+          <form onSubmit={onRegister} className="mt-6 space-y-4 max-w-lg">
             <h2 className="text-sm font-medium">Create your account</h2>
             <input
               className="w-full rounded-md border bg-background px-3 py-2 text-sm"
@@ -173,7 +166,7 @@ export default function SetupPage() {
         )}
 
         {step === 1 && (
-          <div className="mt-6 space-y-4">
+          <div className="mt-6 space-y-4 max-w-lg">
             <p className="text-sm text-muted-foreground">
               Sign in with the account you just created (or an existing one).
             </p>
@@ -188,7 +181,7 @@ export default function SetupPage() {
         )}
 
         {step === 2 && (
-          <form onSubmit={onSaveSecrets} className="mt-6 space-y-4">
+          <form onSubmit={onSaveSecrets} className="mt-6 space-y-4 max-w-lg">
             <h2 className="text-sm font-medium">PDF passwords (optional)</h2>
             <p className="text-xs text-muted-foreground">
               JSON object whose keys match <code className="rounded bg-muted px-1">.env</code> names
@@ -212,30 +205,12 @@ export default function SetupPage() {
         )}
 
         {step === 3 && (
-          <div className="mt-6 space-y-4">
-            <h2 className="text-sm font-medium">Connect Gmail</h2>
-            <p className="text-xs text-muted-foreground">
-              Starts the Google OAuth flow on the API server (browser may open). Requires{" "}
-              <code className="rounded bg-muted px-1">data/gmail_credentials.json</code>.
-            </p>
-            <Button className="w-full" type="button" onClick={onOAuth}>
-              Start Gmail OAuth
-            </Button>
-            <Button variant="ghost" className="w-full" type="button" onClick={() => setStep(4)}>
-              Skip (configure later)
-            </Button>
-          </div>
-        )}
-
-        {step === 4 && (
-          <div className="mt-6 space-y-4">
-            <p className="text-sm text-muted-foreground">
-              You can change bank senders and account mappings via{" "}
-              <code className="rounded bg-muted px-1">/api/scraper-config</code> or SQLite.
-            </p>
-            <Button className="w-full" onClick={onFinish}>
-              Finish setup
-            </Button>
+          <div className="mt-4">
+            <OnboardingWizard
+              mode="setup"
+              onExitFirstStep={() => setStep(2)}
+              onFinished={() => void onWizardFinished()}
+            />
           </div>
         )}
       </div>
