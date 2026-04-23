@@ -148,3 +148,29 @@ def test_per_transaction_no_month_gaps(session: Session):
     out = detect_gaps(session, user, cfg)
     assert out[0]["gaps"] == []
     assert "Sporadic" in (out[0].get("note") or "")
+
+
+def test_quarterly_cadence_flags_fully_empty_calendar_quarter(session: Session):
+    """
+    For ``quarterly`` senders, a *calendar quarter* with no rows in the covered
+    range is a gap (e.g. Q2 empty between activity in Q1 and Q3).
+    """
+    user = "u_q1"
+    src = "q_stmt_src"
+    _add_txn(session, i=1, user=user, source=src, d=dt.date(2021, 1, 10))
+    _add_txn(session, i=2, user=user, source=src, d=dt.date(2021, 10, 5))
+    session.commit()
+    cfg = {
+        "a@b.com": {
+            "display_name": "Quarterly PDF",
+            "source_type": "savings",
+            "expected_cadence": "quarterly",
+            "accounts": {"1": {"source_key": src, "account_id": "a1"}},
+        }
+    }
+    out = detect_gaps(session, user, cfg)
+    assert len(out) == 1
+    # Apr–Sep 2021 (inclusive) spans Q2 and Q3 with no transactions; algorithm reports
+    # those zero months. At minimum Q2 2021 should appear.
+    labels = [g["period_start"] for g in out[0]["gaps"]]
+    assert "2021-04" in labels
