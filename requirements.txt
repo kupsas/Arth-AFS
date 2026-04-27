@@ -22,7 +22,7 @@ google-api-python-client>=2.0
 google-auth-httplib2>=0.2
 google-auth-oauthlib>=1.0
 beautifulsoup4>=4.12
-apscheduler>=3.10
+apscheduler>=3.11.2
 
 # Auth — password hashing and signed session tokens
 bcrypt>=4.0
