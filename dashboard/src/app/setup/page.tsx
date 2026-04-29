@@ -6,9 +6,12 @@
  * Flow:
  *   1. If the SQLite DB has **no** users yet → simple registration form.
  *   2. If users exist but the browser has **no** session → nudge to ``/login``.
- *   3. Once authenticated, optionally collect PDF passwords (same as before).
- *   4. Then mount ``OnboardingWizard`` — Gmail discovery, identity, chunk backfill,
- *      inline classification pauses, gap detection, goals, and completion.
+ *   3. Once authenticated, mount ``OnboardingWizard`` — Gmail discovery, identity,
+ *      chunk backfill, inline classification pauses, gap detection, goals, and completion.
+ *
+ *   (PDF statement passwords: deferred — were an optional pre-wizard form; use ``.env`` or
+ *   we can add a Settings/late step later. See removed ``saveSetupSecrets`` + step-2 block
+ *   in git history if we restore an inline JSON editor here.)
  *
  * The wizard itself lives in ``src/components/onboarding/onboarding-wizard.tsx`` so we
  * can reuse it from Settings → **Connect account** without duplicating logic.
@@ -16,6 +19,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { OnboardingWizard } from "@/components/onboarding/onboarding-wizard";
 import { Button } from "@/components/ui/button";
@@ -23,7 +27,7 @@ import {
   completeSetupWizard,
   fetchSetupStatus,
   registerFirstUser,
-  saveSetupSecrets,
+  SETUP_STATUS_QUERY_KEY,
 } from "@/lib/api";
 import { buildApiUrl } from "@/lib/api-base";
 
@@ -40,15 +44,13 @@ async function authMeNoRedirect(): Promise<{ authenticated: boolean; username?: 
 
 export default function SetupPage() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [loading, setLoading] = React.useState(true);
   const [step, setStep] = React.useState(0);
   const [error, setError] = React.useState<string | null>(null);
 
   const [regUser, setRegUser] = React.useState("");
   const [regPw, setRegPw] = React.useState("");
-  const [secretsJson, setSecretsJson] = React.useState(
-    '{\n  "HDFC_STATEMENT_PASSWORD": ""\n}',
-  );
 
   React.useEffect(() => {
     let cancelled = false;
@@ -68,7 +70,8 @@ export default function SetupPage() {
         } else if (!auth.authenticated) {
           setStep(1);
         } else {
-          setStep(2);
+          // Skip optional PDF-password screen — go straight to the onboarding wizard.
+          setStep(3);
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load setup status");
@@ -92,22 +95,12 @@ export default function SetupPage() {
     }
   }
 
-  async function onSaveSecrets(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    try {
-      const parsed = JSON.parse(secretsJson) as Record<string, string>;
-      await saveSetupSecrets(parsed);
-      setStep(3);
-    } catch {
-      setError("Secrets must be valid JSON object mapping env key → password string.");
-    }
-  }
-
   async function onWizardFinished() {
     setError(null);
     try {
       await completeSetupWizard();
+      // So SetupGate on ``/`` sees ``needs_setup: false`` instead of stale cache.
+      await queryClient.invalidateQueries({ queryKey: [...SETUP_STATUS_QUERY_KEY] });
       router.replace("/");
       router.refresh();
     } catch (err: unknown) {
@@ -180,35 +173,17 @@ export default function SetupPage() {
           </div>
         )}
 
-        {step === 2 && (
-          <form onSubmit={onSaveSecrets} className="mt-6 space-y-4 max-w-lg">
-            <h2 className="text-sm font-medium">PDF passwords (optional)</h2>
-            <p className="text-xs text-muted-foreground">
-              JSON object whose keys match <code className="rounded bg-muted px-1">.env</code> names
-              (e.g. HDFC_STATEMENT_PASSWORD). You can skip and rely on{" "}
-              <code className="rounded bg-muted px-1">.env</code> instead.
-            </p>
-            <textarea
-              className="min-h-[120px] w-full rounded-md border bg-background p-2 font-mono text-xs"
-              value={secretsJson}
-              onChange={(e) => setSecretsJson(e.target.value)}
-            />
-            <div className="flex gap-2">
-              <Button type="button" variant="ghost" onClick={() => setStep(3)}>
-                Skip
-              </Button>
-              <Button type="submit" className="flex-1">
-                Save & continue
-              </Button>
-            </div>
-          </form>
-        )}
+        {/*
+          PDF passwords (optional) — disabled for now. When we reintroduce:
+          - add secretsJson state + saveSetupSecrets from @/lib/api
+          - on load, use setStep(2) for authenticated users; render form; Skip/Save → setStep(3)
+          - pass onExitFirstStep={() => setStep(2)} on OnboardingWizard so "Back" from step 1 works
+        */}
 
         {step === 3 && (
           <div className="mt-4">
             <OnboardingWizard
               mode="setup"
-              onExitFirstStep={() => setStep(2)}
               onFinished={() => void onWizardFinished()}
             />
           </div>

@@ -32,6 +32,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { buildApiUrl } from "@/lib/api-base";
+import { getUserFacingErrorMessage, userMessageFromApiResponseBody } from "@/lib/user-facing-api-error";
 
 type PreviewResponse = { self_name: string; self_aliases: string[] };
 
@@ -55,7 +56,10 @@ async function savePreclassification(payload: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error(await res.text());
+  const t = await res.text();
+  if (!res.ok) {
+    throw new Error(userMessageFromApiResponseBody(t) || "Could not save. Try again.");
+  }
 }
 
 export function PreClassificationForm() {
@@ -65,6 +69,7 @@ export function PreClassificationForm() {
   const [preview, setPreview] = React.useState<PreviewResponse | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [message, setMessage] = React.useState<string | null>(null);
+  const [saveError, setSaveError] = React.useState<string | null>(null);
 
   // Debounced preview so we do not spam the API on every keystroke.
   React.useEffect(() => {
@@ -89,6 +94,7 @@ export function PreClassificationForm() {
 
   async function onSave() {
     setMessage(null);
+    setSaveError(null);
     setSaving(true);
     try {
       await savePreclassification({
@@ -96,9 +102,11 @@ export function PreClassificationForm() {
         last_name: lastName.trim(),
         extra_aliases: extrasList,
       });
-      setMessage("Saved — your narrations will now match these aliases during rules classification.");
+      setMessage(
+        "Saved — when we read your bank messages, we will use these names to recognise you.",
+      );
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "Save failed");
+      setSaveError(getUserFacingErrorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -109,9 +117,10 @@ export function PreClassificationForm() {
       <CardHeader>
         <CardTitle>Your name on bank statements</CardTitle>
         <CardDescription>
-          We use this to label **self-transfers** and to spot your own UPI handles. Your
-          merchant starter pack (~200 common brands) is already loaded automatically — nothing
-          to paste here.
+          We use this to label <strong>money you move to yourself</strong> and to recognise your own
+          name in bank text (including UPI notes — the short text that travels with a transfer in
+          India). Arth already ships with built-in hints for common
+          merchants (food delivery, streaming, etc.) — nothing to paste here.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -135,9 +144,9 @@ export function PreClassificationForm() {
             autoComplete="family-name"
           />
           <p className="text-xs text-muted-foreground">
-            We never add your surname **alone** as an alias — too many false positives when
-            relatives share it — but we *do* add safe combinations like{" "}
-            <span className="font-mono">LAST FIRST</span>.
+            We never add your surname <strong>by itself</strong> as a match — too many false matches
+            when relatives share it — but we do add safe combinations like{" "}
+            <span className="font-mono">LAST FIRST</span> (how many Indian banks print your name).
           </p>
         </div>
         <div className="grid gap-2">
@@ -160,13 +169,22 @@ export function PreClassificationForm() {
           </div>
         )}
         <p className="text-sm text-muted-foreground">
-          For **family / friends** that appear in UPI narrations, add contacts in{" "}
+          For <strong>family or friends</strong> who often appear in your UPI messages, add them under{" "}
           <Link href="/settings" className="text-primary underline">
             Settings
           </Link>{" "}
-          (Classification section) — same engine the scraper already uses.
+          → Classification — optional, but it helps label those payments correctly.
         </p>
-        {message && <p className="text-sm">{message}</p>}
+        {message && (
+          <p className="text-sm text-emerald-700 dark:text-emerald-500" role="status">
+            {message}
+          </p>
+        )}
+        {saveError && (
+          <p className="text-sm text-destructive" role="alert">
+            {saveError}
+          </p>
+        )}
       </CardContent>
       <CardFooter>
         <Button type="button" onClick={() => void onSave()} disabled={saving || !firstName.trim()}>

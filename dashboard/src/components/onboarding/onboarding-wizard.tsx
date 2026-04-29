@@ -29,7 +29,9 @@ import {
   postOnboardingBackfillResume,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import { humanizeSourceKey } from "@/lib/source-label"
 import { useOnboardingBackfillSources } from "@/hooks/use-onboarding"
+import { getUserFacingErrorMessage } from "@/lib/user-facing-api-error"
 
 export type WizardStepId =
   | "welcome"
@@ -44,12 +46,12 @@ export type WizardStepId =
 
 const STEP_META: { id: WizardStepId; label: string }[] = [
   { id: "welcome", label: "Gmail" },
-  { id: "discovery", label: "Discover" },
-  { id: "preclass", label: "Identity" },
-  { id: "apikey", label: "LLM (opt.)" },
-  { id: "backfill", label: "Backfill" },
-  { id: "classification", label: "Classify" },
-  { id: "gaps", label: "Gaps" },
+  { id: "discovery", label: "Find accounts" },
+  { id: "preclass", label: "Your name" },
+  { id: "apikey", label: "Smart labels (opt.)" },
+  { id: "backfill", label: "Import mail" },
+  { id: "classification", label: "Review" },
+  { id: "gaps", label: "Coverage" },
   { id: "goals", label: "Goals" },
   { id: "summary", label: "Done" },
 ]
@@ -81,6 +83,7 @@ export function OnboardingWizard({
   const [resumeBusy, setResumeBusy] = React.useState(false)
 
   const activeSourceKey = sourcesQ.data?.[bfSourceIdx]?.source_key ?? null
+  const activeSourceLabel = activeSourceKey ? humanizeSourceKey(activeSourceKey) : null
 
   // Persist coarse wizard position so a refresh mid-flow still shows the same step name.
   React.useEffect(() => {
@@ -103,14 +106,19 @@ export function OnboardingWizard({
   // ── Automated chunk loop (only while the backfill panel is visible) ─────────
   React.useEffect(() => {
     if (panel !== "backfill") return
-    const list = sourcesQ.data
-    if (!list?.length) return
+    if (!sourcesQ.data?.length) return
 
     let cancelled = false
 
     async function run() {
       setBfError(null)
-      const sk = list[bfSourceIdx]?.source_key
+      // Re-read from the query inside the async closure so TypeScript knows the list exists.
+      const currentList = sourcesQ.data
+      if (!currentList?.length) {
+        setPanel("gaps")
+        return
+      }
+      const sk = currentList[bfSourceIdx]?.source_key
       if (!sk) {
         setPanel("gaps")
         return
@@ -134,7 +142,7 @@ export function OnboardingWizard({
         }
 
         if (prog.status === "complete") {
-          if (bfSourceIdx >= list.length - 1) {
+          if (bfSourceIdx >= currentList.length - 1) {
             setPanel("gaps")
             return
           }
@@ -147,7 +155,11 @@ export function OnboardingWizard({
         }
 
         if (prog.status === "error") {
-          setBfError(prog.error_message ?? "Backfill failed")
+          setBfError(
+            prog.error_message
+              ? getUserFacingErrorMessage(prog.error_message)
+              : "We couldn’t import from email for this account. You can go back, check Gmail, and try again.",
+          )
           return
         }
 
@@ -156,7 +168,7 @@ export function OnboardingWizard({
           await postOnboardingBackfillChunk(sk, { chunk_size: 10 })
         } catch (e) {
           if (!cancelled) {
-            setBfError(e instanceof Error ? e.message : "Chunk request failed")
+            setBfError(getUserFacingErrorMessage(e) || "We couldn’t start the next batch. Try again.")
           }
           return
         }
@@ -183,7 +195,7 @@ export function OnboardingWizard({
       await postOnboardingBackfillChunk(sk, { resume_from_pause: true, chunk_size: 10 })
       setBfTick((t) => t + 1)
     } catch (e) {
-      setBfError(e instanceof Error ? e.message : "Resume failed")
+      setBfError(getUserFacingErrorMessage(e) || "We couldn’t resume the import. Try again.")
     } finally {
       setResumeBusy(false)
     }
@@ -268,18 +280,19 @@ export function OnboardingWizard({
         {panel === "backfill" && (
           <div className="space-y-4">
             {sourcesQ.isLoading && (
-              <p className="text-sm text-muted-foreground">Loading configured sources…</p>
+              <p className="text-sm text-muted-foreground">Loading your email sources…</p>
             )}
             {!sourcesQ.data?.length && !sourcesQ.isLoading && (
               <p className="text-sm text-muted-foreground">
-                No pipeline sources are configured yet — add bank sender mappings (or use the
-                seeded defaults) then re-open this wizard.
+                No bank email sources were found yet. Go back to <strong>Connect Gmail</strong> and
+                make sure your inbox is linked, then try <strong>Find accounts</strong> again. If you
+                just connected, wait a moment and refresh this page.
               </p>
             )}
             {!!sourcesQ.data?.length && (
               <>
                 <StepBackfill
-                  title={activeSourceKey ?? "…"}
+                  title={activeSourceLabel ?? activeSourceKey ?? "…"}
                   progress={bfProgress}
                   error={bfError}
                   onResumeFromPause={bfProgress?.status === "paused" ? handleResumePause : undefined}
@@ -300,6 +313,7 @@ export function OnboardingWizard({
         {panel === "classification" && classifySource && (
           <StepClassification
             source={classifySource}
+            sourceLabel={humanizeSourceKey(classifySource)}
             onContinueBackfill={() => {
               setPanel("backfill")
               setBfTick((t) => t + 1)
@@ -324,7 +338,7 @@ export function OnboardingWizard({
             )}
             {panel === "apikey" && (
               <Button type="button" onClick={() => setPanel("backfill")}>
-                Start backfill
+                Start importing mail
               </Button>
             )}
             {panel === "gaps" && (

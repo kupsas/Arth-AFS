@@ -21,6 +21,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { buildApiUrl } from "@/lib/api-base";
+import { getUserFacingErrorMessage, userMessageFromApiResponseBody } from "@/lib/user-facing-api-error";
 
 async function postKeys(body: {
   openai_api_key?: string | null;
@@ -33,7 +34,10 @@ async function postKeys(body: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(await res.text());
+  const t = await res.text();
+  if (!res.ok) {
+    throw new Error(userMessageFromApiResponseBody(t) || "Could not save keys. Try again.");
+  }
 }
 
 export function OnboardingOptionalLlmKeys() {
@@ -41,10 +45,12 @@ export function OnboardingOptionalLlmKeys() {
   const [anthropic, setAnthropic] = React.useState("");
   const [google, setGoogle] = React.useState("");
   const [msg, setMsg] = React.useState<string | null>(null);
+  const [err, setErr] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
 
   async function onSave() {
     setMsg(null);
+    setErr(null);
     setBusy(true);
     try {
       await postKeys({
@@ -54,7 +60,7 @@ export function OnboardingOptionalLlmKeys() {
       });
       setMsg("Saved — keys are encrypted at rest. Clear a field and save again to remove a key.");
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : "Save failed");
+      setErr(getUserFacingErrorMessage(e) || "Could not save keys. Try again.");
     } finally {
       setBusy(false);
     }
@@ -63,47 +69,65 @@ export function OnboardingOptionalLlmKeys() {
   return (
     <Card className="max-w-lg">
       <CardHeader>
-        <CardTitle>Optional: LLM classification</CardTitle>
+        <CardTitle>Optional: smarter auto-labels</CardTitle>
         <CardDescription>
-          Paste **one** provider key if you want automatic narration tagging. Leave everything blank
-          to stay fully offline/rules-driven — the app lowers the “pause for human review” threshold
-          when no key is present so you are not stuck with huge unknown piles.
+          Paste <strong>one</strong> key from a provider you already use if you want extra help
+          guessing merchant names from messy bank text. Leave all fields blank to stay fully local —
+          Arth still works with built-in rules; we just ask you to confirm a bit more often when
+          there is no key.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <div className="grid gap-1">
           <Label htmlFor="llm-openai">OpenAI (optional)</Label>
+          <p className="text-xs text-muted-foreground">
+            From platform.openai.com → API keys (starts with <span className="font-mono">sk-</span>).
+          </p>
           <Input
             id="llm-openai"
             type="password"
             autoComplete="off"
             value={openai}
             onChange={(e) => setOpenai(e.target.value)}
-            placeholder="sk-…"
+            placeholder="OpenAI API key"
           />
         </div>
         <div className="grid gap-1">
           <Label htmlFor="llm-anthropic">Anthropic (optional)</Label>
+          <p className="text-xs text-muted-foreground">
+            From console.anthropic.com (often starts with <span className="font-mono">sk-ant-</span>).
+          </p>
           <Input
             id="llm-anthropic"
             type="password"
             autoComplete="off"
             value={anthropic}
             onChange={(e) => setAnthropic(e.target.value)}
-            placeholder="sk-ant-…"
+            placeholder="Anthropic API key"
           />
         </div>
         <div className="grid gap-1">
           <Label htmlFor="llm-google">Google AI (optional)</Label>
+          <p className="text-xs text-muted-foreground">From Google AI Studio / Cloud console.</p>
           <Input
             id="llm-google"
             type="password"
             autoComplete="off"
             value={google}
             onChange={(e) => setGoogle(e.target.value)}
+            placeholder="Google API key"
           />
         </div>
-        {msg && <p className="text-sm">{msg}</p>}
+        {msg && (
+          <p className="text-sm text-emerald-700 dark:text-emerald-500" role="status">
+            {msg}
+          </p>
+        )}
+        {err && (
+          <p className="text-sm text-destructive" role="alert">
+            {err}
+          </p>
+        )}
         <Button type="button" onClick={() => void onSave()} disabled={busy}>
           {busy ? "Saving…" : "Save keys"}
         </Button>

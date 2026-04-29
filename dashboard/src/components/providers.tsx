@@ -21,6 +21,7 @@ import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
 
+import { SetupGate } from "@/components/setup-gate";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -44,7 +45,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
     // on <html>, which is how shadcn's CSS variables know which palette to use
     <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
       <QueryClientProvider client={queryClient}>
-        <TooltipProvider delay={300}>{children}</TooltipProvider>
+        <TooltipProvider delay={300}>
+          <SetupGate>{children}</SetupGate>
+        </TooltipProvider>
       </QueryClientProvider>
     </ThemeProvider>
   );

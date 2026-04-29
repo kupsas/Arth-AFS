@@ -15,9 +15,10 @@ import * as React from "react"
 import { AlertCircle, CheckCircle2 } from "lucide-react"
 
 import { UploadButton } from "@/components/dashboard/upload-button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useOnboardingGaps } from "@/hooks/use-onboarding-gaps"
 import { cn } from "@/lib/utils"
+import { getUserFacingErrorMessage } from "@/lib/user-facing-api-error"
 
 export function StepGapDetection() {
   const { data, isLoading, isError, error, refetch } = useOnboardingGaps()
@@ -42,14 +43,16 @@ export function StepGapDetection() {
 
       <div className="flex flex-wrap items-center gap-3">
         <UploadButton onImportComplete={onUploadComplete} />
-        <span className="text-xs text-muted-foreground">Uses the same import pipeline as the main dashboard</span>
+        <span className="text-xs text-muted-foreground">
+          Same PDF import as elsewhere in the app — your file stays local.
+        </span>
       </div>
 
       {isLoading && <p className="text-sm text-muted-foreground">Analysing your ledger…</p>}
 
       {isError && (
         <p className="text-sm text-destructive" role="alert">
-          {error instanceof Error ? error.message : "Could not load gap analysis."}
+          {getUserFacingErrorMessage(error) || "We couldn’t analyse coverage right now. Try again in a moment."}
         </p>
       )}
 
@@ -72,7 +75,6 @@ export function StepGapDetection() {
                   <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
                     <div>
                       <CardTitle className="text-base">{r.source_label}</CardTitle>
-                      <CardDescription className="font-mono text-xs">{r.source}</CardDescription>
                     </div>
                     <p className="text-xs text-muted-foreground shrink-0">
                       {r.transaction_count} txns · {r.source_type} · {r.expected_cadence}

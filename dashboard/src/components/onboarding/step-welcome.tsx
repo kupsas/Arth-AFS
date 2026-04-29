@@ -1,11 +1,10 @@
 "use client"
 
 /**
- * Step 1 — **Welcome + Gmail OAuth** (Track 2 Phase 5a).
+ * Step 1 — Welcome + connect Gmail (Track 2 Phase 5a).
  *
- * Gmail tokens live on the API server; this button simply kicks off the same
- * ``POST /api/scraper/oauth/init`` flow the legacy setup page used.  After OAuth
- * succeeds in the browser, the user returns here and taps **Continue**.
+ * Gmail tokens live on your machine with the API; this button starts the same
+ * browser sign-in flow as before. After Google finishes, return here and tap continue.
  */
 
 import * as React from "react"
@@ -13,6 +12,7 @@ import * as React from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { buildApiUrl } from "@/lib/api-base"
+import { userMessageFromApiResponseBody } from "@/lib/user-facing-api-error"
 
 export type StepWelcomeProps = {
   /** Fires once the user confirms Gmail is connected (they clicked Continue). */
@@ -21,25 +21,61 @@ export type StepWelcomeProps = {
 
 export function StepWelcome({ onContinue }: StepWelcomeProps) {
   const [error, setError] = React.useState<string | null>(null)
-  const [busy, setBusy] = React.useState(false)
+  const [busyConnect, setBusyConnect] = React.useState(false)
+  const [busyContinue, setBusyContinue] = React.useState(false)
 
   async function startOAuth() {
     setError(null)
-    setBusy(true)
+    setBusyConnect(true)
     try {
       const res = await fetch(buildApiUrl("/api/scraper/oauth/init"), {
         method: "POST",
         credentials: "include",
       })
+      const t = await res.text()
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as { detail?: string }
-        setError(body.detail ?? "OAuth init failed")
+        // FastAPI may return { detail: ... } — userMessageFromApiResponseBody flattens it
+        setError(userMessageFromApiResponseBody(t) || "Could not start sign-in. Try again.")
         return
       }
     } catch {
-      setError("Could not reach the API. Is it running?")
+      setError("We could not reach Arth. Make sure the app is running, then try again.")
     } finally {
-      setBusy(false)
+      setBusyConnect(false)
+    }
+  }
+
+  async function continueIfConnected() {
+    setError(null)
+    setBusyContinue(true)
+    try {
+      const res = await fetch(buildApiUrl("/api/scraper/oauth/status"), {
+        credentials: "include",
+      })
+      const t = await res.text()
+      if (!res.ok) {
+        setError(
+          userMessageFromApiResponseBody(t) ||
+            "We could not confirm your Gmail connection. Please try again.",
+        )
+        return
+      }
+
+      const payload = (JSON.parse(t || "{}") ?? {}) as {
+        is_authenticated?: boolean
+      }
+      if (!payload.is_authenticated) {
+        setError(
+          "Gmail is not connected yet. Click “Connect Gmail”, finish the Google sign-in in your browser, then tap continue.",
+        )
+        return
+      }
+
+      onContinue()
+    } catch {
+      setError("We could not check Gmail right now. Please try again.")
+    } finally {
+      setBusyContinue(false)
     }
   }
 
@@ -48,10 +84,10 @@ export function StepWelcome({ onContinue }: StepWelcomeProps) {
       <CardHeader>
         <CardTitle>Connect Gmail</CardTitle>
         <CardDescription>
-          Arth reads **bank alert emails** you already receive — nothing is sent to a third-party
-          analytics service. OAuth runs on your local API; keep{" "}
-          <code className="rounded bg-muted px-1 text-xs">data/gmail_credentials.json</code> in
-          place.
+          Arth reads <strong>bank alert emails</strong> you already get (HDFC, ICICI, etc.) to build
+          your ledger. Your data stays on this computer — we do not send your mail to analytics
+          services. Use the button below to sign in with Google in your browser, then come back
+          here.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -60,14 +96,25 @@ export function StepWelcome({ onContinue }: StepWelcomeProps) {
             {error}
           </p>
         )}
-        <Button type="button" className="w-full" disabled={busy} onClick={() => void startOAuth()}>
-          {busy ? "Starting…" : "Start Gmail OAuth"}
+        <Button
+          type="button"
+          className="w-full"
+          disabled={busyConnect || busyContinue}
+          onClick={() => void startOAuth()}
+        >
+          {busyConnect ? "Starting…" : "Connect Gmail"}
         </Button>
         <p className="text-xs text-muted-foreground">
-          Complete the Google consent screen in your browser, then return here.
+          Complete the Google sign-in window, then return to this page.
         </p>
-        <Button type="button" variant="secondary" className="w-full" onClick={() => onContinue()}>
-          Continue — Gmail is connected
+        <Button
+          type="button"
+          variant="secondary"
+          className="w-full"
+          disabled={busyConnect || busyContinue}
+          onClick={() => void continueIfConnected()}
+        >
+          {busyContinue ? "Checking Gmail…" : "I already connected Gmail — continue"}
         </Button>
       </CardContent>
     </Card>

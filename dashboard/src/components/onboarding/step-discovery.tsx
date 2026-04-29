@@ -1,16 +1,16 @@
 "use client"
 
 /**
- * Step 2 — **Auto-discovery** (Track 2 Phase 5a).
+ * Step 2 — Auto-discovery (Track 2 Phase 5a).
  *
- * Calls ``POST /api/onboarding/discover`` which does cheap Gmail searches per
- * configured bank sender.  Results are persisted server-side; we also show a
- * friendly table so the user sees what was found before moving on.
+ * Calls ``POST /api/onboarding/discover`` for cheap Gmail searches per bank sender.
+ * Errors are shown with human copy (never raw JSON from the API).
  */
 
 import * as React from "react"
 import { Loader2, Radar } from "lucide-react"
 
+import { OnboardingErrorCallout } from "@/components/onboarding/onboarding-error-callout"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -22,6 +22,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { useOnboardingDiscover } from "@/hooks/use-onboarding"
+import { getUserFacingErrorMessage } from "@/lib/user-facing-api-error"
 
 type DiscoveryRow = {
   sender_email: string
@@ -47,7 +48,8 @@ export function StepDiscovery({ onContinue }: StepDiscoveryProps) {
       }
       setRows(data.sources ?? [])
     } catch {
-      setRows([])
+      // Do not show an empty “accounts” table next to a failure — keep table hidden until a good run.
+      setRows(null)
     }
   }
 
@@ -56,6 +58,10 @@ export function StepDiscovery({ onContinue }: StepDiscoveryProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount
   }, [])
 
+  const errorText = discover.isError ? getUserFacingErrorMessage(discover.error) : null
+  const canContinue =
+    !discover.isPending && !discover.isError && rows !== null
+
   return (
     <div className="max-w-3xl space-y-6">
       <div className="flex items-center gap-2">
@@ -63,8 +69,8 @@ export function StepDiscovery({ onContinue }: StepDiscoveryProps) {
         <div>
           <h2 className="text-2xl font-semibold tracking-tight">Discover sources</h2>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Scanning your mailbox for known bank sender addresses (no email bodies are downloaded
-            in this pass).
+            We scan your mailbox for known bank sender addresses. In this step we only read email
+            headers and search metadata — not full message bodies.
           </p>
         </div>
       </div>
@@ -72,24 +78,25 @@ export function StepDiscovery({ onContinue }: StepDiscoveryProps) {
       {discover.isPending && (
         <p className="text-sm text-muted-foreground flex items-center gap-2">
           <Loader2 className="size-4 animate-spin" />
-          Talking to Gmail…
+          Connecting to Gmail…
         </p>
       )}
 
-      {discover.isError && (
-        <Card className="border-destructive/50">
-          <CardContent className="pt-6 text-sm text-destructive">
-            {(discover.error as Error)?.message ?? "Discovery failed — check Gmail auth."}
-          </CardContent>
-        </Card>
+      {errorText && (
+        <OnboardingErrorCallout
+          title="We couldn’t finish this step"
+          hint='Use the “Back” button at the bottom to return to “Connect Gmail,” sign in with Google, then come back here and tap “Re-scan.”'
+        >
+          {errorText}
+        </OnboardingErrorCallout>
       )}
 
-      {rows && (
+      {rows && !discover.isError && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Configured senders</CardTitle>
+            <CardTitle className="text-base">Accounts we found</CardTitle>
             <CardDescription>
-              Rough message counts help you spot a missing bank domain before a long backfill.
+              Approximate email counts help you spot a missing bank before we import a long history.
             </CardDescription>
           </CardHeader>
           <CardContent className="overflow-x-auto">
@@ -126,7 +133,7 @@ export function StepDiscovery({ onContinue }: StepDiscoveryProps) {
         <Button type="button" variant="outline" onClick={() => void run()} disabled={discover.isPending}>
           Re-scan
         </Button>
-        <Button type="button" onClick={() => onContinue()} disabled={discover.isPending || rows === null}>
+        <Button type="button" onClick={() => onContinue()} disabled={!canContinue}>
           Continue
         </Button>
       </div>

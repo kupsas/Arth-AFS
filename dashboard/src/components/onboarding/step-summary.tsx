@@ -13,6 +13,7 @@ import { PartyPopper } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { useOnboardingComplete } from "@/hooks/use-onboarding"
+import { getUserFacingErrorMessage } from "@/lib/user-facing-api-error"
 
 export type StepSummaryProps = {
   onDone: () => void
@@ -28,7 +29,7 @@ export function StepSummary({ onDone }: StepSummaryProps) {
       await complete.mutateAsync()
       onDone()
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Could not complete onboarding")
+      setErr(getUserFacingErrorMessage(e) || "We couldn’t save your progress. Try again.")
     }
   }
 
@@ -40,8 +41,8 @@ export function StepSummary({ onDone }: StepSummaryProps) {
           You are ready
         </CardTitle>
         <CardDescription>
-          Bank mail is ingested, gaps can be filled with PDF uploads any time, and goals live under
-          the main **Goals** tab if you want to tweak them further.
+          Your email import is set up, you can add PDF statements any time if you spot gaps, and you
+          can open the main <strong>Goals</strong> tab whenever you want to adjust targets.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">

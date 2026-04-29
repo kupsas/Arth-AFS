@@ -12,6 +12,8 @@ import { postOnboardingBackfillChunk } from "@/lib/api"
 
 export type StepClassificationProps = {
   source: string
+  /** Friendly name for the account being reviewed (optional). */
+  sourceLabel?: string
   /**
    * After the user submits fixes we must tell the orchestrator to leave the
    * ``needs_classification`` gate — that is a dedicated POST body flag.
@@ -19,10 +21,15 @@ export type StepClassificationProps = {
   onContinueBackfill: () => void
 }
 
-export function StepClassification({ source, onContinueBackfill }: StepClassificationProps) {
+export function StepClassification({
+  source,
+  sourceLabel,
+  onContinueBackfill,
+}: StepClassificationProps) {
   return (
     <ClassificationBatchReview
       source={source}
+      sourceLabel={sourceLabel}
       onSubmitted={async () => {
         await postOnboardingBackfillChunk(source, { resume_after_classification: true })
         onContinueBackfill()

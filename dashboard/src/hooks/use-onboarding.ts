@@ -22,6 +22,7 @@ import {
   postOnboardingBackfillChunk,
   postOnboardingComplete,
   postOnboardingDiscover,
+  SETUP_STATUS_QUERY_KEY,
 } from "@/lib/api"
 import type {
   OnboardingBackfillSourceRow,
@@ -112,7 +113,7 @@ export function useOnboardingComplete() {
     mutationFn: postOnboardingComplete,
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: [...onboardingStateKey] })
-      void qc.invalidateQueries({ queryKey: ["setup", "status"] })
+      void qc.invalidateQueries({ queryKey: SETUP_STATUS_QUERY_KEY })
     },
   })
 }

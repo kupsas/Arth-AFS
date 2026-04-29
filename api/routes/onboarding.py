@@ -46,6 +46,7 @@ from scraper.onboarding_orchestrator import (
     resume_backfill_state,
     run_onboarding_backfill,
 )
+from scraper.scheduler import resume_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -90,23 +91,42 @@ def _get_or_create_state(session: Session, user_id: str) -> OnboardingState:
 
 
 def _gmail_client_connected() -> GmailClient:
-    """Return an authenticated Gmail client or raise HTTP errors."""
+    """Return an authenticated Gmail client or raise HTTP errors.
+
+    All ``detail`` strings are end-user copy (no file paths, no REST paths). Use
+    503 — not 401 — so the dashboard does not treat Gmail issues as a lost
+    Arth session.
+    """
     client = GmailClient()
     try:
         client.authenticate(allow_interactive_oauth=False)
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
-    except GmailReauthRequiredError as e:
+    except FileNotFoundError:
         raise HTTPException(
-            status_code=401,
-            detail={
-                "message": str(e),
-                "hint": "Complete Gmail OAuth via POST /api/scraper/oauth/init on this machine.",
-            },
-        ) from e
+            status_code=503,
+            detail=(
+                "Gmail is not set up on this device yet. If you are installing Arth yourself, "
+                "add a Google API credentials file as described in the project documentation, "
+                "then use “Connect Gmail” again."
+            ),
+        ) from None
+    except GmailReauthRequiredError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Gmail is not connected to Arth on this computer. Go back to the previous step, "
+                "tap “Connect Gmail,” and complete the Google sign-in. When the browser is done, "
+                "return here and tap “Re-scan.”"
+            ),
+        ) from None
     except Exception as e:
         logger.exception("Gmail authentication failed")
-        raise HTTPException(status_code=503, detail=f"Gmail authentication failed: {e}") from e
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "We could not sign in to Gmail. Check your connection, use “Connect Gmail” again, "
+                "or confirm you are still signed in to Google on this machine."
+            ),
+        ) from e
     return client
 
 
@@ -721,4 +741,6 @@ def onboarding_complete(
         session.add(user_row)
 
     session.commit()
+    # Background Gmail polling was withheld until setup completed — activate it now.
+    resume_scheduler()
     return {"ok": True, "current_step": row.current_step}

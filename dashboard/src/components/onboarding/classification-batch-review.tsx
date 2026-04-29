@@ -32,6 +32,8 @@ import {
 } from "@/components/ui/select";
 import { buildApiUrl } from "@/lib/api-base";
 import { COUNTERPARTY_CATEGORY_OPTIONS } from "@/lib/counterparty-categories";
+import { humanizeSourceKey } from "@/lib/source-label";
+import { getUserFacingErrorMessage, userMessageFromApiResponseBody } from "@/lib/user-facing-api-error";
 import type { CounterpartyCategory, SpendCategory } from "@/lib/types";
 
 type UnknownTxnBrief = {
@@ -80,8 +82,14 @@ async function fetchUnknowns(source: string): Promise<UnknownsResponse> {
   const res = await fetch(buildApiUrl(`/api/onboarding/unknowns?source=${encodeURIComponent(source)}`), {
     credentials: "include",
   });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json() as Promise<UnknownsResponse>;
+  const t = await res.text();
+  if (!res.ok) {
+    throw new Error(userMessageFromApiResponseBody(t) || "Could not load transactions to review.");
+  }
+  if (!t.trim()) {
+    return { source, total_transactions: 0, groups: [], unknown_threshold: 0 };
+  }
+  return JSON.parse(t) as UnknownsResponse;
 }
 
 async function postClassify(source: string, items: unknown[]): Promise<void> {
@@ -91,7 +99,10 @@ async function postClassify(source: string, items: unknown[]): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ source, items }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  const t = await res.text();
+  if (!res.ok) {
+    throw new Error(userMessageFromApiResponseBody(t) || "Could not save your changes.");
+  }
 }
 
 function defaultDraft(t: UnknownTxnBrief): Draft {
@@ -105,13 +116,20 @@ function defaultDraft(t: UnknownTxnBrief): Draft {
 }
 
 export type ClassificationBatchReviewProps = {
-  /** Pipeline ``source_key`` for the paused backfill (e.g. ``hdfc_savings``). */
+  /** Internal source id for API calls (e.g. ``hdfc_savings``). */
   source: string;
-  /** Fires after a successful classify POST — wire this to resume backfill polling. */
+  /** Friendly label for headings; defaults to a humanized form of ``source``. */
+  sourceLabel?: string;
+  /** Fires after a successful classify POST — parent resumes backfill. */
   onSubmitted?: () => void;
 };
 
-export function ClassificationBatchReview({ source, onSubmitted }: ClassificationBatchReviewProps) {
+export function ClassificationBatchReview({
+  source,
+  sourceLabel,
+  onSubmitted,
+}: ClassificationBatchReviewProps) {
+  const displaySource = sourceLabel?.trim() || humanizeSourceKey(source);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [rows, setRows] = React.useState<UnknownTxnBrief[]>([]);
@@ -133,7 +151,7 @@ export function ClassificationBatchReview({ source, onSubmitted }: Classificatio
       setDrafts(init);
       setSkipped(new Set());
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load unknowns");
+      setError(getUserFacingErrorMessage(e) || "Could not load transactions to review.");
     } finally {
       setLoading(false);
     }
@@ -189,7 +207,7 @@ export function ClassificationBatchReview({ source, onSubmitted }: Classificatio
       onSubmitted?.();
       await reload();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Submit failed");
+      setError(getUserFacingErrorMessage(e) || "Could not save your changes.");
     } finally {
       setSubmitting(false);
     }
@@ -209,12 +227,12 @@ export function ClassificationBatchReview({ source, onSubmitted }: Classificatio
       <CardHeader>
         <CardTitle>Classify pending transactions</CardTitle>
         <CardDescription>
-          Source <span className="font-mono">{source}</span>
+          Account: <span className="font-medium text-foreground">{displaySource}</span>
           {threshold != null && (
             <>
               {" "}
-              — backfill pauses when unknowns reach ~{threshold} without LLM help (lower when no API
-              keys).
+              — we pause here when about {threshold} transactions still need your input (the limit is
+              a bit lower if you have not added an optional AI key).
             </>
           )}
         </CardDescription>
@@ -345,9 +363,8 @@ export function ClassificationBatchReview({ source, onSubmitted }: Classificatio
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
-          After submit, call{" "}
-          <span className="font-mono">POST /api/onboarding/backfill/{"{source}"}</span> with{" "}
-          <span className="font-mono">resume_after_classification: true</span> to keep ingesting mail.
+          After you submit, Arth saves your choices and continues pulling the rest of your mail for{" "}
+          {displaySource}.
         </p>
       </CardContent>
     </Card>

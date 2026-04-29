@@ -31,6 +31,7 @@ import { Label } from "@/components/ui/label"
 import { useCreateGoal } from "@/hooks/use-goals"
 import { useOnboardingGoalTemplates } from "@/hooks/use-onboarding-goal-templates"
 import { cn } from "@/lib/utils"
+import { getUserFacingErrorMessage } from "@/lib/user-facing-api-error"
 import type { OnboardingGoalTemplate, GoalCreate } from "@/lib/types"
 
 function addYears(d: Date, y: number): string {
@@ -185,8 +186,8 @@ export function GoalTemplateWizard() {
               {active.icon} {active.name}
             </CardTitle>
             <CardDescription>
-              Defaults use category-specific inflation keys from the server (same
-              data as the main inflation screen).
+              Amounts are in rupees as of today; rough future figures use the same inflation hints as
+              the rest of the app (for planning only).
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4 sm:max-w-md">
@@ -241,7 +242,7 @@ export function GoalTemplateWizard() {
             )}
             {isError && (
               <p className="ml-3 text-sm text-destructive" role="alert">
-                {String(error ?? "Create failed")}
+                {getUserFacingErrorMessage(error) || "Could not create the goal. Try again."}
               </p>
             )}
           </CardFooter>

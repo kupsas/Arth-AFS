@@ -208,8 +208,8 @@ export default function SettingsPage() {
         <CardHeader>
           <CardTitle className="text-base">Connect account</CardTitle>
           <p className="text-sm text-muted-foreground font-normal">
-            Re-run Gmail discovery, chunk backfill, inline classification pauses, and gap review —
-            the same steps as first-run onboarding, without leaving Settings.
+            Walk through finding accounts in Gmail, importing history, quick reviews when the app
+            needs your help, and a coverage check — same flow as first-time setup, here in Settings.
           </p>
         </CardHeader>
         <CardContent>
@@ -225,7 +225,8 @@ export default function SettingsPage() {
           <SheetHeader>
             <SheetTitle>Connect account</SheetTitle>
             <SheetDescription>
-              Uses your existing session. When you tap **Finish** at the end we refresh ledger caches.
+              Uses your existing sign-in. When you tap <strong>Finish</strong> at the end, we refresh
+              your numbers on the dashboard.
             </SheetDescription>
           </SheetHeader>
           <div className="flex-1 overflow-y-auto pr-1 pt-2">

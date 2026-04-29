@@ -85,6 +85,7 @@ import type {
 } from "@/lib/types";
 
 import { buildApiUrl } from "@/lib/api-base";
+import { userMessageFromApiResponseBody } from "@/lib/user-facing-api-error";
 import type { ChatSessionDetail, ChatSessionSummary } from "@/lib/chat-types";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,9 +139,8 @@ async function get<T>(path: string, params?: QueryParams): Promise<T> {
   }
 
   if (!res.ok) {
-    // Try to extract a human-readable error message from the response body
-    const detail = await res.text().catch(() => res.statusText);
-    throw new ApiError(res.status, detail);
+    const raw = await res.text().catch(() => res.statusText);
+    throw new ApiError(res.status, userMessageFromApiResponseBody(raw));
   }
 
   return res.json() as Promise<T>;
@@ -169,8 +169,8 @@ async function patch<T>(
   }
 
   if (!res.ok) {
-    const detail = await res.text().catch(() => res.statusText);
-    throw new ApiError(res.status, detail);
+    const raw = await res.text().catch(() => res.statusText);
+    throw new ApiError(res.status, userMessageFromApiResponseBody(raw));
   }
 
   return res.json() as Promise<T>;
@@ -199,8 +199,8 @@ async function post<T>(
   }
 
   if (!res.ok) {
-    const detail = await res.text().catch(() => res.statusText);
-    throw new ApiError(res.status, detail);
+    const raw = await res.text().catch(() => res.statusText);
+    throw new ApiError(res.status, userMessageFromApiResponseBody(raw));
   }
 
   // 204 No Content has no body — return undefined cast to T
@@ -225,8 +225,8 @@ async function del(path: string): Promise<void> {
   }
 
   if (!res.ok && res.status !== 204) {
-    const detail = await res.text().catch(() => res.statusText);
-    throw new ApiError(res.status, detail);
+    const raw = await res.text().catch(() => res.statusText);
+    throw new ApiError(res.status, userMessageFromApiResponseBody(raw));
   }
 }
 
@@ -380,8 +380,8 @@ export async function login(username: string, password: string): Promise<void> {
     body: JSON.stringify({ username, password }),
   });
   if (!res.ok) {
-    const detail = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new ApiError(res.status, detail.detail ?? "Login failed");
+    const raw = await res.text().catch(() => res.statusText);
+    throw new ApiError(res.status, userMessageFromApiResponseBody(raw) || "Login failed");
   }
 }
 
@@ -414,6 +414,9 @@ export type SetupStatus = {
   has_users: boolean;
   setup_completed: boolean;
 };
+
+/** React Query cache key — invalidate after completing onboarding so the app shell unlocks. */
+export const SETUP_STATUS_QUERY_KEY = ["setup-status"] as const;
 
 export function fetchSetupStatus(): Promise<SetupStatus> {
   return get<SetupStatus>("/api/setup/status");
@@ -768,8 +771,8 @@ export async function uploadStatement(
   }
 
   if (!res.ok) {
-    const detail = await res.text().catch(() => res.statusText);
-    throw new ApiError(res.status, detail);
+    const raw = await res.text().catch(() => res.statusText);
+    throw new ApiError(res.status, userMessageFromApiResponseBody(raw));
   }
 
   return res.json() as Promise<UploadResponse>;
