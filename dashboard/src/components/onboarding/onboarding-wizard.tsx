@@ -30,7 +30,7 @@ import {
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { humanizeSourceKey } from "@/lib/source-label"
-import { useOnboardingBackfillSources } from "@/hooks/use-onboarding"
+import { useOnboardingBackfillSources, useOnboardingState } from "@/hooks/use-onboarding"
 import { getUserFacingErrorMessage } from "@/lib/user-facing-api-error"
 
 export type WizardStepId =
@@ -56,6 +56,27 @@ const STEP_META: { id: WizardStepId; label: string }[] = [
   { id: "summary", label: "Done" },
 ]
 
+/** Valid wizard step ids — used to safely resume ``current_step`` from the server. */
+const WIZARD_STEP_IDS = new Set<WizardStepId>(STEP_META.map((s) => s.id))
+
+/**
+ * Map persisted ``OnboardingState.current_step`` to the in-memory panel id.
+ * ``classification`` needs ``classifySource`` in React state — resume via backfill loop instead.
+ * ``completed`` means the user finished — start a fresh connect-account flow at welcome.
+ */
+function panelFromServerStep(step: string): WizardStepId {
+  if (step === "classification") {
+    return "backfill"
+  }
+  if (step === "completed") {
+    return "welcome"
+  }
+  if (WIZARD_STEP_IDS.has(step as WizardStepId)) {
+    return step as WizardStepId
+  }
+  return "welcome"
+}
+
 export type OnboardingWizardProps = {
   mode: "setup" | "settings"
   className?: string
@@ -71,6 +92,8 @@ export function OnboardingWizard({
   onFinished,
   onExitFirstStep,
 }: OnboardingWizardProps) {
+  const stateQ = useOnboardingState()
+  const stepHydratedRef = React.useRef(false)
   const [panel, setPanel] = React.useState<WizardStepId>("welcome")
   const sourcesQ = useOnboardingBackfillSources()
   const prevPanelRef = React.useRef<WizardStepId | null>(null)
@@ -85,8 +108,17 @@ export function OnboardingWizard({
   const activeSourceKey = sourcesQ.data?.[bfSourceIdx]?.source_key ?? null
   const activeSourceLabel = activeSourceKey ? humanizeSourceKey(activeSourceKey) : null
 
+  // Resume the visible step from the server once (``PATCH /state`` already persists ``current_step``).
+  React.useEffect(() => {
+    if (stepHydratedRef.current) return
+    if (stateQ.isLoading) return
+    stepHydratedRef.current = true
+    setPanel(panelFromServerStep(stateQ.data?.current_step ?? "welcome"))
+  }, [stateQ.isLoading, stateQ.data])
+
   // Persist coarse wizard position so a refresh mid-flow still shows the same step name.
   React.useEffect(() => {
+    if (!stepHydratedRef.current) return
     void patchOnboardingState({ current_step: panel }).catch(() => {
       /* non-fatal */
     })

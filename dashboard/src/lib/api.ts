@@ -81,6 +81,7 @@ import type {
   OnboardingGapsResponse,
   OnboardingGoalTemplatesResponse,
   OnboardingStateResponse,
+  OnboardingPreclassificationSavedResponse,
   OnboardingBackfillSourceRow,
   ClassificationStatsResponse,
 } from "@/lib/types";
@@ -933,6 +934,11 @@ export function fetchOnboardingGoalTemplates(params?: {
 /** GET /api/onboarding/state */
 export function fetchOnboardingState(): Promise<OnboardingStateResponse> {
   return get<OnboardingStateResponse>("/api/onboarding/state");
+}
+
+/** GET /api/onboarding/preclassification — raw fields last POSTed (empty until first save). */
+export function fetchOnboardingPreclassificationSaved(): Promise<OnboardingPreclassificationSavedResponse> {
+  return get<OnboardingPreclassificationSavedResponse>("/api/onboarding/preclassification");
 }
 
 /** PATCH /api/onboarding/state */

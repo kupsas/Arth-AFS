@@ -215,3 +215,46 @@ def test_classifier_status_and_stored_api_key(
     # Teardown: clear the key so a later test does not see process-level env as “filled”
     r_clear = flow_client.post("/api/onboarding/api-key", json={"openai_api_key": ""})
     assert r_clear.status_code == 200
+
+
+def test_preclassification_get_returns_saved_raw(
+    engine: object,
+    flow_client: TestClient,
+) -> None:
+    """GET /preclassification returns raw fields persisted by POST (wizard resume)."""
+    g = flow_client.get("/api/onboarding/preclassification")
+    assert g.status_code == 200
+    assert g.json() == {
+        "first_name": "",
+        "last_name": "",
+        "extra_aliases": [],
+        "account_hints": [],
+    }
+
+    p = flow_client.post(
+        "/api/onboarding/preclassification",
+        json={
+            "first_name": "Sai",
+            "last_name": "Kuppa",
+            "extra_aliases": ["SK"],
+            "account_hints": ["1234", "me@paytm"],
+        },
+    )
+    assert p.status_code == 200, p.text
+
+    g2 = flow_client.get("/api/onboarding/preclassification")
+    assert g2.status_code == 200
+    d = g2.json()
+    assert d["first_name"] == "Sai"
+    assert d["last_name"] == "Kuppa"
+    assert d["extra_aliases"] == ["SK"]
+    assert set(d["account_hints"]) == {"1234", "me@paytm"}
+
+    with Session(engine) as session:  # type: ignore[call-arg]
+        st = session.exec(
+            select(OnboardingState).where(OnboardingState.user_id == "flow_user")
+        ).first()
+        assert st is not None
+        raw = json.loads(st.preclassification_raw_json)
+        assert raw["first_name"] == "Sai"
+        assert raw["last_name"] == "Kuppa"

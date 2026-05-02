@@ -474,6 +474,39 @@ def onboarding_backfill_resume_state(
 # ── Phase 3a: pre-classification (self name + aliases; starter pack is DB init) ─
 
 
+class PreclassificationRawResponse(BaseModel):
+    """Raw form fields last saved from ``POST /preclassification`` (wizard resume)."""
+
+    first_name: str = ""
+    last_name: str = ""
+    extra_aliases: list[str] = Field(default_factory=list)
+    account_hints: list[str] = Field(default_factory=list)
+
+
+@router.get("/preclassification", response_model=PreclassificationRawResponse)
+def get_preclassification_saved(
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> PreclassificationRawResponse:
+    """Return the last saved pre-classification inputs (empty until the user saves once)."""
+    row = _get_or_create_state(session, current_user)
+    session.commit()
+    raw = _parse_json_object(row.preclassification_raw_json, {})
+    if not isinstance(raw, dict):
+        raw = {}
+    fn = raw.get("first_name")
+    ln = raw.get("last_name")
+    ea = raw.get("extra_aliases")
+    ah = raw.get("account_hints")
+    return PreclassificationRawResponse(
+        first_name=str(fn) if fn is not None else "",
+        last_name=str(ln) if ln is not None else "",
+        extra_aliases=[str(x) for x in ea] if isinstance(ea, list) else [],
+        account_hints=[str(x) for x in ah] if isinstance(ah, list) else [],
+    )
+
+
 @router.get("/preclassification/preview")
 def preclassification_preview(
     first_name: str = Query(..., min_length=1, description="Given / first name(s)"),
@@ -536,6 +569,17 @@ def preclassification_save(
     row.account_hints_json = json.dumps(account_hints)
     row.updated_at = datetime.datetime.now(datetime.UTC)
     session.add(row)
+    state_row = _get_or_create_state(session, current_user)
+    state_row.preclassification_raw_json = json.dumps(
+        {
+            "first_name": body.first_name,
+            "last_name": body.last_name,
+            "extra_aliases": list(body.extra_aliases),
+            "account_hints": account_hints,
+        }
+    )
+    state_row.updated_at = datetime.datetime.now(datetime.UTC)
+    session.add(state_row)
     session.commit()
     return {
         "ok": True,

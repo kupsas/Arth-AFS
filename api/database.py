@@ -502,6 +502,17 @@ def _apply_sqlite_patches() -> None:
         if not _column_exists(conn, "transactions", "review_confidence"):
             conn.execute(text("ALTER TABLE transactions ADD COLUMN review_confidence TEXT"))
 
+        # Track 2 onboarding — raw pre-classification form JSON for wizard resume (GET /preclassification).
+        if _table_exists(conn, "onboarding_states") and not _column_exists(
+            conn, "onboarding_states", "preclassification_raw_json"
+        ):
+            conn.execute(
+                text(
+                    "ALTER TABLE onboarding_states ADD COLUMN preclassification_raw_json TEXT "
+                    "NOT NULL DEFAULT '{}'"
+                )
+            )
+
         _patch_onboarding_family_scraper_columns(conn)
 
         _migrate_nse_equity_reference_schema(conn)

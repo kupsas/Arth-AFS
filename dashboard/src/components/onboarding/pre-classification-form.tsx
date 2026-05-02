@@ -17,6 +17,10 @@
  * 4. Click **Save identity** — this hits ``POST /api/onboarding/preclassification``.
  * 5. Add family contacts under **Settings → Classification** (contacts API)
  *    — optional for labelling friend/family UPI payments.
+ *
+ * **Draft persistence:** In-progress fields are debounced to localStorage; after a
+ * successful save we clear that backup. If there is no local draft, we load the
+ * last POSTed values from ``GET /api/onboarding/preclassification``.
  */
 
 import * as React from "react";
@@ -33,10 +37,44 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { useFormDraft } from "@/hooks/use-form-draft";
 import { buildApiUrl } from "@/lib/api-base";
+import { fetchOnboardingPreclassificationSaved } from "@/lib/api";
 import { getUserFacingErrorMessage, userMessageFromApiResponseBody } from "@/lib/user-facing-api-error";
 
 type PreviewResponse = { self_name: string; self_aliases: string[] };
+
+/** One localStorage + GET payload shape for this step. */
+type PreclassDraft = {
+  firstName: string;
+  lastName: string;
+  extrasRaw: string;
+  accountFragmentsRaw: string;
+  upiIdsRaw: string;
+};
+
+const PRECLASS_STORAGE_KEY = "arth_onboarding_preclass";
+
+const PRECLASS_DEFAULT: PreclassDraft = {
+  firstName: "",
+  lastName: "",
+  extrasRaw: "",
+  accountFragmentsRaw: "",
+  upiIdsRaw: "",
+};
+
+/** Split merged ``account_hints`` from the server back into the two text areas (heuristic: ``@`` → UPI). */
+function splitHintsForForm(hints: string[]): { fragments: string; upi: string } {
+  const upi: string[] = [];
+  const fr: string[] = [];
+  for (const h of hints) {
+    const t = h.trim();
+    if (!t) continue;
+    if (t.includes("@")) upi.push(t);
+    else fr.push(t);
+  }
+  return { fragments: fr.join("\n"), upi: upi.join("\n") };
+}
 
 async function fetchPreview(
   first: string,
@@ -83,37 +121,79 @@ async function savePreclassification(payload: {
 }
 
 export function PreClassificationForm() {
-  const [firstName, setFirstName] = React.useState("");
-  const [lastName, setLastName] = React.useState("");
-  const [extrasRaw, setExtrasRaw] = React.useState("");
-  /** First/last-4 or other digits that appear in bank messages (one per line or comma-separated). */
-  const [accountFragmentsRaw, setAccountFragmentsRaw] = React.useState("");
-  /** Full UPI handles (e.g. name@paytm) — merged into the same ``account_hints`` list as fragments. */
-  const [upiIdsRaw, setUpiIdsRaw] = React.useState("");
+  const { value: d, setValue: setD, clearDraft, restoredFromLocalStorage } = useFormDraft(
+    PRECLASS_STORAGE_KEY,
+    PRECLASS_DEFAULT,
+  );
+
   const [preview, setPreview] = React.useState<PreviewResponse | null>(null);
   const [saving, setSaving] = React.useState(false);
   const [message, setMessage] = React.useState<string | null>(null);
   const [saveError, setSaveError] = React.useState<string | null>(null);
 
   // Same splitting rules as save — keeps preview in sync with POST /preclassification.
-  const extrasList = React.useMemo(() => splitHintLines(extrasRaw), [extrasRaw]);
+  const extrasList = React.useMemo(() => splitHintLines(d.extrasRaw), [d.extrasRaw]);
 
   const accountHintsForSave = React.useMemo(() => {
-    return [...splitHintLines(accountFragmentsRaw), ...splitHintLines(upiIdsRaw)];
-  }, [accountFragmentsRaw, upiIdsRaw]);
+    return [...splitHintLines(d.accountFragmentsRaw), ...splitHintLines(d.upiIdsRaw)];
+  }, [d.accountFragmentsRaw, d.upiIdsRaw]);
+
+  // If the user has no local draft, hydrate from the last successful POST (server truth).
+  React.useEffect(() => {
+    if (restoredFromLocalStorage) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const saved = await fetchOnboardingPreclassificationSaved();
+        if (cancelled) return;
+        const hasServer =
+          saved.first_name.trim() !== "" ||
+          saved.last_name.trim() !== "" ||
+          (saved.extra_aliases?.length ?? 0) > 0 ||
+          (saved.account_hints?.length ?? 0) > 0;
+        if (!hasServer) return;
+        const { fragments, upi } = splitHintsForForm(saved.account_hints ?? []);
+        setD((prev) => {
+          // Do not clobber in-flight typing if the user started before the GET returned.
+          if (
+            prev.firstName.trim() ||
+            prev.lastName.trim() ||
+            prev.extrasRaw.trim() ||
+            prev.accountFragmentsRaw.trim() ||
+            prev.upiIdsRaw.trim()
+          ) {
+            return prev;
+          }
+          return {
+            ...prev,
+            firstName: saved.first_name,
+            lastName: saved.last_name,
+            extrasRaw: (saved.extra_aliases ?? []).join("\n"),
+            accountFragmentsRaw: fragments,
+            upiIdsRaw: upi,
+          };
+        });
+      } catch {
+        /* offline / non-fatal */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [restoredFromLocalStorage, setD]);
 
   // Debounced preview so we do not spam the API on every keystroke.
   // Pass extrasList so the server can merge nicknames into self_aliases (same as on save).
   React.useEffect(() => {
-    if (!firstName.trim()) {
+    if (!d.firstName.trim()) {
       setPreview(null);
       return;
     }
     const t = window.setTimeout(() => {
-      void fetchPreview(firstName.trim(), lastName.trim(), extrasList).then(setPreview);
+      void fetchPreview(d.firstName.trim(), d.lastName.trim(), extrasList).then(setPreview);
     }, 300);
     return () => window.clearTimeout(t);
-  }, [firstName, lastName, extrasList]);
+  }, [d.firstName, d.lastName, extrasList]);
 
   async function onSave() {
     setMessage(null);
@@ -121,11 +201,12 @@ export function PreClassificationForm() {
     setSaving(true);
     try {
       await savePreclassification({
-        first_name: firstName.trim(),
-        last_name: lastName.trim(),
+        first_name: d.firstName.trim(),
+        last_name: d.lastName.trim(),
         extra_aliases: extrasList,
         account_hints: accountHintsForSave,
       });
+      clearDraft();
       setMessage(
         "Saved — we will use your names and hints to recognise money you move to yourself.",
       );
@@ -151,8 +232,8 @@ export function PreClassificationForm() {
           <Input
             id="pc-first"
             placeholder='e.g. "Sai Sashank"'
-            value={firstName}
-            onChange={(e) => setFirstName(e.target.value)}
+            value={d.firstName}
+            onChange={(e) => setD((p) => ({ ...p, firstName: e.target.value }))}
             autoComplete="given-name"
           />
         </div>
@@ -161,8 +242,8 @@ export function PreClassificationForm() {
           <Input
             id="pc-last"
             placeholder='e.g. "Kuppa"'
-            value={lastName}
-            onChange={(e) => setLastName(e.target.value)}
+            value={d.lastName}
+            onChange={(e) => setD((p) => ({ ...p, lastName: e.target.value }))}
             autoComplete="family-name"
           />
           <p className="text-xs text-muted-foreground">
@@ -174,8 +255,8 @@ export function PreClassificationForm() {
           <Textarea
             id="pc-extras"
             placeholder={"One nickname per line, or comma-separated.\ne.g. SK KUPPA"}
-            value={extrasRaw}
-            onChange={(e) => setExtrasRaw(e.target.value)}
+            value={d.extrasRaw}
+            onChange={(e) => setD((p) => ({ ...p, extrasRaw: e.target.value }))}
             rows={3}
           />
         </div>
@@ -186,8 +267,8 @@ export function PreClassificationForm() {
             placeholder={
               "One per line or comma-separated — first four/last four numbers (ignore the zeroes)."
             }
-            value={accountFragmentsRaw}
-            onChange={(e) => setAccountFragmentsRaw(e.target.value)}
+            value={d.accountFragmentsRaw}
+            onChange={(e) => setD((p) => ({ ...p, accountFragmentsRaw: e.target.value }))}
             rows={3}
           />
           <p className="text-xs text-muted-foreground">
@@ -199,8 +280,8 @@ export function PreClassificationForm() {
           <Textarea
             id="pc-upi-ids"
             placeholder={"One per line or comma-separated.\ne.g. yourname@okicici"}
-            value={upiIdsRaw}
-            onChange={(e) => setUpiIdsRaw(e.target.value)}
+            value={d.upiIdsRaw}
+            onChange={(e) => setD((p) => ({ ...p, upiIdsRaw: e.target.value }))}
             rows={2}
           />
           <p className="text-xs text-muted-foreground">
@@ -215,15 +296,14 @@ export function PreClassificationForm() {
                 {preview.self_aliases.length ? preview.self_aliases.join(" · ") : "—"}
               </div>
             </div>
-       
           </div>
         )}
-        <p className="text-sm text-muted-foreground">
+        {/* <p className="text-sm text-muted-foreground">
           For family or friends who often appear in your UPI messages, add them under&nbsp;
           <span>Settings &rarr; Classification</span>
           — optional, but it helps label those payments correctly.
-        </p>
-   
+        </p> */}
+
         {message && (
           <p className="text-sm text-emerald-700 dark:text-emerald-500" role="status">
             {message}
@@ -236,7 +316,7 @@ export function PreClassificationForm() {
         )}
       </CardContent>
       <CardFooter>
-        <Button type="button" onClick={() => void onSave()} disabled={saving || !firstName.trim()}>
+        <Button type="button" onClick={() => void onSave()} disabled={saving || !d.firstName.trim()}>
           {saving ? "Saving…" : "Save identity"}
         </Button>
       </CardFooter>

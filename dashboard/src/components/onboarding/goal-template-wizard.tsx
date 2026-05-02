@@ -12,6 +12,10 @@
  *
  * The preview math is intentionally simple display logic; the full simulation
  * engine still runs elsewhere when you use surplus / what-if features.
+ *
+ * **Draft persistence:** Template choice, amount, and horizon are debounced to
+ * localStorage so a refresh does not reset the step. Cleared after a goal is
+ * created successfully.
  */
 
 import * as React from "react"
@@ -28,6 +32,7 @@ import {
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { useFormDraft } from "@/hooks/use-form-draft"
 import { useCreateGoal } from "@/hooks/use-goals"
 import { useOnboardingGoalTemplates } from "@/hooks/use-onboarding-goal-templates"
 import { cn } from "@/lib/utils"
@@ -82,25 +87,41 @@ function buildCreatePayload(
   }
 }
 
+/** Persisted between refreshes — no secrets here, only planning numbers. */
+type GoalsDraft = {
+  selected: string | null
+  amount: number
+  years: number
+}
+
+const GOALS_STORAGE_KEY = "arth_onboarding_goals"
+
+const GOALS_DEFAULT: GoalsDraft = {
+  selected: null,
+  amount: 50_00_000,
+  years: 5,
+}
+
 export function GoalTemplateWizard() {
   const { mutate: create, isPending, isError, error } = useCreateGoal()
-  const [selected, setSelected] = React.useState<string | null>(null)
-  const [amount, setAmount] = React.useState(50_00_000)
-  const [years, setYears] = React.useState(5)
+  const { value: draft, setValue: setDraft, clearDraft } = useFormDraft(
+    GOALS_STORAGE_KEY,
+    GOALS_DEFAULT,
+  )
   const [done, setDone] = React.useState(false)
 
   const { data, isLoading } = useOnboardingGoalTemplates(
-    { target_amount: amount, years, template_id: selected ?? undefined },
+    { target_amount: draft.amount, years: draft.years, template_id: draft.selected ?? undefined },
     { enabled: true },
   )
 
   const extraHeadline = data?.headline_preview
   const templates = data?.templates ?? []
   const active: OnboardingGoalTemplate | undefined = templates.find(
-    (t) => t.id === selected,
+    (t) => t.id === draft.selected,
   )
-  const preview = active?.preview ?? (selected == null ? extraHeadline : undefined)
-  const targetDate = addYears(new Date(), years)
+  const preview = active?.preview ?? (draft.selected == null ? extraHeadline : undefined)
+  const targetDate = addYears(new Date(), draft.years)
 
   return (
     <div className="max-w-4xl space-y-6">
@@ -132,20 +153,19 @@ export function GoalTemplateWizard() {
               key={t.id}
               type="button"
               onClick={() => {
-                setSelected(t.id)
-                // Snap defaults to template band mid-point so the first preview feels sane.
-                const mid =
-                  (t.default_target_amount_min + t.default_target_amount_max) / 2
-                setAmount(Math.round(mid))
-                setYears(
-                  Math.round(
+                const mid = (t.default_target_amount_min + t.default_target_amount_max) / 2
+                setDraft((d) => ({
+                  ...d,
+                  selected: t.id,
+                  amount: Math.round(mid),
+                  years: Math.round(
                     (t.default_timeframe_years_min + t.default_timeframe_years_max) / 2,
                   ),
-                )
+                }))
               }}
               className={cn(
                 "text-left rounded-xl border p-4 transition-colors hover:bg-muted/50",
-                selected === t.id && "ring-2 ring-primary",
+                draft.selected === t.id && "ring-2 ring-primary",
               )}
             >
               <div className="text-2xl mb-1" aria-hidden>
@@ -162,13 +182,11 @@ export function GoalTemplateWizard() {
         <button
           type="button"
           onClick={() => {
-            setSelected("custom")
-            setAmount(5_00_000)
-            setYears(3)
+            setDraft((d) => ({ ...d, selected: "custom", amount: 5_00_000, years: 3 }))
           }}
           className={cn(
             "text-left rounded-xl border p-4 border-dashed transition-colors hover:bg-muted/50",
-            selected === "custom" && "ring-2 ring-primary",
+            draft.selected === "custom" && "ring-2 ring-primary",
           )}
         >
           <div className="text-2xl mb-1" aria-hidden>
@@ -198,8 +216,10 @@ export function GoalTemplateWizard() {
                 type="number"
                 min={1}
                 step={1000}
-                value={amount}
-                onChange={(e) => setAmount(Number(e.target.value) || 0)}
+                value={draft.amount}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, amount: Number(e.target.value) || 0 }))
+                }
               />
             </div>
             <div className="space-y-2">
@@ -209,8 +229,10 @@ export function GoalTemplateWizard() {
                 type="number"
                 min={0.1}
                 step={0.5}
-                value={years}
-                onChange={(e) => setYears(Number(e.target.value) || 0)}
+                value={draft.years}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, years: Number(e.target.value) || 0 }))
+                }
               />
             </div>
             <p className="text-xs text-muted-foreground">
@@ -229,8 +251,13 @@ export function GoalTemplateWizard() {
               disabled={isPending || !active}
               onClick={() => {
                 if (!active) return
-                const body = buildCreatePayload(active, amount, years, targetDate)
-                create(body, { onSuccess: () => setDone(true) })
+                const body = buildCreatePayload(active, draft.amount, draft.years, targetDate)
+                create(body, {
+                  onSuccess: () => {
+                    setDone(true)
+                    clearDraft()
+                  },
+                })
               }}
             >
               {isPending ? "Saving…" : "Create goal"}
@@ -249,7 +276,7 @@ export function GoalTemplateWizard() {
         </Card>
       )}
 
-      {selected == null && extraHeadline && (
+      {draft.selected == null && extraHeadline && (
         <p className="text-xs text-muted-foreground border-t pt-3">{extraHeadline.copy}</p>
       )}
     </div>

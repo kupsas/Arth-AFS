@@ -1349,6 +1349,14 @@ export interface OnboardingStateResponse {
   updated_at: string | null;
 }
 
+/** GET /api/onboarding/preclassification — last saved identity form fields (wizard resume). */
+export interface OnboardingPreclassificationSavedResponse {
+  first_name: string;
+  last_name: string;
+  extra_aliases: string[];
+  account_hints: string[];
+}
+
 /** GET /api/onboarding/backfill-sources — ordered pipeline keys from bank config. */
 export interface OnboardingBackfillSourceRow {
   source_key: string;

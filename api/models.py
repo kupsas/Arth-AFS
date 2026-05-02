@@ -900,6 +900,8 @@ class OnboardingState(SQLModel, table=True):
     completed_steps_json: str = Field(default="[]", sa_column=Column(Text))
     discovery_results_json: str = Field(default="{}", sa_column=Column(Text))
     backfill_progress_json: str = Field(default="{}", sa_column=Column(Text))
+    # Raw pre-classification form inputs (first/last/aliases/hints) for wizard resume — see GET /preclassification.
+    preclassification_raw_json: str = Field(default="{}", sa_column=Column(Text))
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )
