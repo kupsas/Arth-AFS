@@ -21,7 +21,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from api.auth import get_current_user
 from api.database import get_session
 from api.main import app
-from api.models import OnboardingState, Transaction, UserSecrets
+from api.models import OnboardingState, Transaction, UserContact, UserSecrets
 from scraper.discovery import DiscoveredSource
 
 
@@ -229,6 +229,8 @@ def test_preclassification_get_returns_saved_raw(
         "last_name": "",
         "extra_aliases": [],
         "account_hints": [],
+        "family_names": [],
+        "friend_names": [],
     }
 
     p = flow_client.post(
@@ -238,6 +240,8 @@ def test_preclassification_get_returns_saved_raw(
             "last_name": "Kuppa",
             "extra_aliases": ["SK"],
             "account_hints": ["1234", "me@paytm"],
+            "family_names": ["Mom", "Anita Devi Sharma"],
+            "friend_names": ["Rahul Verma"],
         },
     )
     assert p.status_code == 200, p.text
@@ -249,6 +253,8 @@ def test_preclassification_get_returns_saved_raw(
     assert d["last_name"] == "Kuppa"
     assert d["extra_aliases"] == ["SK"]
     assert set(d["account_hints"]) == {"1234", "me@paytm"}
+    assert d["family_names"] == ["Mom", "Anita Devi Sharma"]
+    assert d["friend_names"] == ["Rahul Verma"]
 
     with Session(engine) as session:  # type: ignore[call-arg]
         st = session.exec(
@@ -258,3 +264,15 @@ def test_preclassification_get_returns_saved_raw(
         raw = json.loads(st.preclassification_raw_json)
         assert raw["first_name"] == "Sai"
         assert raw["last_name"] == "Kuppa"
+        assert raw["family_names"] == ["Mom", "Anita Devi Sharma"]
+        assert raw["friend_names"] == ["Rahul Verma"]
+
+        contacts = session.exec(
+            select(UserContact).where(UserContact.user_id == "flow_user")
+        ).all()
+        by_rel = {(c.relationship, c.display_name): c for c in contacts}
+        assert ("FAMILY", "Mom") in by_rel
+        assert ("FAMILY", "Anita Devi Sharma") in by_rel
+        assert ("FRIEND", "Rahul Verma") in by_rel
+        for c in contacts:
+            assert c.contact_source == "ONBOARDING"

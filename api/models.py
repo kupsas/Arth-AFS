@@ -783,6 +783,8 @@ class UserContact(SQLModel, table=True):
     aliases_json: str = Field(default="[]")
     # SELF | FAMILY | FRIEND | ACQUAINTANCE
     relationship: str = Field(index=True)
+    # USER = Settings / API; ONBOARDING = seeded from pre-classification wizard (replaceable).
+    contact_source: str = Field(default="USER")
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )

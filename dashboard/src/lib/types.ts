@@ -1355,6 +1355,8 @@ export interface OnboardingPreclassificationSavedResponse {
   last_name: string;
   extra_aliases: string[];
   account_hints: string[];
+  family_names: string[];
+  friend_names: string[];
 }
 
 /** GET /api/onboarding/backfill-sources — ordered pipeline keys from bank config. */

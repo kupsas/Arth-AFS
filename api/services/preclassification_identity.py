@@ -76,3 +76,44 @@ def build_self_aliases_from_names(
             uniq.append(a)
 
     return display, uniq
+
+
+def display_and_aliases_for_contact_line(line: str) -> tuple[str, list[str]]:
+    """Build ``(display_name, aliases)`` for one friend/family line from onboarding.
+
+    Each non-empty line names **one** person. ``aliases`` are uppercase substring
+    probes for :mod:`pipeline.rules_classifier` (same normalization idea as
+    :func:`build_self_aliases_from_names`).
+
+    - Single token: one uppercase probe (the whole token).
+    - Exactly two whitespace-separated tokens: add **both** ``FIRST LAST`` and
+      ``LAST FIRST`` uppercase — typical bank / UPI orderings.
+    - Three or more tokens: only the **full** normalized line uppercased (no bare
+      surname-style fragments — avoids accidental broad matches).
+    """
+    display = _squash_ws(line)
+    if not display:
+        return "", []
+
+    aliases: list[str] = []
+    parts = display.split()
+    full_u = display.upper()
+
+    if len(parts) == 1:
+        aliases.append(full_u)
+    elif len(parts) == 2:
+        a, b = parts[0].upper(), parts[1].upper()
+        aliases.append(full_u)
+        aliases.append(f"{a} {b}")
+        aliases.append(f"{b} {a}")
+    else:
+        aliases.append(full_u)
+
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for x in aliases:
+        if x and x not in seen:
+            seen.add(x)
+            uniq.append(x)
+
+    return display, uniq

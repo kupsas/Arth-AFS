@@ -858,6 +858,25 @@ def _normalize_name(name: str) -> str:
     return " ".join(name.upper().split())
 
 
+def _tokens_contain_ordered_sequence(tokens: list[str], sequence: list[str]) -> bool:
+    """Return True if every word in *sequence* appears in *tokens* in order.
+
+    Words need not be adjacent (other words may appear between them).
+    Used for two-token contact names so ``Rahul Singh`` matches
+    ``RAHUL SHEKHAWAT SINGH`` and ``SINGH … RAHUL`` matches ``Shekhawat Rahul``.
+    """
+    if not sequence:
+        return True
+    pos = 0
+    for need in sequence:
+        while pos < len(tokens) and tokens[pos] != need:
+            pos += 1
+        if pos >= len(tokens):
+            return False
+        pos += 1
+    return True
+
+
 def _names_match(extracted: str, canonical: str) -> bool:
     """Check if an extracted transaction name matches a canonical name.
 
@@ -923,16 +942,18 @@ def _check_against_list(name: str, name_list: list[str]) -> str | None:
 def _find_person_in_desc(desc: str, name_list: list[str]) -> str | None:
     """Scan a full description (NEFT / IMPS / RDA) for any name in the list.
 
-    Uses substring matching on the normalised description, with prefix
-    fallback for truncated names and word-set matching for reordered names.
+    Uses substring matching on the normalised description, prefix fallback for
+    long truncated names, **ordered two-word subsequence** matching (both word
+    orders, words may be non-adjacent), and word-set matching for 3+ words.
 
     Bank descriptions use hyphens as separators (e.g.
     ``RDA FIR INW-R25601497544-VENKATA VINOD KRISHNA KUPPA``),
-    so hyphens are replaced with spaces before word-set matching.
+    so hyphens are replaced with spaces before token-based matching.
     """
     desc_norm = _normalize_name(desc)
     # Replace hyphens with spaces so "INW-VENKATA" splits into separate words
     desc_norm_dehyphen = _normalize_name(desc.replace("-", " "))
+    desc_toks = desc_norm_dehyphen.split()
 
     for canonical in name_list:
         c_norm = _normalize_name(canonical)
@@ -947,10 +968,20 @@ def _find_person_in_desc(desc: str, name_list: list[str]) -> str | None:
                 if c_norm[:end] in desc_norm:
                     return canonical
 
+        # Two-word names: both tokens must appear in order, OR reversed order;
+        # tokens need not be adjacent (e.g. RAHUL SHEKHAWAT SINGH vs Rahul Singh).
+        c_toks = c_norm.split()
+        if len(c_toks) == 2:
+            w1, w2 = c_toks[0], c_toks[1]
+            if _tokens_contain_ordered_sequence(desc_toks, [w1, w2]) or _tokens_contain_ordered_sequence(
+                desc_toks, [w2, w1]
+            ):
+                return canonical
+
         # Word-set for reordered names (e.g. KUPPA VENKATA … vs VENKATA … KUPPA)
         c_words = set(c_norm.split())
         if len(c_words) >= 3:
-            desc_words = set(desc_norm_dehyphen.split())
+            desc_words = set(desc_toks)
             if c_words.issubset(desc_words):
                 return canonical
 

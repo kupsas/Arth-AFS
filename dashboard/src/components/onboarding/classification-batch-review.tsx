@@ -158,7 +158,11 @@ export function ClassificationBatchReview({
   }, [source]);
 
   React.useEffect(() => {
-    void reload();
+    // Defer so the first ``setLoading(true)`` inside ``reload`` is not synchronous in this effect
+    // (react-hooks/set-state-in-effect).
+    queueMicrotask(() => {
+      void reload();
+    });
   }, [reload]);
 
   function setDraft(id: number, patch: Partial<Draft>) {

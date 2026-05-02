@@ -126,6 +126,7 @@ export function StepDiscovery({ onContinue }: StepDiscoveryProps) {
     return () => ac.abort()
     // Intentionally omit ``discovery_results`` object identity: refetches swap references and
     // would abort an in-flight scan. ``persistedScanKey`` tracks when a completed snapshot exists.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps intentionally narrowed; see comment above
   }, [
     onboardingState.isFetched,
     onboardingState.isError,

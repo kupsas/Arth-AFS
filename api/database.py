@@ -513,6 +513,16 @@ def _apply_sqlite_patches() -> None:
                 )
             )
 
+        # User contacts: distinguish wizard-seeded rows (replace on re-save) from Settings-created rows.
+        if _table_exists(conn, "user_contacts") and not _column_exists(
+            conn, "user_contacts", "contact_source"
+        ):
+            conn.execute(
+                text(
+                    "ALTER TABLE user_contacts ADD COLUMN contact_source TEXT NOT NULL DEFAULT 'USER'"
+                )
+            )
+
         _patch_onboarding_family_scraper_columns(conn)
 
         _migrate_nse_equity_reference_schema(conn)

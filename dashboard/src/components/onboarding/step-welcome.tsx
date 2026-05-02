@@ -36,16 +36,17 @@ export function StepWelcome({ onContinue }: StepWelcomeProps) {
   const [pollingForOAuth, setPollingForOAuth] = React.useState(false)
   /**
    * Cycles 3 → 2 → 1 dot after "Connecting" while polling (visual “typing” ellipsis).
-   * Resets to 3 when polling stops so the next session starts at full ellipsis.
+   * While ``pollingForOAuth`` is false we **derive** a display count of 3 so we never reset this
+   * state inside an effect (see ``react-hooks/set-state-in-effect``). When OAuth starts, we set
+   * the count to 3 in the click handler together with ``setPollingForOAuth(true)``.
    */
   const [connectingDotCount, setConnectingDotCount] = React.useState<1 | 2 | 3>(3)
   const hasAutoAdvancedRef = React.useRef(false)
+  /** When we are not polling, always show a full ellipsis — avoids setState in an effect. */
+  const displayDotCount = pollingForOAuth ? connectingDotCount : 3
 
   React.useEffect(() => {
-    if (!pollingForOAuth) {
-      setConnectingDotCount(3)
-      return
-    }
+    if (!pollingForOAuth) return
     const id = window.setInterval(() => {
       setConnectingDotCount((n) => (n === 1 ? 3 : ((n - 1) as 1 | 2 | 3)))
     }, CONNECTING_DOT_CYCLE_MS)
@@ -127,6 +128,7 @@ export function StepWelcome({ onContinue }: StepWelcomeProps) {
         return
       }
       // Start lightweight auto-checks after OAuth launch; primary button shows poll spinner.
+      setConnectingDotCount(3)
       setPollingForOAuth(true)
       setOauthStarted(true)
     } catch {
@@ -217,7 +219,7 @@ export function StepWelcome({ onContinue }: StepWelcomeProps) {
                 Connecting
                 {/* Fixed width so “...” → “.” does not resize the button */}
                 <span className="inline-block min-w-[3ch] text-left font-mono" aria-hidden>
-                  {".".repeat(connectingDotCount)}
+                  {".".repeat(displayDotCount)}
                 </span>
               </span>
             </span>

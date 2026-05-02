@@ -96,6 +96,7 @@ def list_contacts(
             "display_name": r.display_name,
             "aliases": json.loads(r.aliases_json or "[]"),
             "relationship": r.relationship,
+            "contact_source": r.contact_source,
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "updated_at": r.updated_at.isoformat() if r.updated_at else None,
         }
@@ -115,6 +116,7 @@ def create_contact(
         display_name=body.display_name.strip(),
         aliases_json=json.dumps(body.aliases),
         relationship=body.relationship.upper(),
+        contact_source="USER",
     )
     session.add(row)
     session.commit()

@@ -23,14 +23,17 @@ from sqlmodel import Session, select
 
 from api.auth import get_current_user
 from api.database import get_session
-from api.models import AppUser, OnboardingState, Transaction, UserSecrets
+from api.models import AppUser, OnboardingState, Transaction, UserContact, UserSecrets
 from api.onboarding_goal_templates import build_goal_templates_response
 from api.routes.transactions import upsert_user_merchant_correction_rule
 from api.services.classifier_runtime import (
     effective_onboarding_unknown_threshold,
     user_has_classifier_api_key,
 )
-from api.services.preclassification_identity import build_self_aliases_from_names
+from api.services.preclassification_identity import (
+    build_self_aliases_from_names,
+    display_and_aliases_for_contact_line,
+)
 from api.services.user_classification import (
     get_or_create_user_classification_settings,
     merge_starter_pack_for_user,
@@ -481,6 +484,8 @@ class PreclassificationRawResponse(BaseModel):
     last_name: str = ""
     extra_aliases: list[str] = Field(default_factory=list)
     account_hints: list[str] = Field(default_factory=list)
+    family_names: list[str] = Field(default_factory=list)
+    friend_names: list[str] = Field(default_factory=list)
 
 
 @router.get("/preclassification", response_model=PreclassificationRawResponse)
@@ -499,11 +504,15 @@ def get_preclassification_saved(
     ln = raw.get("last_name")
     ea = raw.get("extra_aliases")
     ah = raw.get("account_hints")
+    fam = raw.get("family_names")
+    frn = raw.get("friend_names")
     return PreclassificationRawResponse(
         first_name=str(fn) if fn is not None else "",
         last_name=str(ln) if ln is not None else "",
         extra_aliases=[str(x) for x in ea] if isinstance(ea, list) else [],
         account_hints=[str(x) for x in ah] if isinstance(ah, list) else [],
+        family_names=[str(x) for x in fam] if isinstance(fam, list) else [],
+        friend_names=[str(x) for x in frn] if isinstance(frn, list) else [],
     )
 
 
@@ -539,6 +548,51 @@ class PreclassificationSaveBody(BaseModel):
             "(saved to account_hints_json; used by rules classifier substring match)."
         ),
     )
+    family_names: list[str] = Field(
+        default_factory=list,
+        description="Optional names of family members (one person per string); saved as UserContact FAMILY.",
+    )
+    friend_names: list[str] = Field(
+        default_factory=list,
+        description="Optional friend names (one person per string); saved as UserContact FRIEND.",
+    )
+
+
+def _replace_onboarding_contacts(
+    session: Session,
+    user_id: str,
+    *,
+    family_names: list[str],
+    friend_names: list[str],
+) -> None:
+    """Remove prior wizard-seeded FAMILY/FRIEND rows, then insert current names."""
+    for row in session.exec(select(UserContact).where(UserContact.user_id == user_id)).all():
+        if row.contact_source == "ONBOARDING" and row.relationship in ("FAMILY", "FRIEND"):
+            session.delete(row)
+
+    seen_display: set[str] = set()
+
+    def _add(lines: list[str], relationship: str) -> None:
+        for raw in lines:
+            display, aliases = display_and_aliases_for_contact_line(raw)
+            if not display:
+                continue
+            key = display.casefold()
+            if key in seen_display:
+                continue
+            seen_display.add(key)
+            session.add(
+                UserContact(
+                    user_id=user_id,
+                    display_name=display,
+                    aliases_json=json.dumps(aliases),
+                    relationship=relationship,
+                    contact_source="ONBOARDING",
+                )
+            )
+
+    _add(family_names, "FAMILY")
+    _add(friend_names, "FRIEND")
 
 
 @router.post("/preclassification")
@@ -569,6 +623,36 @@ def preclassification_save(
     row.account_hints_json = json.dumps(account_hints)
     row.updated_at = datetime.datetime.now(datetime.UTC)
     session.add(row)
+
+    # Parsed one-per-person lines (stable order, deduped by display in _replace_onboarding_contacts).
+    family_parsed: list[str] = []
+    friend_parsed: list[str] = []
+    seen_f: set[str] = set()
+    seen_r: set[str] = set()
+    for raw in body.family_names:
+        d, _a = display_and_aliases_for_contact_line(raw)
+        if not d:
+            continue
+        k = d.casefold()
+        if k not in seen_f:
+            seen_f.add(k)
+            family_parsed.append(d)
+    for raw in body.friend_names:
+        d, _a = display_and_aliases_for_contact_line(raw)
+        if not d:
+            continue
+        k = d.casefold()
+        if k not in seen_r:
+            seen_r.add(k)
+            friend_parsed.append(d)
+
+    _replace_onboarding_contacts(
+        session,
+        current_user,
+        family_names=family_parsed,
+        friend_names=friend_parsed,
+    )
+
     state_row = _get_or_create_state(session, current_user)
     state_row.preclassification_raw_json = json.dumps(
         {
@@ -576,6 +660,8 @@ def preclassification_save(
             "last_name": body.last_name,
             "extra_aliases": list(body.extra_aliases),
             "account_hints": account_hints,
+            "family_names": family_parsed,
+            "friend_names": friend_parsed,
         }
     )
     state_row.updated_at = datetime.datetime.now(datetime.UTC)

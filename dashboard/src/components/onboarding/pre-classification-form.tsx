@@ -12,11 +12,12 @@
  * Flow for the learner:
  * 1. Type your first name(s) and surname — watch the live preview.
  * 2. Optionally add nicknames / alternate spellings your bank uses.
- * 3. Optionally add account/card fragments and UPI IDs — stored as ``account_hints_json``
+ * 3. Optionally list family and friend names — use the expandable help under &quot;How family and
+ *    friend names are matched&quot; for two-word vs longer names; extra spellings in Settings.
+ * 4. Optionally add account/card fragments and UPI IDs — stored as ``account_hints_json``
  *    for rules-based self-transfer detection (substring match on bank narrations).
- * 4. Click **Save identity** — this hits ``POST /api/onboarding/preclassification``.
- * 5. Add family contacts under **Settings → Classification** (contacts API)
- *    — optional for labelling friend/family UPI payments.
+ * 5. Click **Save identity** — this hits ``POST /api/onboarding/preclassification``.
+ * 6. Fine-tune contacts under **Settings → Classification** (optional).
  *
  * **Draft persistence:** In-progress fields are debounced to localStorage; after a
  * successful save we clear that backup. If there is no local draft, we load the
@@ -41,6 +42,7 @@ import { useFormDraft } from "@/hooks/use-form-draft";
 import { buildApiUrl } from "@/lib/api-base";
 import { fetchOnboardingPreclassificationSaved } from "@/lib/api";
 import { getUserFacingErrorMessage, userMessageFromApiResponseBody } from "@/lib/user-facing-api-error";
+import { ChevronDown } from "lucide-react";
 
 type PreviewResponse = { self_name: string; self_aliases: string[] };
 
@@ -49,6 +51,10 @@ type PreclassDraft = {
   firstName: string;
   lastName: string;
   extrasRaw: string;
+  /** One person per line or comma-separated — family bucket for ``UserContact`` FAMILY rows. */
+  familyNamesRaw: string;
+  /** One person per line or comma-separated — friend bucket for ``UserContact`` FRIEND rows. */
+  friendNamesRaw: string;
   accountFragmentsRaw: string;
   upiIdsRaw: string;
 };
@@ -59,6 +65,8 @@ const PRECLASS_DEFAULT: PreclassDraft = {
   firstName: "",
   lastName: "",
   extrasRaw: "",
+  familyNamesRaw: "",
+  friendNamesRaw: "",
   accountFragmentsRaw: "",
   upiIdsRaw: "",
 };
@@ -107,6 +115,9 @@ async function savePreclassification(payload: {
   extra_aliases: string[];
   /** Account/card fragments and full UPI IDs merged server-side into ``account_hints_json``. */
   account_hints: string[];
+  /** Raw lines merged into ``UserContact`` rows (``contact_source`` = ONBOARDING). */
+  family_names: string[];
+  friend_names: string[];
 }): Promise<void> {
   const res = await fetch(buildApiUrl("/api/onboarding/preclassification"), {
     method: "POST",
@@ -138,6 +149,16 @@ export function PreClassificationForm() {
     return [...splitHintLines(d.accountFragmentsRaw), ...splitHintLines(d.upiIdsRaw)];
   }, [d.accountFragmentsRaw, d.upiIdsRaw]);
 
+  const familyLines = React.useMemo(() => splitHintLines(d.familyNamesRaw), [d.familyNamesRaw]);
+  const friendLines = React.useMemo(() => splitHintLines(d.friendNamesRaw), [d.friendNamesRaw]);
+
+  /**
+   * Hide the alias preview when the first-name field is empty — we derive this in render so the
+   * debounce effect does not need ``setPreview(null)`` (which ESLint flags as setState-in-effect).
+   * Stale ``preview`` state after clearing the name is harmless because we never show it here.
+   */
+  const displayPreview = d.firstName.trim() ? preview : null;
+
   // If the user has no local draft, hydrate from the last successful POST (server truth).
   React.useEffect(() => {
     if (restoredFromLocalStorage) return;
@@ -150,7 +171,9 @@ export function PreClassificationForm() {
           saved.first_name.trim() !== "" ||
           saved.last_name.trim() !== "" ||
           (saved.extra_aliases?.length ?? 0) > 0 ||
-          (saved.account_hints?.length ?? 0) > 0;
+          (saved.account_hints?.length ?? 0) > 0 ||
+          (saved.family_names?.length ?? 0) > 0 ||
+          (saved.friend_names?.length ?? 0) > 0;
         if (!hasServer) return;
         const { fragments, upi } = splitHintsForForm(saved.account_hints ?? []);
         setD((prev) => {
@@ -159,6 +182,8 @@ export function PreClassificationForm() {
             prev.firstName.trim() ||
             prev.lastName.trim() ||
             prev.extrasRaw.trim() ||
+            prev.familyNamesRaw.trim() ||
+            prev.friendNamesRaw.trim() ||
             prev.accountFragmentsRaw.trim() ||
             prev.upiIdsRaw.trim()
           ) {
@@ -169,6 +194,8 @@ export function PreClassificationForm() {
             firstName: saved.first_name,
             lastName: saved.last_name,
             extrasRaw: (saved.extra_aliases ?? []).join("\n"),
+            familyNamesRaw: (saved.family_names ?? []).join("\n"),
+            friendNamesRaw: (saved.friend_names ?? []).join("\n"),
             accountFragmentsRaw: fragments,
             upiIdsRaw: upi,
           };
@@ -186,7 +213,6 @@ export function PreClassificationForm() {
   // Pass extrasList so the server can merge nicknames into self_aliases (same as on save).
   React.useEffect(() => {
     if (!d.firstName.trim()) {
-      setPreview(null);
       return;
     }
     const t = window.setTimeout(() => {
@@ -205,10 +231,12 @@ export function PreClassificationForm() {
         last_name: d.lastName.trim(),
         extra_aliases: extrasList,
         account_hints: accountHintsForSave,
+        family_names: familyLines,
+        friend_names: friendLines,
       });
       clearDraft();
       setMessage(
-        "Saved — we will use your names and hints to recognise money you move to yourself.",
+        "Saved — we will use your names and hints for self-transfers, and your family/friend list for labelling people in bank text.",
       );
     } catch (e) {
       setSaveError(getUserFacingErrorMessage(e));
@@ -247,7 +275,7 @@ export function PreClassificationForm() {
             autoComplete="family-name"
           />
           <p className="text-xs text-muted-foreground">
-            Don't worry about your last name matching your family. We handle it.
+            Do not worry about your last name matching your family. We handle it.
           </p>
         </div>
         <div className="grid gap-2">
@@ -257,6 +285,63 @@ export function PreClassificationForm() {
             placeholder={"One nickname per line, or comma-separated.\ne.g. SK KUPPA"}
             value={d.extrasRaw}
             onChange={(e) => setD((p) => ({ ...p, extrasRaw: e.target.value }))}
+            rows={3}
+          />
+        </div>
+        <details
+          id="pc-family-friend-how"
+          className="rounded-md border border-border/70 bg-muted/30 text-xs text-muted-foreground [&_summary::-webkit-details-marker]:hidden [&[open]_summary_.pc-name-match-chevron]:rotate-180"
+        >
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 text-left select-none hover:bg-muted/40 rounded-md transition-colors">
+            <span className="font-medium text-foreground">
+              How family and friend names are matched
+            </span>
+            <ChevronDown
+              aria-hidden
+              className="pc-name-match-chevron size-4 shrink-0 text-muted-foreground transition-transform"
+            />
+          </summary>
+          <div className="space-y-2 border-t border-border/60 px-3 pb-3 pt-2">
+            <p>
+              We search your bank and UPI text for what you type here; capitals do not matter.
+              <span className="mt-1.5 block">
+                <strong>Two words</strong> (e.g. &quot;Rahul Shekhawat&quot;): we look for both words in the
+                bank/UPI text in <strong>either order</strong> (&quot;Rahul … Shekhawat&quot; or &quot;Shekhawat …
+                Rahul&quot;). They do <strong>not</strong> have to sit next to each other — other words in the
+                middle are fine.
+              </span>
+              <span className="mt-1.5 block">
+                <strong>Three or more words</strong> (e.g. &quot;Rahul Singh Shekhawat&quot;) are matched as{" "}
+                <strong>one full phrase</strong> in that order — we do not try every mix of words. If a
+                message shows a shorter or reordered name, add <strong>another line</strong> with that
+                version.
+              </span>
+            </p>
+          </div>
+        </details>
+        <div className="grid gap-2">
+          <Label htmlFor="pc-family">Family names (optional)</Label>
+          <Textarea
+            id="pc-family"
+            aria-describedby="pc-family-friend-how"
+            placeholder={
+              "One person per line or comma-separated — use what actually appears in bank/UPI text.\ne.g. Mom\nRahul Verma\nRahul Singh Shekhawat"
+            }
+            value={d.familyNamesRaw}
+            onChange={(e) => setD((p) => ({ ...p, familyNamesRaw: e.target.value }))}
+            rows={3}
+          />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="pc-friends">Friend names (optional)</Label>
+          <Textarea
+            id="pc-friends"
+            aria-describedby="pc-family-friend-how"
+            placeholder={
+              "Same format as family. Add an extra line if the app uses a different spelling or order than above."
+            }
+            value={d.friendNamesRaw}
+            onChange={(e) => setD((p) => ({ ...p, friendNamesRaw: e.target.value }))}
             rows={3}
           />
         </div>
@@ -288,14 +373,30 @@ export function PreClassificationForm() {
             This helps identify self-transfers and prevent double counting in expenses.
           </p>
         </div>
-        {preview && (
+        {displayPreview && (
           <div className="rounded-md border bg-muted/40 p-3 text-sm">
             <div className="font-medium">Names we will use to recognise you:</div>
             <div className="mt-2 space-y-2 font-mono text-xs leading-relaxed">
               <div>
-                {preview.self_aliases.length ? preview.self_aliases.join(" · ") : "—"}
+                {displayPreview.self_aliases.length ? displayPreview.self_aliases.join(" · ") : "—"}
               </div>
             </div>
+            {(familyLines.length > 0 || friendLines.length > 0) && (
+              <div className="mt-3 border-t border-border pt-3 text-muted-foreground">
+                Also saving{" "}
+                {familyLines.length > 0 && (
+                  <span>
+                    {familyLines.length} family name{familyLines.length === 1 ? "" : "s"}
+                  </span>
+                )}
+                {familyLines.length > 0 && friendLines.length > 0 && " · "}
+                {friendLines.length > 0 && (
+                  <span>
+                    {friendLines.length} friend name{friendLines.length === 1 ? "" : "s"}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         )}
         {/* <p className="text-sm text-muted-foreground">

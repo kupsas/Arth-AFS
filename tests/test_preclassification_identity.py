@@ -5,7 +5,10 @@ from decimal import Decimal
 
 import pytest
 
-from api.services.preclassification_identity import build_self_aliases_from_names
+from api.services.preclassification_identity import (
+    build_self_aliases_from_names,
+    display_and_aliases_for_contact_line,
+)
 
 
 def test_build_aliases_full_name_permutations():
@@ -28,6 +31,31 @@ def test_extras_merged_and_deduped():
     assert display == "Ada Lovelace"
     assert "ADA" in aliases
     assert "COUNTESS" in aliases
+
+
+def test_contact_line_single_token():
+    d, aliases = display_and_aliases_for_contact_line("  Priya  ")
+    assert d == "Priya"
+    assert aliases == ["PRIYA"]
+
+
+def test_contact_line_two_tokens_both_orders():
+    d, aliases = display_and_aliases_for_contact_line("Rahul Verma")
+    assert d == "Rahul Verma"
+    assert "RAHUL VERMA" in aliases
+    assert "VERMA RAHUL" in aliases
+    assert len(aliases) == 2
+
+
+def test_contact_line_three_tokens_full_only():
+    d, aliases = display_and_aliases_for_contact_line("Anita Devi Sharma")
+    assert d == "Anita Devi Sharma"
+    assert aliases == ["ANITA DEVI SHARMA"]
+
+
+def test_contact_line_empty():
+    assert display_and_aliases_for_contact_line("") == ("", [])
+    assert display_and_aliases_for_contact_line("   ") == ("", [])
 
 
 def test_classify_llm_no_keys_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:

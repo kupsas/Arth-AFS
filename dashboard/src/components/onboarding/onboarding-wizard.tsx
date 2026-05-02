@@ -93,8 +93,21 @@ export function OnboardingWizard({
   onExitFirstStep,
 }: OnboardingWizardProps) {
   const stateQ = useOnboardingState()
-  const stepHydratedRef = React.useRef(false)
-  const [panel, setPanel] = React.useState<WizardStepId>("welcome")
+  /**
+   * Server-resumed step from ``GET /state`` (null while the query is still loading).
+   * We derive the visible step below so we **do not** need a hydration effect that calls
+   * setState — that pattern triggers ``react-hooks/set-state-in-effect``.
+   */
+  const serverPanel = React.useMemo((): WizardStepId | null => {
+    if (stateQ.isLoading) return null
+    return panelFromServerStep(stateQ.data?.current_step ?? "welcome")
+  }, [stateQ.isLoading, stateQ.data])
+  /**
+   * Once the user moves forward/back in the wizard, this override wins over ``serverPanel``
+   * for the rest of the session (same as “we already hydrated from the server” before).
+   */
+  const [userPanel, setUserPanel] = React.useState<WizardStepId | null>(null)
+  const panel: WizardStepId = userPanel ?? serverPanel ?? "welcome"
   const sourcesQ = useOnboardingBackfillSources()
   const prevPanelRef = React.useRef<WizardStepId | null>(null)
 
@@ -108,21 +121,15 @@ export function OnboardingWizard({
   const activeSourceKey = sourcesQ.data?.[bfSourceIdx]?.source_key ?? null
   const activeSourceLabel = activeSourceKey ? humanizeSourceKey(activeSourceKey) : null
 
-  // Resume the visible step from the server once (``PATCH /state`` already persists ``current_step``).
-  React.useEffect(() => {
-    if (stepHydratedRef.current) return
-    if (stateQ.isLoading) return
-    stepHydratedRef.current = true
-    setPanel(panelFromServerStep(stateQ.data?.current_step ?? "welcome"))
-  }, [stateQ.isLoading, stateQ.data])
-
   // Persist coarse wizard position so a refresh mid-flow still shows the same step name.
+  // Skip while onboarding state is still loading and the user has not navigated yet — otherwise
+  // we would PATCH the default ``welcome`` over the real server step.
   React.useEffect(() => {
-    if (!stepHydratedRef.current) return
+    if (stateQ.isLoading && userPanel === null) return
     void patchOnboardingState({ current_step: panel }).catch(() => {
       /* non-fatal */
     })
-  }, [panel])
+  }, [panel, stateQ.isLoading, userPanel])
 
   // When entering backfill from earlier setup steps, restart the source queue.
   React.useEffect(() => {
@@ -147,12 +154,12 @@ export function OnboardingWizard({
       // Re-read from the query inside the async closure so TypeScript knows the list exists.
       const currentList = sourcesQ.data
       if (!currentList?.length) {
-        setPanel("gaps")
+        setUserPanel("gaps")
         return
       }
       const sk = currentList[bfSourceIdx]?.source_key
       if (!sk) {
-        setPanel("gaps")
+        setUserPanel("gaps")
         return
       }
 
@@ -169,13 +176,13 @@ export function OnboardingWizard({
 
         if (prog.status === "needs_classification") {
           setClassifySource(sk)
-          setPanel("classification")
+          setUserPanel("classification")
           return
         }
 
         if (prog.status === "complete") {
           if (bfSourceIdx >= currentList.length - 1) {
-            setPanel("gaps")
+            setUserPanel("gaps")
             return
           }
           setBfSourceIdx((i) => i + 1)
@@ -248,7 +255,7 @@ export function OnboardingWizard({
       backfill: "apikey",
     }
     const prev = prevMap[panel]
-    if (prev) setPanel(prev)
+    if (prev) setUserPanel(prev)
   }
 
   const canBack = panel !== "classification" && panel !== "summary"
@@ -294,10 +301,10 @@ export function OnboardingWizard({
 
       <div className="flex-1">
         {panel === "welcome" && (
-          <StepWelcome onContinue={() => setPanel("discovery")} />
+          <StepWelcome onContinue={() => setUserPanel("discovery")} />
         )}
         {panel === "discovery" && (
-          <StepDiscovery onContinue={() => setPanel("preclass")} />
+          <StepDiscovery onContinue={() => setUserPanel("preclass")} />
         )}
         {panel === "preclass" && (
           <div className="space-y-4">
@@ -305,7 +312,7 @@ export function OnboardingWizard({
           </div>
         )}
         {panel === "apikey" && (
-          <div className="space-y-4">
+          <div className="mx-auto w-full max-w-2xl space-y-6">
             <OnboardingOptionalLlmKeys />
           </div>
         )}
@@ -330,13 +337,13 @@ export function OnboardingWizard({
                   onResumeFromPause={bfProgress?.status === "paused" ? handleResumePause : undefined}
                   resumeBusy={resumeBusy}
                 />
-                <Button type="button" variant="ghost" size="sm" onClick={() => setPanel("gaps")}>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setUserPanel("gaps")}>
                   Skip remaining mail → gap check
                 </Button>
               </>
             )}
             {!sourcesQ.data?.length && (
-              <Button type="button" variant="secondary" onClick={() => setPanel("gaps")}>
+              <Button type="button" variant="secondary" onClick={() => setUserPanel("gaps")}>
                 Skip to gap check
               </Button>
             )}
@@ -347,7 +354,7 @@ export function OnboardingWizard({
             source={classifySource}
             sourceLabel={humanizeSourceKey(classifySource)}
             onContinueBackfill={() => {
-              setPanel("backfill")
+              setUserPanel("backfill")
               setBfTick((t) => t + 1)
             }}
           />
@@ -364,22 +371,22 @@ export function OnboardingWizard({
           </Button>
           <div className="flex flex-wrap gap-2">
             {panel === "preclass" && (
-              <Button type="button" onClick={() => setPanel("apikey")}>
+              <Button type="button" onClick={() => setUserPanel("apikey")}>
                 Continue
               </Button>
             )}
             {panel === "apikey" && (
-              <Button type="button" onClick={() => setPanel("backfill")}>
+              <Button type="button" onClick={() => setUserPanel("backfill")}>
                 Start importing mail
               </Button>
             )}
             {panel === "gaps" && (
-              <Button type="button" onClick={() => setPanel("goals")}>
+              <Button type="button" onClick={() => setUserPanel("goals")}>
                 Continue to goals
               </Button>
             )}
             {panel === "goals" && (
-              <Button type="button" onClick={() => setPanel("summary")}>
+              <Button type="button" onClick={() => setUserPanel("summary")}>
                 Continue
               </Button>
             )}
