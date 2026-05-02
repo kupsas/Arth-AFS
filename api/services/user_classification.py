@@ -39,6 +39,24 @@ def _json_list(raw: str, default: list[str] | None = None) -> list[str]:
     return list(default or [])
 
 
+def normalize_self_aliases_for_matching(aliases: Iterable[str]) -> list[str]:
+    """Prepare ``self_aliases`` for :func:`pipeline.rules_classifier._is_self_transfer`.
+
+    Bank narrations are compared as uppercase (``desc_upper``). Aliases from onboarding
+    are already uppercased, but Settings / SELF contacts may store mixed case — we
+    collapse whitespace and uppercase here so substring matching is case-agnostic.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for a in aliases:
+        n = " ".join((a or "").split()).strip().upper()
+        if not n or n in seen:
+            continue
+        seen.add(n)
+        out.append(n)
+    return out
+
+
 def merge_starter_pack_for_user(session: Session, user_id: str) -> int:
     """Insert missing STARTER_PACK merchant rows for *user_id*. Returns rows added."""
     starter = load_merchant_starter_pack()
@@ -196,7 +214,7 @@ def load_user_classification_config(session: Session, user_id: str) -> UserClass
 
     return UserClassificationConfig(
         self_name=self_name.strip(),
-        self_aliases=list(dict.fromkeys(a.strip() for a in self_aliases if a.strip())),
+        self_aliases=normalize_self_aliases_for_matching(self_aliases),
         account_id_hints=list(dict.fromkeys(account_hints)),
         family_contacts=family,
         friend_contacts=friends,

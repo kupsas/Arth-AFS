@@ -478,9 +478,15 @@ def onboarding_backfill_resume_state(
 def preclassification_preview(
     first_name: str = Query(..., min_length=1, description="Given / first name(s)"),
     last_name: str = Query("", max_length=128, description="Surname(s) — may be empty"),
+    extra_aliases: list[str] = Query(
+        default_factory=list,
+        description="Optional nicknames — repeat query key, e.g. ``?extra_aliases=A&extra_aliases=B``.",
+    ),
 ) -> dict[str, Any]:
     """Preview ``self_name`` + ``self_aliases`` without writing to the database."""
-    display, aliases = build_self_aliases_from_names(first_name, last_name, extra_aliases=[])
+    display, aliases = build_self_aliases_from_names(
+        first_name, last_name, extra_aliases=extra_aliases
+    )
     return {"self_name": display, "self_aliases": aliases}
 
 
@@ -493,6 +499,13 @@ class PreclassificationSaveBody(BaseModel):
         default_factory=list,
         description="Optional nicknames / bank spellings merged into self_aliases.",
     )
+    account_hints: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Account or card number fragments and full UPI IDs for self-transfer matching "
+            "(saved to account_hints_json; used by rules classifier substring match)."
+        ),
+    )
 
 
 @router.post("/preclassification")
@@ -502,16 +515,25 @@ def preclassification_save(
     session: Session = Depends(get_session),
     current_user: str = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Persist ``self_name`` + ``self_aliases_json`` derived from first/last (+ extras)."""
+    """Persist ``self_name``, ``self_aliases_json``, and ``account_hints_json`` from the body."""
     merge_starter_pack_for_user(session, current_user)
     display, aliases = build_self_aliases_from_names(
         body.first_name,
         body.last_name,
         extra_aliases=body.extra_aliases,
     )
+    # One list: account/card fragments and UPI handles (min 4 chars used by rules; we store as given).
+    account_hints: list[str] = []
+    seen_h: set[str] = set()
+    for h in body.account_hints:
+        t = h.strip()
+        if t and t not in seen_h:
+            seen_h.add(t)
+            account_hints.append(t)
     row = get_or_create_user_classification_settings(session, current_user)
     row.self_name = display
     row.self_aliases_json = json.dumps(aliases)
+    row.account_hints_json = json.dumps(account_hints)
     row.updated_at = datetime.datetime.now(datetime.UTC)
     session.add(row)
     session.commit()
@@ -519,6 +541,7 @@ def preclassification_save(
         "ok": True,
         "self_name": display,
         "self_aliases": aliases,
+        "account_hints": account_hints,
         "starter_pack": "Merchant starter rules are merged at user init — no action required here.",
     }
 

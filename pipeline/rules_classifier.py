@@ -786,7 +786,12 @@ def _classify_txn_type_icici_bank(
 
 
 def _is_self_transfer(desc_upper: str, cfg: UserClassificationConfig) -> bool:
-    """Check if narration indicates a transfer between own accounts."""
+    """Check if narration indicates a transfer between own accounts.
+
+    ``cfg.self_aliases`` are uppercased when loaded (see
+    :func:`api.services.user_classification.normalize_self_aliases_for_matching`)
+    so ``indicator in desc_upper`` is case-agnostic for user input.
+    """
     if any(indicator in desc_upper for indicator in cfg.self_aliases):
         return True
     return _is_account_hint_transfer(desc_upper, cfg)
