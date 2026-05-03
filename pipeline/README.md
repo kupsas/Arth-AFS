@@ -138,24 +138,27 @@ PARSER_REGISTRY = {
 }
 ```
 
-### Step 3 — Add source config
+### Step 3 — Add source config (per user in SQLite)
 
-In `pipeline/config.py`, add to `SOURCE_CONFIGS`:
+Insert a row into the `user_pipeline_sources` table for your `user_id` (same string as `ARTH_USER_ID` / dashboard login): `source_key`, `account_id`, `currency` (default `INR`), and `statement_folder` (subdirectory name under `docs/personal-data/`). The CLI and API load this via `pipeline.config.get_source_configs(user_id, session)`.
 
-```python
-SOURCE_CONFIGS = {
-    ...
-    "new_bank_savings": {
-        "account_id": "NEWBANK_SAV_XXXX",       # consistent label used across the DB
-        "currency": "INR",
-        "source_statement": "NewBank_Savings",   # subdirectory in docs/personal-data/
-    },
-}
+You can seed the legacy snapshot with:
+
+```bash
+python3 scripts/migrate_sashank_config_to_db.py --user-id yourname
+```
+
+Or insert manually (example shape):
+
+```sql
+INSERT INTO user_pipeline_sources (user_id, source_key, account_id, currency, statement_folder)
+VALUES ('yourname', 'new_bank_savings', 'NEWBANK_SAV_XXXX', 'INR', 'NewBank_Savings');
 ```
 
 ### Step 4 — Run it
 
 ```bash
+export ARTH_USER_ID=yourname
 # Test with rules only first (fast, no LLM cost)
 python3 -m pipeline.run --source new_bank_savings --llm none
 
@@ -172,7 +175,7 @@ python3 -m pipeline.run --source new_bank_savings --validate
 
 | File | What it does |
 |---|---|
-| `config.py` | All configuration: source configs, LLM fallback chain, model pricing, paths, cache dir |
+| `config.py` | Paths, LLM fallback chain, model pricing, cache dir; per-user statement sources in SQLite (`get_source_configs`) |
 | `models.py` | Pydantic models (`ParsedTransaction`, `CanonicalTransaction`) and all classification enums (`TxnType`, `Channel`, `UPIType`, `CounterpartyCategory`) |
 | `parsers/base.py` | `BaseParser` abstract class |
 | `parsers/hdfc_savings.py` | HDFC savings account (.txt format, `\t`-separated) |

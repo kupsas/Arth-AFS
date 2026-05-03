@@ -10,6 +10,7 @@ stretches (0 txns) unless the gap is longer than two full months, matching the p
 
 from __future__ import annotations
 
+import calendar
 import datetime as dt
 from dataclasses import dataclass, field
 from typing import Any, Iterable
@@ -91,6 +92,13 @@ def _merge_consecutive_months(chunks: Iterable[str]) -> list[dict[str, str]]:
 
 def _build_source_key_meta(cfg: BankSendersConfig) -> dict[str, dict[str, str]]:
     """Map ``source_key`` (pipeline key) to display + cadence metadata."""
+    # Prefer stronger cadence when multiple senders map to the same source_key
+    # (e.g. HDFC CC statements are ``monthly`` while InstaAlerts are ``per_transaction``).
+    rank = {"monthly": 0, "quarterly": 1, "per_transaction": 2}
+
+    def _cad_rank(ec: str) -> int:
+        return rank.get((ec or "per_transaction").lower().strip(), 9)
+
     out: dict[str, dict[str, str]] = {}
     for _sender, blob in cfg.items():
         dname = (blob.get("display_name") or _sender) or "Unknown"
@@ -100,7 +108,10 @@ def _build_source_key_meta(cfg: BankSendersConfig) -> dict[str, dict[str, str]]:
             if not isinstance(acc, dict):
                 continue
             sk = acc.get("source_key")
-            if isinstance(sk, str) and sk and sk not in out:
+            if not isinstance(sk, str) or not sk:
+                continue
+            prev = out.get(sk)
+            if prev is None or _cad_rank(ec) < _cad_rank(str(prev.get("expected_cadence") or "")):
                 out[sk] = {
                     "display_name": str(dname),
                     "source_type": st,
@@ -350,6 +361,108 @@ def _gap_reason(
         f"No transactions parsed for {label}. "
         "If the account was active, upload a statement to fill the hole."
     )
+
+
+def _last_day_of_month(y: int, m: int) -> dt.date:
+    last = calendar.monthrange(y, m)[1]
+    return dt.date(y, m, last)
+
+
+def _ym_to_date_range(ym_start: str, ym_end: str) -> tuple[dt.date, dt.date]:
+    y1, m1 = _parse_ym(ym_start)
+    y2, m2 = _parse_ym(ym_end)
+    d0 = dt.date(y1, m1, 1)
+    d1 = _last_day_of_month(y2, m2)
+    return d0, d1
+
+
+def filter_onboarding_alert_ids_after_statements(
+    session: Session,
+    user_id: str,
+    source_key: str,
+    bank: BankSendersConfig,
+    alert_items: list[dict[str, str]],
+    *,
+    had_statement_ids_at_init: bool,
+) -> list[str]:
+    """After statement-phase import, decide which InstaAlert / alert emails still need parsing.
+
+    ``alert_items`` entries must include ``id`` (Gmail message id) and ``received_at``
+    (ISO-8601 string).  Returns message ids **oldest first**.
+
+    When the statement queue was empty at onboarding start (no PDF/statement senders for
+    this ``source_key``), every alert id is returned — we cannot infer month-level coverage.
+
+    When statements ran first and month gaps are empty, returns ``[]`` (statement PDFs
+    are treated as source-of-truth; redundant alert volume is skipped).
+
+    When gaps exist, only alerts whose *received* date falls inside a gap month window
+    are kept (parallel fill for holes).
+    """
+    if not alert_items:
+        return []
+
+    def _sort_key(row: dict[str, str]) -> tuple[int, str]:
+        raw = row.get("received_at") or ""
+        try:
+            d = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            return (int(d.timestamp()), row.get("id") or "")
+        except ValueError:
+            return (0, row.get("id") or "")
+
+    ordered = sorted(alert_items, key=_sort_key)
+
+    if not had_statement_ids_at_init:
+        return [str(r["id"]) for r in ordered if r.get("id")]
+
+    reports = detect_gaps(session, user_id, bank)
+    rep = next((r for r in reports if str(r.get("source") or "") == source_key), None)
+
+    if rep is None:
+        return [str(r["id"]) for r in ordered if r.get("id")]
+
+    gaps = rep.get("gaps") or []
+    note = str(rep.get("note") or "").lower()
+    ec = str(rep.get("expected_cadence") or "").lower()
+
+    if not gaps:
+        if "not enough month coverage" in note:
+            return [str(r["id"]) for r in ordered if r.get("id")]
+        if "sporadic" in note or ec == "per_transaction":
+            return [str(r["id"]) for r in ordered if r.get("id")]
+        return []
+
+    windows: list[tuple[dt.date, dt.date]] = []
+    for g in gaps:
+        if not isinstance(g, dict):
+            continue
+        ps = g.get("period_start")
+        pe = g.get("period_end")
+        if isinstance(ps, str) and isinstance(pe, str) and ps.strip() and pe.strip():
+            windows.append(_ym_to_date_range(ps.strip(), pe.strip()))
+
+    if not windows:
+        return [str(r["id"]) for r in ordered if r.get("id")]
+
+    def _in_windows(rec: dt.date) -> bool:
+        for a, b in windows:
+            if a <= rec <= b:
+                return True
+        return False
+
+    out: list[str] = []
+    for r in ordered:
+        mid = r.get("id")
+        if not mid:
+            continue
+        raw = r.get("received_at") or ""
+        try:
+            rdt = dt.datetime.fromisoformat(raw.replace("Z", "+00:00")).date()
+        except ValueError:
+            continue
+        if _in_windows(rdt):
+            out.append(str(mid))
+    return out
 
 
 def list_transaction_sources(

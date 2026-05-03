@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+import uuid
 from typing import Any
 
 from collections import defaultdict
@@ -30,6 +31,7 @@ from api.services.classifier_runtime import (
     effective_onboarding_unknown_threshold,
     user_has_classifier_api_key,
 )
+from api.services.email_import_flow_log import EmailImportFlowLog
 from api.services.preclassification_identity import (
     build_self_aliases_from_names,
     display_and_aliases_for_contact_line,
@@ -54,6 +56,7 @@ from scraper.onboarding_orchestrator import (
     resume_backfill_state,
     run_onboarding_backfill,
 )
+from scraper.source_builder import persist_scraper_sources_from_discovery
 from scraper.scheduler import resume_scheduler
 
 logger = logging.getLogger(__name__)
@@ -300,6 +303,47 @@ def onboarding_discover(
     )
 
 
+@router.post("/persist-sources")
+def onboarding_persist_sources(
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Write ``ScraperBankSender`` / ``ScraperAccountMapping`` from the last discovery scan.
+
+    Call after ``POST /discover`` completes (``discovery_results`` on onboarding state).
+    Samples a few Gmail messages per non-empty sender and infers last-4 → account rows
+    so :func:`scraper.config_loader.get_bank_senders_config` no longer falls back to the
+    empty template in ``scraper.config``.
+    """
+    row = _get_or_create_state(session, current_user)
+    envelope = _parse_json_object(row.discovery_results_json, {})
+    sources = envelope.get("sources")
+    if not isinstance(sources, list) or not sources:
+        raise HTTPException(
+            status_code=400,
+            detail="Run “Find accounts” (discovery) first so we have senders to configure.",
+        )
+
+    try:
+        client = _gmail_client_connected()
+    except HTTPException:
+        raise
+
+    try:
+        summary = persist_scraper_sources_from_discovery(
+            session,
+            current_user,
+            client,
+            envelope if isinstance(envelope, dict) else {},
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    session.commit()
+    return {"ok": True, **summary}
+
+
 class BackfillAdvanceBody(BaseModel):
     """Advance chunk-based onboarding backfill."""
 
@@ -332,6 +376,10 @@ class BackfillProgressResponse(BaseModel):
     transactions_parsed: int = 0
     unknowns_pending: int = 0
     error_message: str | None = None
+    current_phase: str | None = Field(
+        default=None,
+        description="statements | alerts — which tier of mail is being imported (if applicable).",
+    )
 
 
 def _strip_internal_keys(d: dict[str, Any]) -> dict[str, Any]:
@@ -370,7 +418,25 @@ def onboarding_backfill(
     all_bf = _parse_json_object(row.backfill_progress_json, {})
     existing = dict(all_bf.get(source_key) or {})
 
-    client = _gmail_client_connected()
+    req_id = uuid.uuid4().hex[:12]
+    flow = EmailImportFlowLog(request_id=req_id, user_id=current_user, source_key=source_key)
+    detail_parts = [
+        f"chunk_size={body.chunk_size}",
+        f"resume_after_classification={body.resume_after_classification}",
+        f"resume_from_pause={body.resume_from_pause}",
+    ]
+    if body.after is not None:
+        detail_parts.append(f"after={body.after.isoformat()}")
+    if body.before is not None:
+        detail_parts.append(f"before={body.before.isoformat()}")
+    flow.write("http_request_begin", "; ".join(detail_parts))
+
+    try:
+        client = _gmail_client_connected()
+    except HTTPException as e:
+        flow.write("gmail_connect_failed", _http_exception_detail(e))
+        raise
+    flow.write("gmail_connected", "Gmail client authenticated successfully")
 
     try:
         result = run_onboarding_backfill(
@@ -384,8 +450,10 @@ def onboarding_backfill(
             before=body.before,
             resume_after_classification=body.resume_after_classification,
             resume_from_pause=body.resume_from_pause,
+            import_flow_log=flow,
         )
     except ValueError as e:
+        flow.write("validation_error", str(e))
         raise HTTPException(status_code=400, detail=str(e)) from e
 
     merged_progress = result.progress
@@ -393,6 +461,11 @@ def onboarding_backfill(
     session.commit()
 
     public = _strip_internal_keys(merged_progress)
+    flow.write(
+        "http_request_end",
+        f"status={public.get('status')!r} emails_found={public.get('emails_found')!r} "
+        f"emails_processed={public.get('emails_processed')!r} error={public.get('error_message')!r}",
+    )
     return public
 
 
@@ -429,6 +502,7 @@ def onboarding_backfill_progress(
         transactions_parsed=int(blob.get("transactions_parsed") or 0),
         unknowns_pending=unknowns_live,
         error_message=blob.get("error_message"),
+        current_phase=(str(blob["current_phase"]) if blob.get("current_phase") else None),
     )
 
 

@@ -44,7 +44,13 @@ _VALID_INV_TXN = {e.value for e in InvestmentTxnType}
 
 
 def _default_user_id() -> str:
-    return (os.environ.get("ARTH_USER_ID") or "sashank").strip() or "sashank"
+    uid = os.environ.get("ARTH_USER_ID", "").strip()
+    if not uid:
+        raise RuntimeError(
+            "ARTH_USER_ID environment variable must be set (your Arth username, "
+            "same string as dashboard login)."
+        )
+    return uid
 
 
 def validate_parsed_holding(ph: ParsedHolding) -> list[str]:
@@ -448,7 +454,11 @@ def main(argv: list[str] | None = None) -> None:
         help="icici_direct_equity | icici_direct_mf | icici_ppf | nps | liability_bike | liability_term_insurance",
     )
     p.add_argument("--input", required=True, type=Path, help="File or directory path")
-    p.add_argument("--user-id", default=None, help="Defaults to ARTH_USER_ID or sashank")
+    p.add_argument(
+        "--user-id",
+        default=None,
+        help="Arth username for DB rows; defaults to ARTH_USER_ID (required if unset)",
+    )
     p.add_argument("--dry-run", action="store_true", help="Parse + validate only; no DB writes")
     p.add_argument("--skip-txns", action="store_true", help="Holdings / liabilities only")
     p.add_argument("--skip-holdings", action="store_true", help="Investment txns / liabilities only")

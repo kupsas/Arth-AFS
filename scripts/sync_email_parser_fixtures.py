@@ -31,7 +31,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from scraper.config import BANK_SENDERS  # noqa: E402
+from tests.email_parser_test_accounts import HDFC_ALERT_ACCOUNTS, ICICI_INSTA_ACCOUNTS
 from scraper.email_parsers.hdfc_bank import (  # noqa: E402
     HDFCAccountUpdateParser,
     HDFCCreditCardAlertParser,
@@ -141,8 +141,8 @@ def _resolve_row(client: GmailClient, row: dict[str, Any]) -> tuple[str, str, st
 
 def _parser_and_parse(filename: str, html: str) -> tuple[str, list[Any]]:
     """Return (parser_label, parsed_transactions)."""
-    hdfc_accts = BANK_SENDERS["alerts@hdfcbank.net"]["accounts"]
-    icici_accts = BANK_SENDERS["customernotification@icici.bank.in"]["accounts"]
+    hdfc_accts = HDFC_ALERT_ACCOUNTS
+    icici_accts = ICICI_INSTA_ACCOUNTS
 
     if filename == "alerts_hdfcbank_net_01.html":
         return "HDFCUPIAlertParser", HDFCUPIAlertParser(hdfc_accts).parse(html, RECEIVED)

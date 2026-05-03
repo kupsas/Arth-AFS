@@ -35,7 +35,7 @@ from api.models import ProcessedEmail
 from pipeline import config as pipeline_config
 from pipeline.db_writer import write_to_db
 from pipeline.holding_pipeline import ingest_holdings, ingest_investment_transactions
-from pipeline.llm_classifier import classify_llm
+from pipeline.llm_classifier import classify_llm, import_flow_llm_status
 from pipeline.models import ParsedTransaction
 from pipeline.rules_classifier import classify_rules
 from pipeline.transformer import transform
@@ -47,6 +47,7 @@ from scraper.gmail_client import GmailClient, GmailMessage
 from scraper.secrets_context import statement_secrets_context
 
 from api.services.classifier_runtime import user_classifier_runtime
+from api.services.email_import_flow_log import EmailImportFlowLog
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +206,7 @@ def _process_email(
     session: Session,
     parser_registry: dict[str, list[BaseEmailParser]],
     user_id: str,
+    import_flow_log: EmailImportFlowLog | None = None,
 ) -> tuple[str, int]:
     """Process one email through the full pipeline.
 
@@ -216,6 +218,13 @@ def _process_email(
         Exception — any error during body download, parsing, or DB write.
         The caller is responsible for catching and recording the failure.
     """
+    if import_flow_log:
+        subj = (msg.subject or "")[:200]
+        import_flow_log.write(
+            "gmail_message_read",
+            f"id={msg.id} subject={subj!r}",
+        )
+
     # ── Step 1: subject-line filter ──────────────────────────────────────────
     # find_parser() does a cheap string-match on subject.  No body download yet.
     parser = find_parser(msg.sender, msg.subject, registry=parser_registry)
@@ -228,6 +237,11 @@ def _process_email(
             "No parser for sender='%s' subject='%s' — skipping",
             msg.sender, msg.subject[:80],
         )
+        if import_flow_log:
+            import_flow_log.write(
+                "rules_routing",
+                "no email parser matched this subject — skipped (not a known bank alert template)",
+            )
         return "skipped", 0
 
     # ── Step 2: download body or PDF attachments ─────────────────────────────
@@ -241,6 +255,8 @@ def _process_email(
 
     with statement_secrets_context(session, user_id):
         if parse_type == "attachment":
+            if import_flow_log:
+                import_flow_log.write("email_body_fetch", "attachment mode — fetching PDF part(s)")
             attachments = client.get_attachments(msg.id)
             if not attachments:
                 logger.debug(
@@ -248,6 +264,8 @@ def _process_email(
                     type(parser).__name__,
                     msg.id,
                 )
+                if import_flow_log:
+                    import_flow_log.write("parse", "no PDF attachments — skipped")
                 return "skipped", 0
             # Multi-PDF emails: parsers may accumulate holdings / inv_txns per file — reset once per message.
             reset_fn = getattr(parser, "reset_attachment_outputs", None)
@@ -272,6 +290,8 @@ def _process_email(
                 attachment_holdings.extend(h)
                 attachment_inv_txns.extend(t)
         else:
+            if import_flow_log:
+                import_flow_log.write("email_body_fetch", "HTML body mode — downloading message body")
             html_body = client.get_message_body(msg.id)
             parsed_txns = parser.parse(html_body, received_date)
 
@@ -287,7 +307,15 @@ def _process_email(
             type(parser).__name__,
             msg.subject[:80],
         )
+        if import_flow_log:
+            import_flow_log.write("parse", "parser returned no transactions — skipped")
         return "skipped", 0
+
+    if import_flow_log:
+        import_flow_log.write(
+            "parse",
+            f"parser={type(parser).__name__} bank_rows={len(parsed_txns)} inv_hint={bool(attachment_inv_txns or attachment_holdings)}",
+        )
 
     # ── Step 4: group ParsedTransactions by (account_id, source_key) ─────────
     # One email normally produces transactions for exactly one account, but
@@ -318,10 +346,19 @@ def _process_email(
 
             ucfg = pipeline_config_for_account_owner(session, account_id)
             classify_rules(canonical, ucfg)
+            if import_flow_log:
+                import_flow_log.write(
+                    "rules_classification",
+                    f"account_id={account_id} source_key={source_key} rows={len(canonical)} (deterministic rules applied)",
+                )
 
             # ── Step 7: LLM classifier ───────────────────────────────────────────
             # Fills counterparty, counterparty_category, and any remaining gaps.
+            if import_flow_log:
+                import_flow_log.write("llm_phase", import_flow_llm_status(canonical))
             classify_llm(canonical)
+            if import_flow_log:
+                import_flow_log.write("llm_phase", "classify_llm() finished for this group")
 
             # ── Step 8: write to DB ──────────────────────────────────────────────
             # source_type="email" means:
@@ -338,6 +375,11 @@ def _process_email(
                 gmail_message_id=msg.id,
             )
             total_new += run.new_count
+            if import_flow_log:
+                import_flow_log.write(
+                    "db_write",
+                    f"source_key={source_key} new_txns={run.new_count} updated={run.updated_count}",
+                )
             logger.debug(
                 "    %s: %d new / %d backfilled / %d total canonical rows",
                 account_id, run.new_count, run.updated_count, run.txn_count,
@@ -354,6 +396,11 @@ def _process_email(
             gmail_message_id=msg.id,
         )
         total_new += int(hr.get("inserted", 0)) + int(tr.get("inserted", 0))
+        if import_flow_log:
+            import_flow_log.write(
+                "investment_ingest",
+                f"holdings_ins={hr.get('inserted')} inv_txns_ins={tr.get('inserted')}",
+            )
         logger.debug(
             "    investment: holdings upsert=%s/%s inv_txns inserted=%s skipped_dup=%s",
             hr.get("inserted"),
@@ -361,6 +408,9 @@ def _process_email(
             tr.get("inserted"),
             tr.get("skipped_duplicate"),
         )
+
+    if import_flow_log:
+        import_flow_log.write("email_done", f"status=processed new_transactions≈{total_new}")
 
     return "processed", total_new
 

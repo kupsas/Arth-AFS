@@ -174,3 +174,38 @@ def test_quarterly_cadence_flags_fully_empty_calendar_quarter(session: Session):
     # those zero months. At minimum Q2 2021 should appear.
     labels = [g["period_start"] for g in out[0]["gaps"]]
     assert "2021-04" in labels
+
+
+def test_filter_onboarding_alert_ids_without_statement_phase_keeps_all(session: Session):
+    from scraper.gap_detector import filter_onboarding_alert_ids_after_statements
+
+    items = [
+        {"id": "x1", "received_at": "2021-06-01T00:00:00+00:00"},
+        {"id": "x2", "received_at": "2021-05-01T00:00:00+00:00"},
+    ]
+    cfg: dict = {}
+    got = filter_onboarding_alert_ids_after_statements(
+        session, "u_gap_f", "any", cfg, items, had_statement_ids_at_init=False
+    )
+    assert got == ["x2", "x1"]
+
+
+def test_build_source_key_meta_prefers_monthly_cadence() -> None:
+    from scraper.gap_detector import _build_source_key_meta
+
+    cfg = {
+        "alerts@bank.com": {
+            "display_name": "Alerts",
+            "source_type": "savings",
+            "expected_cadence": "per_transaction",
+            "accounts": {"1": {"source_key": "shared", "account_id": "A"}},
+        },
+        "stmt@bank.com": {
+            "display_name": "Stmt",
+            "source_type": "savings",
+            "expected_cadence": "monthly",
+            "accounts": {"1": {"source_key": "shared", "account_id": "A"}},
+        },
+    }
+    meta = _build_source_key_meta(cfg)
+    assert meta["shared"]["expected_cadence"] == "monthly"

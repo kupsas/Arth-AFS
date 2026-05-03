@@ -1128,8 +1128,19 @@ export function fetchOnboardingBackfillProgress(
   transactions_parsed: number;
   unknowns_pending: number;
   error_message: string | null;
+  current_phase: string | null;
 }> {
   return get(`/api/onboarding/backfill/${encodeURIComponent(source)}/progress`);
+}
+
+/** POST /api/onboarding/persist-sources — seed scraper DB rows from last discovery scan. */
+export function postOnboardingPersistSources(): Promise<{
+  ok: boolean;
+  senders_processed: number;
+  senders_skipped: number;
+  accounts_inferred: number;
+}> {
+  return post("/api/onboarding/persist-sources", {});
 }
 
 /** POST /api/onboarding/backfill/{source}/resume — clear paused-only gate. */

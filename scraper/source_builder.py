@@ -1,0 +1,450 @@
+"""
+Build per-user ``ScraperBankSender`` + ``ScraperAccountMapping`` rows from Gmail discovery.
+
+Onboarding runs :func:`discover_sources_iter` first (cheap header probes).  This module
+fills the SQLite tables that :func:`scraper.config_loader.get_bank_senders_config` reads
+by sampling a few full messages per discovered sender and inferring last-4 digits from
+subjects/HTML (heuristic — same idea as the parsers, without duplicating every bank regex).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from typing import Any
+
+from sqlmodel import Session, select
+
+from api.models import ScraperAccountMapping, ScraperBankSender, UserPipelineSource
+from api.services.family_member_utils import self_member_id
+from scraper.config import BANK_SENDERS
+from scraper.email_router import _normalise_sender
+from scraper.gmail_client import GmailClient
+
+logger = logging.getLogger(__name__)
+
+# Masked card/account endings in bank mail — several shapes seen in production templates.
+# See ``hdfc_bank.py`` / ``icici_bank.py`` parsers: not everything uses ``**1234``.
+_LAST4_PATTERNS: list[re.Pattern[str]] = [
+    # HDFC inbound UPI / generic masks: **3703, ***3703
+    re.compile(r"\*{1,4}(\d{4})\b"),
+    # HDFC CC InstaAlert (legacy + 2026): "…Credit Card ending 1905 …"
+    re.compile(r"(?i)credit\s+card\s+ending\s+(\d{4})\b"),
+    # HDFC UPI outbound: "debited from account 3703"
+    re.compile(r"(?i)debited\s+from\s+account\s+(\d{4})\b"),
+    re.compile(r"(?i)has\s+been\s+debited\s+from\s+account\s+(\d{4})\b"),
+    # HDFC UPI inbound: "credited to your account **3703"
+    re.compile(r"(?i)credited\s+to\s+your\s+account\s+\*{1,4}(\d{4})\b"),
+    re.compile(r"(?i)your\s+account\s+\*{1,4}(\d{4})\b"),
+    # ICICI IMPS/NEFT: "Savings Account XXXX6118"
+    re.compile(r"(?i)icici\s+bank\s+savings\s+account\s+[xX*]{2,}(\d{4})\b"),
+    re.compile(r"(?i)savings\s+account\s+[xX]{3,}(\d{4})\b"),
+    # Legacy HDFC email statement subject/body: "…HDFC Bank Account 3703 for…"
+    re.compile(r"(?i)hdfc\s+bank\s+account\s+(\d{4})\s+for\b"),
+    re.compile(r"(?i)bank\s+account\s+(\d{4})\s+for\s+the\s+period\b"),
+]
+
+# ICICI often masks savings as XX118 (2 X + 3 digits) or XXXX118 (4 X + 3 digits) —
+# the visible tail is the last three digits of the account last-four (e.g. 6118 → 118).
+_ICICI_PARTIAL_TAIL3: list[re.Pattern[str]] = [
+    re.compile(r"(?i)your\s+icici\s+bank\s+account\s+[xX]{2}(\d{3})\b"),
+    re.compile(r"(?i)your\s+icici\s+bank\s+account\s+[xX]{4}(\d{3})\b"),
+    re.compile(r"(?i)from\s+your\s+icici\s+bank\s+savings\s+account\s+[xX]{2}(\d{3})\b"),
+    re.compile(r"(?i)from\s+your\s+icici\s+bank\s+savings\s+account\s+[xX]{4}(\d{3})\b"),
+    re.compile(r"(?i)icici\s+bank\s+savings\s+account\s+[xX]{4}(\d{3})\b"),
+    re.compile(r"(?i)icici\s+bank\s+savings\s+account\s+[xX]{2}(\d{3})\b"),
+]
+
+
+def _template_for_sender(sender_norm: str) -> dict[str, Any] | None:
+    row = BANK_SENDERS.get(sender_norm)
+    if not row:
+        logger.warning("persist-sources: sender %r not in BANK_SENDERS template — skip", sender_norm)
+        return None
+    return dict(row)
+
+
+def _normalise_sample_chunks(parser_key: str, sample_texts: list[str]) -> str:
+    """Turn Gmail samples into plain text similar to what bank email parsers see.
+
+    Raw ``get_message_body`` returns HTML; InstaAlert regexes in ``hdfc_bank`` /
+    ``icici_bank`` run on **plain** text extracted from specific tags.  Reuse those
+    extractors so last-4 heuristics see the same digits the parsers would.
+    """
+    pk = (parser_key or "").strip().lower()
+    chunks: list[str] = []
+    for t in sample_texts:
+        if not t:
+            continue
+        looks_html = "<" in t and ">" in t
+        if looks_html and pk in ("hdfc_bank", "hdfc_cc_statement", "hdfc_combined_statement"):
+            from scraper.email_parsers.hdfc_bank import _extract_hdfc_body_text
+
+            chunks.append(_extract_hdfc_body_text(t))
+        elif looks_html and pk in ("icici_bank", "icici_statement"):
+            from scraper.email_parsers.icici_bank import _extract_icici_body_text
+
+            chunks.append(_extract_icici_body_text(t))
+        else:
+            chunks.append(t)
+    return "\n".join(chunks)
+
+
+def _icici_three_digit_tails_from_blob(blob: str) -> set[str]:
+    """Collect 3-digit tails after ICICI X-masks (XX118 / XXXX118 style)."""
+    out: set[str] = set()
+    for pat in _ICICI_PARTIAL_TAIL3:
+        for m in pat.finditer(blob):
+            t = m.group(1)
+            if len(t) == 3 and t.isdigit():
+                out.add(t)
+    return out
+
+
+def _full_last4_visible_in_blob(blob_lower: str, t3: str) -> str | None:
+    """If exactly one ``d+t3`` (four digits) appears as a standalone number in *blob*, return it."""
+    hits: list[str] = []
+    for d in "0123456789":
+        cand = f"{d}{t3}"
+        if re.search(rf"(?<![0-9]){cand}(?![0-9])", blob_lower):
+            hits.append(cand)
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        logger.warning(
+            "persist-sources: ICICI tail %r — multiple full last-4 appear in sample text: %s",
+            t3,
+            sorted(set(hits)),
+        )
+    return None
+
+
+def _resolve_icici_tail3_to_last4(
+    session: Session,
+    user_id: str,
+    tails: set[str],
+    blob_lower: str,
+) -> set[str]:
+    """Map 3-digit masked tails to canonical 4-digit ``last_4_digits`` keys."""
+    resolved: set[str] = set()
+    if not tails:
+        return resolved
+
+    for t3 in sorted(tails):
+        via_blob = _full_last4_visible_in_blob(blob_lower, t3)
+        if via_blob:
+            resolved.add(via_blob)
+            continue
+
+        rows = session.exec(
+            select(ScraperAccountMapping).where(
+                ScraperAccountMapping.user_id == user_id,
+                ScraperAccountMapping.source_key == "icici_savings",
+            )
+        ).all()
+        from_maps = sorted(
+            {
+                r.last_4_digits
+                for r in rows
+                if len(r.last_4_digits) == 4 and r.last_4_digits.isdigit() and r.last_4_digits.endswith(t3)
+            }
+        )
+        if len(from_maps) == 1:
+            resolved.add(from_maps[0])
+            continue
+        if len(from_maps) > 1:
+            logger.warning(
+                "persist-sources: ICICI tail %r matches several saved last_4 values: %s",
+                t3,
+                from_maps,
+            )
+            continue
+
+        psrc = session.exec(
+            select(UserPipelineSource).where(
+                UserPipelineSource.user_id == user_id,
+                UserPipelineSource.source_key == "icici_savings",
+            )
+        ).all()
+        from_pipeline: list[str] = []
+        for ps in psrc:
+            aid = (ps.account_id or "").strip()
+            m = re.search(r"(\d{4})\s*$", aid)
+            if m and len(m.group(1)) == 4 and m.group(1).isdigit() and m.group(1).endswith(t3):
+                from_pipeline.append(m.group(1))
+        uniq_p = sorted(set(from_pipeline))
+        if len(uniq_p) == 1:
+            resolved.add(uniq_p[0])
+        elif len(uniq_p) > 1:
+            logger.warning(
+                "persist-sources: ICICI tail %r matches several user_pipeline_sources account_ids: %s",
+                t3,
+                uniq_p,
+            )
+
+    return resolved
+
+
+def _collect_last4s_from_text(
+    blob: str,
+    *,
+    parser_key: str,
+    session: Session | None = None,
+    user_id: str | None = None,
+) -> set[str]:
+    """Find candidate last-4 digit groups from subjects + bodies (plain or HTML)."""
+    found: set[str] = set()
+    for pat in _LAST4_PATTERNS:
+        for m in pat.finditer(blob):
+            d4 = m.group(1)
+            if len(d4) == 4 and d4.isdigit():
+                found.add(d4)
+    # Statement subjects often carry product keywords instead of bodies (PDF-only).
+    pk = (parser_key or "").strip().lower()
+    if pk == "hdfc_cc_statement":
+        low = blob.lower()
+        if "diners privilege" in low or "diners club" in low:
+            found.add("5778")
+        if "swiggy" in low:
+            found.add("1905")
+
+    if pk in ("icici_bank", "icici_statement") and session is not None and user_id:
+        tail3 = _icici_three_digit_tails_from_blob(blob)
+        if tail3:
+            found |= _resolve_icici_tail3_to_last4(session, user_id, tail3, blob.lower())
+
+    return found
+
+
+def _infer_account_for_last4(
+    last4: str,
+    *,
+    parser_key: str,
+    sample_blob: str,
+) -> tuple[str, str] | None:
+    """Return ``(account_id, source_key)`` for a masked last-4, or ``None``."""
+    pk = (parser_key or "").strip().lower()
+    blob = sample_blob.lower()
+
+    if pk in ("hdfc_cc_statement",):
+        return (f"HDFC_CC_{last4}", f"hdfc_cc_{last4}")
+
+    if pk in ("hdfc_combined_statement",):
+        return (f"HDFC_SAL_{last4}", "hdfc_savings")
+
+    if pk in ("icici_statement",):
+        return (f"ICICI_SAV_{last4}", "icici_savings")
+
+    if pk in ("icici_bank",):
+        return (f"ICICI_SAV_{last4}", "icici_savings")
+
+    if pk in ("hdfc_bank",):
+        if "credit card" in blob or "payment was made using your credit card" in blob:
+            return (f"HDFC_CC_{last4}", f"hdfc_cc_{last4}")
+        return (f"HDFC_SAL_{last4}", "hdfc_savings")
+
+    logger.warning(
+        "persist-sources: unknown parser_key=%r — cannot infer account for last4=%s",
+        parser_key,
+        last4,
+    )
+    return None
+
+
+def _infer_accounts_dict(
+    cfg: dict[str, Any],
+    sample_texts: list[str],
+    *,
+    session: Session,
+    user_id: str,
+) -> dict[str, dict[str, str]]:
+    """Build ``accounts`` dict (last_4 → account_id, source_key) for one sender."""
+    parser_key = str(cfg.get("parser_key") or "")
+    blob = _normalise_sample_chunks(parser_key, sample_texts)
+
+    # Broker NSE PDFs — always use template placeholder (body is not reliable for last-4).
+    if parser_key == "icici_direct_trade":
+        tmpl = cfg.get("accounts") or {}
+        accounts: dict[str, dict[str, str]] = {}
+        if isinstance(tmpl, dict):
+            for k, v in tmpl.items():
+                if isinstance(v, dict) and "account_id" in v and "source_key" in v:
+                    accounts[str(k)] = {
+                        "account_id": str(v["account_id"]),
+                        "source_key": str(v["source_key"]),
+                    }
+        return accounts
+
+    last4s = _collect_last4s_from_text(blob, parser_key=parser_key, session=session, user_id=user_id)
+    accounts = {}
+    for last4 in sorted(last4s):
+        pair = _infer_account_for_last4(last4, parser_key=parser_key, sample_blob=blob)
+        if pair:
+            accounts[last4] = {"account_id": pair[0], "source_key": pair[1]}
+
+    return accounts
+
+
+def _delete_sender_rows(session: Session, user_id: str, sender_norm: str) -> None:
+    for row in session.exec(
+        select(ScraperAccountMapping).where(
+            ScraperAccountMapping.user_id == user_id,
+            ScraperAccountMapping.sender_email == sender_norm,
+        )
+    ).all():
+        session.delete(row)
+    sender_row = session.exec(
+        select(ScraperBankSender).where(
+            ScraperBankSender.user_id == user_id,
+            ScraperBankSender.sender_email == sender_norm,
+        )
+    ).first()
+    if sender_row:
+        session.delete(sender_row)
+    # Ensure DELETE hits the DB before any INSERT with the same UNIQUE key in this
+    # session (SQLite + SQLAlchemy can otherwise order INSERT before DELETE in one flush).
+    session.flush()
+
+
+def _upsert_sender_with_accounts(
+    session: Session,
+    user_id: str,
+    sender_norm: str,
+    cfg: dict[str, Any],
+    accounts: dict[str, dict[str, str]],
+    member_id: int | None,
+) -> None:
+    pats = cfg.get("discovery_subject_patterns")
+    meta_json = json.dumps(pats) if isinstance(pats, list) else None
+    session.add(
+        ScraperBankSender(
+            user_id=user_id,
+            sender_email=sender_norm,
+            parser_key=str(cfg["parser_key"]) if cfg.get("parser_key") else None,
+            first_run_lookback_days=cfg.get("first_run_lookback_days"),
+            enabled=True,
+            display_name=cfg.get("display_name"),
+            source_type=cfg.get("source_type"),
+            expected_cadence=cfg.get("expected_cadence"),
+            discovery_subject_patterns_json=meta_json,
+        )
+    )
+    for last4, acct in accounts.items():
+        session.add(
+            ScraperAccountMapping(
+                user_id=user_id,
+                sender_email=sender_norm,
+                last_4_digits=str(last4),
+                account_id=str(acct["account_id"]),
+                source_key=str(acct["source_key"]),
+                member_id=member_id,
+            )
+        )
+
+
+def persist_scraper_sources_from_discovery(
+    session: Session,
+    user_id: str,
+    gmail_client: GmailClient,
+    discovery_envelope: dict[str, Any],
+) -> dict[str, Any]:
+    """Upsert scraper tables for every discovered sender with ``email_count_estimate > 0``.
+
+    Args:
+        session: Open SQLModel session (caller commits).
+        user_id: Authenticated Arth username.
+        gmail_client: Authenticated Gmail client.
+        discovery_envelope: Parsed ``OnboardingState.discovery_results_json`` dict
+            (must contain ``sources``: list of rows with ``sender_email``, ``email_count_estimate``).
+
+    Returns:
+        Summary dict with ``senders_processed``, ``senders_skipped``, ``accounts_inferred`` (int).
+    """
+    sources = discovery_envelope.get("sources")
+    if not isinstance(sources, list):
+        raise ValueError("discovery envelope must contain a 'sources' list")
+
+    uid = (user_id or "").strip()
+    if not uid:
+        raise ValueError("user_id must not be empty")
+
+    mid = self_member_id(session, uid)
+    processed = 0
+    skipped = 0
+    inferred_digits = 0
+    # Discovery payloads may list the same sender twice. Without a flush between
+    # senders, the second pass does not see the first pending INSERT, so we would
+    # try another INSERT and hit UNIQUE(user_id, sender_email).
+    seen_sender: set[str] = set()
+
+    for raw in sources:
+        if not isinstance(raw, dict):
+            skipped += 1
+            continue
+        sender_raw = raw.get("sender_email")
+        if not isinstance(sender_raw, str) or not sender_raw.strip():
+            skipped += 1
+            continue
+        est = raw.get("email_count_estimate")
+        try:
+            n_est = int(est) if est is not None else 0
+        except (TypeError, ValueError):
+            n_est = 0
+        if n_est <= 0:
+            continue
+
+        sender_norm = _normalise_sender(sender_raw)
+        if sender_norm in seen_sender:
+            skipped += 1
+            continue
+
+        cfg = _template_for_sender(sender_norm)
+        if not cfg:
+            skipped += 1
+            continue
+
+        sample_texts: list[str] = []
+        try:
+            q = f"from:{sender_norm} after:2000/01/01"
+            hits = gmail_client.search_messages(
+                q,
+                paginate=False,
+                max_results_per_page=min(5, max(1, n_est)),
+            )
+            for m in hits[:3]:
+                sample_texts.append(m.subject or "")
+                try:
+                    body = gmail_client.get_message_body(m.id)
+                    sample_texts.append(body[:8000])
+                except Exception:
+                    logger.debug("persist-sources: no body for id=%s", m.id, exc_info=True)
+        except Exception:
+            logger.warning(
+                "persist-sources: Gmail sample failed for sender=%r — using subject-only",
+                sender_norm,
+                exc_info=True,
+            )
+
+        accounts = _infer_accounts_dict(cfg, sample_texts, session=session, user_id=uid)
+        if not accounts:
+            logger.warning(
+                "persist-sources: no last-4 inferred for sender=%r (parser_key=%r) — skip",
+                sender_norm,
+                cfg.get("parser_key"),
+            )
+            skipped += 1
+            continue
+
+        inferred_digits += len(accounts)
+        _delete_sender_rows(session, uid, sender_norm)
+        _upsert_sender_with_accounts(session, uid, sender_norm, cfg, accounts, mid)
+        seen_sender.add(sender_norm)
+        session.flush()
+        processed += 1
+
+    return {
+        "senders_processed": processed,
+        "senders_skipped": skipped,
+        "accounts_inferred": inferred_digits,
+    }

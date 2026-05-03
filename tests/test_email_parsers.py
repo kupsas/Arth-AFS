@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from scraper.config import BANK_SENDERS
+from tests.email_parser_test_accounts import HDFC_ALERT_ACCOUNTS, ICICI_INSTA_ACCOUNTS
 from scraper.email_parsers.hdfc_bank import (
     HDFCAccountUpdateParser,
     HDFCCreditCardAlertParser,
@@ -39,8 +39,8 @@ FIXTURES = Path(__file__).parent / "fixtures" / "email_samples"
 
 # Parser instances — one per bank sender, built with the live config so account
 # lookups (last-4 → account_id) use the same values as production.
-HDFC_ACCTS  = BANK_SENDERS["alerts@hdfcbank.net"]["accounts"]
-ICICI_ACCTS = BANK_SENDERS["customernotification@icici.bank.in"]["accounts"]
+HDFC_ACCTS = HDFC_ALERT_ACCOUNTS
+ICICI_ACCTS = ICICI_INSTA_ACCOUNTS
 
 HDFC_CC_PARSER     = HDFCCreditCardAlertParser(HDFC_ACCTS)
 HDFC_UPI_PARSER    = HDFCUPIAlertParser(HDFC_ACCTS)

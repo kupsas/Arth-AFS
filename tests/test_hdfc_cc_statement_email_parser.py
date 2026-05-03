@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from scraper.config import BANK_SENDERS
+from tests.email_parser_test_accounts import HDFC_CC_STATEMENT_ACCOUNTS
 from scraper.email_parsers.hdfc_cc_statement import HDFCCCStatementEmailParser
 
 
 @pytest.fixture
 def parser() -> HDFCCCStatementEmailParser:
-    accounts = BANK_SENDERS["emailstatements.cards@hdfcbank.net"]["accounts"]
+    accounts = HDFC_CC_STATEMENT_ACCOUNTS
     return HDFCCCStatementEmailParser(accounts)
 
 

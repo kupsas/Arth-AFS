@@ -169,6 +169,22 @@ def _build_work_items(txns: list[CanonicalTransaction]) -> list[tuple[int, dict]
     return work
 
 
+def import_flow_llm_status(txns: list[CanonicalTransaction]) -> str:
+    """One-line description of what :func:`classify_llm` will do next (diagnostic logs).
+
+    Mirrors the gating inside :func:`classify_llm` without running it.
+    """
+    llm_model = _cfg.LLM_MODEL
+    if llm_model == "none":
+        return "LLM disabled (LLM_MODEL=none)"
+    if not _has_any_provider_api_key():
+        return "LLM skipped — no provider API keys configured (rules-only)"
+    n_work = len(_build_work_items(txns))
+    if n_work == 0:
+        return "LLM not needed — rules filled all fields that the LLM would set"
+    return f"LLM will run for {n_work} row(s); model={llm_model}"
+
+
 def build_txn_context(txn: CanonicalTransaction, needs: list[str]) -> dict:
     """Package all transaction fields into a dict for the LLM prompt.
 

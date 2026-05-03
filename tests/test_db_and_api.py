@@ -19,7 +19,7 @@ from sqlmodel import Session, SQLModel, create_engine
 from api.auth import get_current_user
 from api.main import app
 from api.database import get_session
-from api.models import PipelineRun, Transaction
+from api.models import PipelineRun, Transaction, UserPipelineSource
 from pipeline.db_writer import compute_content_hash, write_to_db
 from pipeline.models import (
     CanonicalTransaction,
@@ -461,10 +461,21 @@ class TestPipelineTrigger:
         resp = client.post("/api/pipeline/run", json={"source_key": "nope"})
         assert resp.status_code == 400
 
-    def test_valid_source_returns_run_ids(self, client: TestClient):
+    def test_valid_source_returns_run_ids(self, client: TestClient, session: Session):
         """Triggering a valid source returns run IDs (the background thread
         will fail because we don't have real data files, but the API response
         itself should be immediate and correct)."""
+        # Source configs are now DB-driven; seed one so the route can validate
+        # the requested source_key and return 200 before the background job runs.
+        session.add(UserPipelineSource(
+            user_id="sashank",
+            source_key="hdfc_savings",
+            account_id="HDFC_SAL_3703",
+            currency="INR",
+            statement_folder="HDFC_Savings",
+        ))
+        session.commit()
+
         resp = client.post("/api/pipeline/run", json={
             "source_key": "hdfc_savings",
             "llm_model": "none",

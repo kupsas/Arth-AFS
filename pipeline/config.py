@@ -9,8 +9,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from dotenv import load_dotenv
+
+if TYPE_CHECKING:
+    from sqlmodel import Session
 
 load_dotenv()
 
@@ -72,33 +76,39 @@ GSHEET_BENCHMARK_FILE = DATA_DIR / "GSheet_Transactions_modifiedForLLMTraining.c
 
 # ---------------------------------------------------------------------------
 # Source configs  (parser_key -> metadata used by transformer / classifier)
-# To add a new source: add an entry here and a parser in parsers/__init__.py
+# Per-user rows live in SQLite ``user_pipeline_sources``; use
+# :func:`get_source_configs` with a ``Session`` and ``ARTH_USER_ID`` (CLI) or
+# the logged-in username (API). This dict stays empty so imports remain valid.
+# To add a new source for a user: insert a row (see ``scripts/migrate_sashank_config_to_db.py``)
+# and register a parser in ``parsers/__init__.py``.
 # ---------------------------------------------------------------------------
-SOURCE_CONFIGS: dict[str, dict] = {
-    "hdfc_savings": {
-        "account_id": "HDFC_SAL_3703",
-        "currency": "INR",
-        "source_statement": "HDFC_Savings",   # directory of yearly .txt files
-    },
-    # HDFC credit cards — each key points at a directory of 12 monthly CSVs.
-    # The HDFCCreditCardParser.parse() accepts either a file or a directory.
-    "hdfc_cc_1905": {
-        "account_id": "HDFC_CC_1905",
-        "currency": "INR",
-        "source_statement": "1905_CC",   # directory of monthly CSVs
-    },
-    "hdfc_cc_5778": {
-        "account_id": "HDFC_CC_5778",
-        "currency": "INR",
-        "source_statement": "5778_CC",   # directory of monthly CSVs
-    },
-    # ICICI savings account — directory of yearly PDFs
-    "icici_savings": {
-        "account_id": "ICICI_SAV_6118",
-        "currency": "INR",
-        "source_statement": "ICICI_Savings",   # directory of yearly .pdf files
-    },
-}
+SOURCE_CONFIGS: dict[str, dict] = {}
+
+
+def get_source_configs(user_id: str, session: Session) -> dict[str, dict]:
+    """Load file-pipeline source metadata for *user_id* from ``UserPipelineSource``.
+
+    Returns the same shape historically stored in ``SOURCE_CONFIGS``:
+    ``{ source_key: { "account_id", "currency", "source_statement" } }`` where
+    ``source_statement`` is the folder name under :data:`DATA_DIR` (DB column
+    ``statement_folder``).
+    """
+    from sqlmodel import select
+
+    from api.models import UserPipelineSource
+
+    rows = session.exec(
+        select(UserPipelineSource).where(UserPipelineSource.user_id == user_id)
+    ).all()
+    out: dict[str, dict] = {}
+    for r in rows:
+        folder = (r.statement_folder or "").strip() or r.source_key
+        out[r.source_key] = {
+            "account_id": r.account_id,
+            "currency": r.currency or "INR",
+            "source_statement": folder,
+        }
+    return out
 
 # ---------------------------------------------------------------------------
 # LLM model selection

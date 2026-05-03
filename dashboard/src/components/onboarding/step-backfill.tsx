@@ -20,6 +20,8 @@ export type BackfillProgressSnapshot = {
   transactions_parsed: number
   unknowns_pending: number
   error_message: string | null
+  /** ``statements`` / ``alerts`` when the server runs statement-first import (optional). */
+  current_phase?: string | null
 }
 
 export type StepBackfillProps = {
@@ -37,6 +39,10 @@ function statusLabel(status: string | undefined): string {
   switch (status) {
     case "idle":
       return "Getting ready"
+    case "processing_statements":
+      return "Importing statement emails"
+    case "processing_alerts":
+      return "Filling gaps with alerts"
     case "processing":
       return "Working through your mail"
     case "needs_classification":

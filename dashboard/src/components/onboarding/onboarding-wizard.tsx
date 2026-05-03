@@ -10,6 +10,7 @@
  *   Settings sheet for **Connect account** — pass ``mode`` + ``className`` only.
  */
 
+import { useQueryClient } from "@tanstack/react-query"
 import * as React from "react"
 
 import { GoalTemplateWizard } from "@/components/onboarding/goal-template-wizard"
@@ -27,10 +28,16 @@ import {
   patchOnboardingState,
   postOnboardingBackfillChunk,
   postOnboardingBackfillResume,
+  postOnboardingPersistSources,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { humanizeSourceKey } from "@/lib/source-label"
-import { useOnboardingBackfillSources, useOnboardingState } from "@/hooks/use-onboarding"
+import {
+  onboardingBackfillSourcesKey,
+  onboardingStateKey,
+  useOnboardingBackfillSources,
+  useOnboardingState,
+} from "@/hooks/use-onboarding"
 import { getUserFacingErrorMessage } from "@/lib/user-facing-api-error"
 
 export type WizardStepId =
@@ -117,6 +124,25 @@ export function OnboardingWizard({
   const [bfError, setBfError] = React.useState<string | null>(null)
   const [classifySource, setClassifySource] = React.useState<string | null>(null)
   const [resumeBusy, setResumeBusy] = React.useState(false)
+
+  const queryClient = useQueryClient()
+  const [discPersistBusy, setDiscPersistBusy] = React.useState(false)
+  const [discPersistError, setDiscPersistError] = React.useState<string | null>(null)
+
+  const handleDiscoveryContinue = React.useCallback(async () => {
+    setDiscPersistError(null)
+    setDiscPersistBusy(true)
+    try {
+      await postOnboardingPersistSources()
+      await queryClient.invalidateQueries({ queryKey: [...onboardingBackfillSourcesKey] })
+      await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
+      setUserPanel("preclass")
+    } catch (e) {
+      setDiscPersistError(getUserFacingErrorMessage(e))
+    } finally {
+      setDiscPersistBusy(false)
+    }
+  }, [queryClient])
 
   const activeSourceKey = sourcesQ.data?.[bfSourceIdx]?.source_key ?? null
   const activeSourceLabel = activeSourceKey ? humanizeSourceKey(activeSourceKey) : null
@@ -304,7 +330,13 @@ export function OnboardingWizard({
           <StepWelcome onContinue={() => setUserPanel("discovery")} />
         )}
         {panel === "discovery" && (
-          <StepDiscovery onContinue={() => setUserPanel("preclass")} />
+          <StepDiscovery
+            onContinue={() => {
+              void handleDiscoveryContinue()
+            }}
+            persistBusy={discPersistBusy}
+            persistError={discPersistError}
+          />
         )}
         {panel === "preclass" && (
           <div className="space-y-4">

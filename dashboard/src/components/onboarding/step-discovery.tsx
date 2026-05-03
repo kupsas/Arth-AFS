@@ -85,11 +85,14 @@ function DiscoverySenderDetailTable({ rows }: { rows: OnboardingDiscoveryStreamR
   )
 }
 
-export type StepDiscoveryProps = {
+export interface StepDiscoveryProps {
   onContinue: () => void
+  /** While ``POST /api/onboarding/persist-sources`` runs after Continue. */
+  persistBusy?: boolean
+  persistError?: string | null
 }
 
-export function StepDiscovery({ onContinue }: StepDiscoveryProps) {
+export function StepDiscovery({ onContinue, persistBusy = false, persistError = null }: StepDiscoveryProps) {
   const onboardingState = useOnboardingState()
   const {
     runDiscover,
@@ -329,12 +332,18 @@ export function StepDiscovery({ onContinue }: StepDiscoveryProps) {
         </Card>
       )}
 
+      {persistError ? (
+        <OnboardingErrorCallout title="Could not save email sources" hint="Check Gmail is still connected, then try Continue again.">
+          {persistError}
+        </OnboardingErrorCallout>
+      ) : null}
+
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant="outline" onClick={() => void runRescan()} disabled={isPending}>
           Re-scan
         </Button>
-        <Button type="button" onClick={() => onContinue()} disabled={!canContinue}>
-          Continue
+        <Button type="button" onClick={() => onContinue()} disabled={!canContinue || persistBusy}>
+          {persistBusy ? "Saving sources…" : "Continue"}
         </Button>
       </div>
     </div>

@@ -21,15 +21,13 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from sqlmodel import Session, col, select
 
+from api.auth import get_current_user
 from api.database import get_engine, get_session
 from api.models import PipelineRun
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# Valid source keys that the API accepts (+ "all" to run everything)
-_VALID_SOURCES = {"hdfc_savings", "hdfc_cc_1905", "hdfc_cc_5778", "icici_savings", "all"}
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -70,23 +68,33 @@ def trigger_pipeline_run(
     body: PipelineRunRequest,
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ):
     """Start a pipeline run in a background thread.
 
     Returns immediately with the run ID(s) so the client can poll for status.
     """
-    if body.source_key not in _VALID_SOURCES:
+    from pipeline import config
+
+    source_configs = config.get_source_configs(current_user, session)
+    valid_keys = set(source_configs.keys())
+    allowed = valid_keys | {"all"}
+    if body.source_key not in allowed:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid source_key: {body.source_key!r}. "
-                   f"Valid options: {sorted(_VALID_SOURCES)}",
+                   f"Valid options for this user: {sorted(allowed)}",
         )
-
-    from pipeline.config import SOURCE_CONFIGS
+    if body.source_key == "all" and not valid_keys:
+        raise HTTPException(
+            status_code=400,
+            detail="No pipeline sources configured for this user "
+                   "(user_pipeline_sources is empty).",
+        )
 
     # Determine which sources to run
     if body.source_key == "all":
-        source_keys = list(SOURCE_CONFIGS.keys())
+        source_keys = sorted(valid_keys)
     else:
         source_keys = [body.source_key]
 
@@ -107,7 +115,7 @@ def trigger_pipeline_run(
     # Kick off the actual pipeline work in a background thread
     thread = threading.Thread(
         target=_run_pipeline_background,
-        args=(run_ids, source_keys, body.llm_model),
+        args=(run_ids, source_keys, body.llm_model, current_user),
         daemon=True,
     )
     thread.start()
@@ -162,6 +170,7 @@ def _run_pipeline_background(
     run_ids: list[int],
     source_keys: list[str],
     llm_model: str,
+    user_id: str,
 ) -> None:
     """Execute the pipeline in a background thread.
 
@@ -191,7 +200,8 @@ def _run_pipeline_background(
                 continue
 
             try:
-                source_cfg = config.SOURCE_CONFIGS[source_key]
+                source_cfgs = config.get_source_configs(user_id, session)
+                source_cfg = source_cfgs[source_key]
                 parser_cls = PARSER_REGISTRY[source_key]
                 parser = parser_cls()
                 input_file = config.DATA_DIR / source_cfg["source_statement"]
@@ -319,6 +329,7 @@ async def upload_statement(
     llm_model: str = Query("auto"),
     *,
     session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
 ) -> UploadResponse:
     """Upload a bank statement file and automatically run the pipeline on it.
 
@@ -333,16 +344,20 @@ async def upload_statement(
     The file is saved temporarily to data/uploads/, the pipeline runs in a
     background thread, and the temporary file is cleaned up after processing.
     """
+    from pipeline import config
+
     filename = file.filename or "upload.txt"
 
     detected_source = source_key or _detect_source_key(filename)
-    if detected_source not in _VALID_SOURCES or detected_source == "all":
+    user_sources = config.get_source_configs(current_user, session)
+    valid_for_user = set(user_sources.keys())
+    if detected_source not in valid_for_user:
         raise HTTPException(
             status_code=400,
             detail=(
                 f"Could not auto-detect source from filename {filename!r}. "
-                f"Please specify source_key. Valid options: "
-                f"{sorted(s for s in _VALID_SOURCES if s != 'all')}"
+                f"Please specify source_key. Valid options for this user: "
+                f"{sorted(valid_for_user)}"
             ),
         )
 
@@ -374,7 +389,7 @@ async def upload_statement(
     # Kick off background processing
     thread = threading.Thread(
         target=_run_upload_background,
-        args=(run_id, detected_source, tmp_path, llm_model),
+        args=(run_id, detected_source, tmp_path, llm_model, current_user),
         daemon=True,
     )
     thread.start()
@@ -415,6 +430,7 @@ def _run_upload_background(
     source_key: str,
     input_file: Path,
     llm_model: str,
+    user_id: str,
 ) -> None:
     """Process an uploaded statement file in a background thread.
 
@@ -446,7 +462,8 @@ def _run_upload_background(
             return
 
         try:
-            source_cfg = config.SOURCE_CONFIGS[source_key]
+            source_cfgs = config.get_source_configs(user_id, session)
+            source_cfg = source_cfgs[source_key]
             parser_cls = PARSER_REGISTRY[source_key]
             parser = parser_cls()
 

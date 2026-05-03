@@ -37,6 +37,7 @@ _MINI_BANK: BankSendersConfig = {
     "alerts@hdfcbank.bank.in": {
         "display_name": "HDFC",
         "source_type": "savings",
+        "expected_cadence": "per_transaction",
         "accounts": {
             "3703": {"account_id": "HDFC_SAL_3703", "source_key": "hdfc_savings_test"},
         },
@@ -158,7 +159,7 @@ def test_run_onboarding_backfill_processes_chunk(
     p1 = r1.progress
     assert p1.get("emails_found") == 2
     assert p1.get("emails_processed") == 1
-    assert p1.get("status") == "processing"
+    assert p1.get("status") == "processing_statements"
 
     with patch("scraper.onboarding_orchestrator._record_email"), patch(
         "scraper.onboarding_orchestrator._get_processed_ids", return_value=set()

@@ -38,8 +38,10 @@ def get_bank_senders_config(session: Session, user_id: str) -> BankSendersConfig
         select(ScraperBankSender).where(ScraperBankSender.user_id == uid)
     ).all()
     if not senders:
-        logger.info(
-            "No scraper_bank_senders for user_id=%r — using scraper.config.BANK_SENDERS",
+        logger.warning(
+            "No scraper_bank_senders rows for user_id=%r — using empty-account template from "
+            "scraper.config.BANK_SENDERS (run scripts/migrate_sashank_config_to_db.py or "
+            "POST /api/onboarding/persist-sources after discovery).",
             uid,
         )
         return copy.deepcopy(BANK_SENDERS)

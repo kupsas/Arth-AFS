@@ -1,13 +1,14 @@
 """
 Scraper configuration — bank sender addresses, account mappings, file paths.
 
-This is the single place to change if your bank email address changes, you add
-a new account, or you want to tweak the polling interval.
+Per-user last-4 → account_id / source_key is stored in SQLite
+(``scraper_account_mappings``).  This module keeps **generic** Gmail sender metadata
+(parser_key, display_name, discovery regexes, expected_cadence) so discovery and
+code defaults stay in sync.  For a populated desktop DB, run once::
 
-BANK_SENDERS maps each sender email address to:
-  - parser_key: which parser module handles emails from this sender
-  - accounts: a dict of last-4-digits → account_id + source_key
-              (used by parsers to figure out WHICH account triggered the alert)
+    python scripts/migrate_sashank_config_to_db.py
+
+or use onboarding ``POST /api/onboarding/persist-sources`` after Gmail discovery.
 """
 
 from pathlib import Path
@@ -47,39 +48,22 @@ GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 # The "last_4_digits" key is what appears in the email body (card/account number).
 # Parsers use this lookup to stamp the correct account_id on each ParsedTransaction.
 
-# ICICI savings — shared account map for InstaAlerts (.bank.in) and statement PDFs.
-_ICICI_STATEMENT_ACCOUNTS: dict[str, dict] = {
-    "6118": {
-        "account_id": "ICICI_SAV_6118",
-        "source_key": "icici_savings",
-    },
-}
+# Per-user last-4 → account_id / source_key lives in SQLite
+# (``scraper_account_mappings``), not in this file.  Empty ``accounts`` here means
+# ``get_bank_senders_config`` falls back to this template only when the DB has no
+# rows — run ``python scripts/migrate_sashank_config_to_db.py`` once for your user,
+# or complete onboarding ``POST /api/onboarding/persist-sources``.
 
-# HDFC InstaAlerts historically used @hdfcbank.net; many alerts now come from
-# @hdfcbank.bank.in ("HDFC Bank InstaAlerts <...>"). Same parsers/accounts.
-_HDFC_BANK_ACCOUNTS: dict[str, dict] = {
-    "3703": {
-        "account_id": "HDFC_SAL_3703",
-        "source_key": "hdfc_savings",
-    },
-    "1905": {
-        "account_id": "HDFC_CC_1905",
-        "source_key": "hdfc_cc_1905",
-    },
-    "5778": {
-        "account_id": "HDFC_CC_5778",
-        "source_key": "hdfc_cc_5778",
-    },
-}
+# ICICI savings — InstaAlerts + statement PDFs share the same shape; mappings from DB.
+_ICICI_STATEMENT_ACCOUNTS: dict[str, dict] = {}
 
-# HDFC Card Statement PDF emails — same last-4 → account map as InstaAlerts, longer
-# first-run lookback so a monthly statement is not missed when onboarding a new sender.
-_HDFC_CC_STATEMENT_ACCOUNTS = {
-    "1905": _HDFC_BANK_ACCOUNTS["1905"],
-    "5778": _HDFC_BANK_ACCOUNTS["5778"],
-}
+# HDFC InstaAlerts (.net / .bank.in) — mappings from DB.
+_HDFC_BANK_ACCOUNTS: dict[str, dict] = {}
 
-# ICICI Direct trade PDFs — ``last_4`` is not used by the parser (placeholder for config shape).
+# HDFC Card Statement PDF — mappings from DB.
+_HDFC_CC_STATEMENT_ACCOUNTS: dict[str, dict] = {}
+
+# ICICI Direct / NSE trade PDFs — ``last_4`` is a structural placeholder (not a card).
 _ICICI_DIRECT_TRADE_ACCOUNTS: dict[str, dict] = {
     "0000": {
         "account_id": "ICICI_DIRECT",
@@ -174,7 +158,7 @@ BANK_SENDERS: dict[str, dict] = {
     # as pre-2024 "Email Account Statement"; we only parse **combined** subjects (see parser).
     "hdfcbanksmartstatement@hdfcbank.net": {
         "parser_key": "hdfc_combined_statement",
-        "accounts": {"3703": _HDFC_BANK_ACCOUNTS["3703"]},
+        "accounts": dict(_HDFC_BANK_ACCOUNTS),
         "first_run_lookback_days": 45,
         "display_name": "HDFC Smart / combined statement",
         "source_type": "savings",
@@ -183,7 +167,7 @@ BANK_SENDERS: dict[str, dict] = {
     },
     "hdfcbanksmartstatement@hdfcbank.bank.in": {
         "parser_key": "hdfc_combined_statement",
-        "accounts": {"3703": _HDFC_BANK_ACCOUNTS["3703"]},
+        "accounts": dict(_HDFC_BANK_ACCOUNTS),
         "first_run_lookback_days": 45,
         "display_name": "HDFC Smart / combined statement (.bank.in)",
         "source_type": "savings",

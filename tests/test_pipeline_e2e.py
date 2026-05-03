@@ -34,11 +34,44 @@ def test_pipeline_accuracy_no_regression() -> None:
     Parses the validation report output for per-field accuracy percentages
     and asserts each one is above the known baseline.
     """
+    import os
+
+    from sqlmodel import Session, select
+
+    from api.database import get_engine, init_db
+    from api.models import UserPipelineSource
+
+    uid = os.environ.get("ARTH_USER_ID", "sashank").strip() or "sashank"
+    init_db()
+    with Session(get_engine()) as session:
+        existing = session.exec(
+            select(UserPipelineSource).where(UserPipelineSource.user_id == uid)
+        ).first()
+        if existing is None:
+            for spec in (
+                ("hdfc_savings", "HDFC_SAL_3703", "HDFC_Savings"),
+                ("hdfc_cc_1905", "HDFC_CC_1905", "1905_CC"),
+                ("hdfc_cc_5778", "HDFC_CC_5778", "5778_CC"),
+                ("icici_savings", "ICICI_SAV_6118", "ICICI_Savings"),
+            ):
+                session.add(
+                    UserPipelineSource(
+                        user_id=uid,
+                        source_key=spec[0],
+                        account_id=spec[1],
+                        currency="INR",
+                        statement_folder=spec[2],
+                    )
+                )
+            session.commit()
+
+    env = {**os.environ, "ARTH_USER_ID": uid}
     result = subprocess.run(
         [sys.executable, "-m", "pipeline.run", "--validate", "--llm", "auto"],
         capture_output=True,
         text=True,
         timeout=300,
+        env=env,
     )
 
     assert result.returncode == 0, (

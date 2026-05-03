@@ -21,6 +21,7 @@ Tables:
   - ChatSession / ChatMessage — dashboard agent chat history (Sub-Plan 5)
   - FamilyMember       — household owner for scraper account mappings (Track 2 onboarding)
   - OnboardingState    — persisted wizard step + JSON payloads (Track 2 onboarding)
+  - UserPipelineSource — per-user file pipeline: source_key → account_id + statement folder
 
 Design notes:
   - Enum fields are stored as VARCHAR (SQLite has no native enum type anyway).
@@ -965,6 +966,35 @@ class ScraperAccountMapping(SQLModel, table=True):
     source_key: str
     # Which household member owns this account mapping (defaults to Self — see patches).
     member_id: int | None = Field(default=None, foreign_key="family_members.id")
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+class UserPipelineSource(SQLModel, table=True):
+    """Per-user file-based pipeline source: parser ``source_key`` → account + statement folder.
+
+    Replaces hardcoded ``SOURCE_CONFIGS`` in ``pipeline/config.py`` so account IDs and
+    on-disk statement directory names live in SQLite (one row per user per source_key).
+    """
+
+    __tablename__ = "user_pipeline_sources"
+    __table_args__ = (
+        Index(
+            "uq_user_pipeline_sources_user_source",
+            "user_id",
+            "source_key",
+            unique=True,
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: str = Field(index=True)
+    source_key: str = Field(sa_column=Column(String(64)))
+    account_id: str = Field(sa_column=Column(String(64)))
+    currency: str = Field(default="INR", sa_column=Column(String(8)))
+    # Subdirectory name under ``pipeline.config.DATA_DIR`` (e.g. ``HDFC_Savings``).
+    statement_folder: str | None = Field(default=None, sa_column=Column(String(256), nullable=True))
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )
