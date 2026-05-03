@@ -44,3 +44,16 @@ def test_find_person_three_word_word_set_unchanged():
         _find_person_in_desc(desc, ["VENKATA VINOD KRISHNA KUPPA"])
         == "VENKATA VINOD KRISHNA KUPPA"
     )
+
+
+def test_find_person_upi_narration_two_words_with_middle_name_in_bank_field():
+    """UPI lines put legal name in the structured field; two-word contacts should still match.
+
+    Hyphens are normalised to spaces so ``ADITI``, ``ABHAY``, ``LOTLIKAR`` become
+    separate tokens and ordered two-word matching finds ``ADITI`` … ``LOTLIKAR``.
+    """
+    desc = (
+        "UPI-ADITI ABHAY LOTLIKAR-aditi.lotlikar-1@okaxis-ICIC0006434-608837687667-"
+        "Splitwise settle Ref 608837687667"
+    )
+    assert _find_person_in_desc(desc, ["Aditi Lotlikar"]) == "Aditi Lotlikar"

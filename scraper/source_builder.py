@@ -343,6 +343,50 @@ def _upsert_sender_with_accounts(
         )
 
 
+def _fetch_sample_texts_for_sender(
+    gmail_client: GmailClient,
+    sender_norm: str,
+    sample_message_ids: list[str],
+) -> list[str]:
+    """Fetch email bodies for a single sender.
+
+    Uses ``sample_message_ids`` carried forward from discovery so we skip the
+    ``search_messages`` call entirely (saves one API round-trip per sender).
+    Falls back to a fresh search only when no IDs were stored (e.g. old discovery
+    data created before this optimisation was added).
+    """
+    sample_texts: list[str] = []
+    ids_to_fetch: list[str] = list(sample_message_ids[:3])
+
+    if not ids_to_fetch:
+        # Fallback: old discovery payload without sample_message_ids.
+        try:
+            hits = gmail_client.search_messages(
+                f"from:{sender_norm} after:2000/01/01",
+                paginate=False,
+                max_results_per_page=3,
+            )
+            ids_to_fetch = [m.id for m in hits[:3]]
+            for m in hits[:3]:
+                sample_texts.append(m.subject or "")
+        except Exception:
+            logger.warning(
+                "persist-sources: fallback search_messages failed for sender=%r",
+                sender_norm,
+                exc_info=True,
+            )
+            return sample_texts
+
+    for mid in ids_to_fetch:
+        try:
+            body = gmail_client.get_message_body(mid)
+            sample_texts.append(body[:8000])
+        except Exception:
+            logger.debug("persist-sources: no body for id=%s", mid, exc_info=True)
+
+    return sample_texts
+
+
 def persist_scraper_sources_from_discovery(
     session: Session,
     user_id: str,
@@ -356,7 +400,8 @@ def persist_scraper_sources_from_discovery(
         user_id: Authenticated Arth username.
         gmail_client: Authenticated Gmail client.
         discovery_envelope: Parsed ``OnboardingState.discovery_results_json`` dict
-            (must contain ``sources``: list of rows with ``sender_email``, ``email_count_estimate``).
+            (must contain ``sources``: list of rows with ``sender_email``,
+            ``email_count_estimate``, and optionally ``sample_message_ids``).
 
     Returns:
         Summary dict with ``senders_processed``, ``senders_skipped``, ``accounts_inferred`` (int).
@@ -404,27 +449,10 @@ def persist_scraper_sources_from_discovery(
             skipped += 1
             continue
 
-        sample_texts: list[str] = []
-        try:
-            q = f"from:{sender_norm} after:2000/01/01"
-            hits = gmail_client.search_messages(
-                q,
-                paginate=False,
-                max_results_per_page=min(5, max(1, n_est)),
-            )
-            for m in hits[:3]:
-                sample_texts.append(m.subject or "")
-                try:
-                    body = gmail_client.get_message_body(m.id)
-                    sample_texts.append(body[:8000])
-                except Exception:
-                    logger.debug("persist-sources: no body for id=%s", m.id, exc_info=True)
-        except Exception:
-            logger.warning(
-                "persist-sources: Gmail sample failed for sender=%r — using subject-only",
-                sender_norm,
-                exc_info=True,
-            )
+        stored_ids = raw.get("sample_message_ids")
+        sample_ids: list[str] = stored_ids if isinstance(stored_ids, list) else []
+
+        sample_texts = _fetch_sample_texts_for_sender(gmail_client, sender_norm, sample_ids)
 
         accounts = _infer_accounts_dict(cfg, sample_texts, session=session, user_id=uid)
         if not accounts:

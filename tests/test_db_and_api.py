@@ -79,16 +79,23 @@ def api_client(engine):
     # Must match seeded Transaction.user_id and default account→user mapping.
     app.dependency_overrides[get_current_user] = lambda: "sashank"
 
-    # Temporarily neuter init_db() so the lifespan doesn't try to create
-    # tables on the production engine (which would touch a real DB file).
+    # Neuter init_db so the lifespan doesn't touch the production SQLite file.
+    # The scheduler and startup maintenance are handled by the autouse fixture
+    # _neuter_lifespan_side_effects in conftest.py.
     import api.database as _db_mod
-    _original_init = _db_mod.init_db
+    import api.main as _main_mod
+
+    _orig_db_init = _db_mod.init_db
+    _orig_main_init = _main_mod.init_db
+
     _db_mod.init_db = lambda: None
+    _main_mod.init_db = lambda: None
 
     with TestClient(app) as c:
         yield c
 
-    _db_mod.init_db = _original_init
+    _db_mod.init_db = _orig_db_init
+    _main_mod.init_db = _orig_main_init
     app.dependency_overrides.clear()
 
 
@@ -624,13 +631,19 @@ def unauthed_api_client(engine):
     app.dependency_overrides[get_session] = _override_session
 
     import api.database as _db_mod
-    _original_init = _db_mod.init_db
+    import api.main as _main_mod
+
+    _orig_db_init = _db_mod.init_db
+    _orig_main_init = _main_mod.init_db
+
     _db_mod.init_db = lambda: None
+    _main_mod.init_db = lambda: None
 
     with TestClient(app, raise_server_exceptions=True) as c:
         yield c
 
-    _db_mod.init_db = _original_init
+    _db_mod.init_db = _orig_db_init
+    _main_mod.init_db = _orig_main_init
     app.dependency_overrides.clear()
 
 

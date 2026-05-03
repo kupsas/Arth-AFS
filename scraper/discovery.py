@@ -15,6 +15,7 @@ Typical flow:
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import logging
 import re
@@ -37,6 +38,10 @@ class DiscoveredSource:
     email_count_estimate: int
     earliest_email_date: datetime.date | None
     latest_email_date: datetime.date | None
+    # Message IDs from the existence probe — stored so persist-sources can fetch
+    # bodies directly without re-running search_messages (saves one API round-trip
+    # per sender).
+    sample_message_ids: list[str] = dataclasses.field(default_factory=list)
 
 
 def _estimate_total_messages(
@@ -105,11 +110,15 @@ def discover_sources_iter(
                 email_count_estimate=0,
                 earliest_email_date=None,
                 latest_email_date=None,
+                sample_message_ids=[],
             )
             continue
 
         earliest = min(m.received_at.date() for m in sample)
         latest = max(m.received_at.date() for m in sample)
+        # Stash the first 3 IDs so persist-sources can fetch bodies without
+        # re-running search_messages (saves one API round-trip per sender).
+        sample_ids = [m.id for m in sample[:3]]
 
         # Rough volume: capped paginated sweep (still far cheaper than parsing bodies).
         if subject_patterns_must_match_sample and compiled:
@@ -132,6 +141,7 @@ def discover_sources_iter(
             email_count_estimate=estimate,
             earliest_email_date=earliest,
             latest_email_date=latest,
+            sample_message_ids=sample_ids,
         )
 
 
@@ -194,6 +204,8 @@ def discovered_sources_to_json(rows: list[DiscoveredSource]) -> list[dict[str, o
                 "latest_email_date": r.latest_email_date.isoformat()
                 if r.latest_email_date
                 else None,
+                # Carried forward so persist-sources skips re-running search_messages.
+                "sample_message_ids": list(r.sample_message_ids),
             }
         )
     return encoded

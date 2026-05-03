@@ -8,9 +8,12 @@
  * transactions parsed, unknown backlog).  Keeps the UI reusable from Settings.
  */
 
+import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { Button } from "@/components/ui/button"
+import { humanizeSourceKey } from "@/lib/source-label"
+import { cn } from "@/lib/utils"
 
 export type BackfillProgressSnapshot = {
   source: string
@@ -24,14 +27,30 @@ export type BackfillProgressSnapshot = {
   current_phase?: string | null
 }
 
+/** Minimal shape for each source in the pipeline (from GET /backfill-sources). */
+export type BackfillSourceInfo = {
+  source_key: string
+  source_type: string
+}
+
 export type StepBackfillProps = {
   /** Human-readable label (usually the pipeline ``source_key``). */
   title: string
   progress: BackfillProgressSnapshot | null
   error: string | null
+  /** Full ordered list of sources — renders the source pipeline above the progress card. */
+  sources?: BackfillSourceInfo[]
+  /** 0-based index of the source currently being imported. */
+  activeSourceIndex?: number
   /** Shown when the orchestrator reports ``paused`` — calls resume endpoint + chunk. */
   onResumeFromPause?: () => void
   resumeBusy?: boolean
+  /**
+   * True while ``POST /backfill/{source}`` is in flight. The server only commits progress
+   * after each batch finishes, so counts can look frozen during slow Gmail work — this flag
+   * tells the user the import is still running.
+   */
+  importBusy?: boolean
 }
 
 /** Map orchestrator status strings to short, user-facing labels. */
@@ -62,13 +81,18 @@ export function StepBackfill({
   title,
   progress,
   error,
+  sources,
+  activeSourceIndex,
   onResumeFromPause,
   resumeBusy,
+  importBusy,
 }: StepBackfillProps) {
   const pct =
     progress && progress.emails_found > 0
       ? Math.min(100, Math.round((100 * progress.emails_processed) / progress.emails_found))
       : 0
+
+  const idx = activeSourceIndex ?? 0
 
   return (
     <div className="max-w-xl space-y-4">
@@ -81,6 +105,29 @@ export function StepBackfill({
         </p>
       </div>
 
+      {sources && sources.length > 1 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {sources.map((s, i) => {
+            const done = i < idx
+            const active = i === idx
+            return (
+              <Badge
+                key={s.source_key}
+                variant={active ? "default" : "secondary"}
+                className={cn(
+                  "text-xs transition-colors",
+                  done && "line-through opacity-60",
+                  active && "ring-2 ring-primary/30",
+                )}
+              >
+                {humanizeSourceKey(s.source_key)}
+                {done && " ✓"}
+              </Badge>
+            )
+          })}
+        </div>
+      )}
+
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base">{statusLabel(progress?.status)}</CardTitle>
@@ -89,6 +136,17 @@ export function StepBackfill({
               ? `${progress.emails_processed} / ${progress.emails_found} messages · ${progress.transactions_parsed} transactions parsed`
               : "Connecting to the API…"}
           </CardDescription>
+          {progress?.current_phase === "listing_alerts" && (
+            <p className="text-xs text-muted-foreground mt-2 leading-relaxed">
+              Scanning Gmail for alert-style messages (can take several minutes). Message counts will
+              jump once this search finishes — your import is still running.
+            </p>
+          )}
+          {importBusy && progress?.current_phase !== "listing_alerts" && (
+            <p className="text-xs text-muted-foreground mt-2 leading-relaxed">
+              Working on the current batch on the server — numbers refresh after each batch completes.
+            </p>
+          )}
         </CardHeader>
         <CardContent className="space-y-4">
           <Progress value={pct} className="h-2" />

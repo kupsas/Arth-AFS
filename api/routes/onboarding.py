@@ -15,8 +15,6 @@ import logging
 import uuid
 from typing import Any
 
-from collections import defaultdict
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -28,10 +26,16 @@ from api.models import AppUser, OnboardingState, Transaction, UserContact, UserS
 from api.onboarding_goal_templates import build_goal_templates_response
 from api.routes.transactions import upsert_user_merchant_correction_rule
 from api.services.classifier_runtime import (
+    effective_onboarding_resume_threshold,
     effective_onboarding_unknown_threshold,
-    user_has_classifier_api_key,
+    onboarding_should_resume_after_classify,
+    user_stored_classifier_api_key_presence,
 )
 from api.services.email_import_flow_log import EmailImportFlowLog
+from api.services.onboarding_merchant_propagation import (
+    propagate_merchant_keyword_hits,
+    transaction_to_canonical,
+)
 from api.services.preclassification_identity import (
     build_self_aliases_from_names,
     display_and_aliases_for_contact_line,
@@ -41,6 +45,7 @@ from api.services.user_classification import (
     merge_starter_pack_for_user,
 )
 from pipeline import config as pipeline_cfg
+from pipeline.rules_classifier import apply_spend_category_heuristics
 from scraper.config_loader import BankSendersConfig, get_bank_senders_config
 from scraper.discovery import (
     DiscoveredSource,
@@ -50,7 +55,9 @@ from scraper.discovery import (
 from scraper.gap_detector import detect_gaps
 from scraper.gmail_client import GmailClient, GmailReauthRequiredError
 from scraper.onboarding_orchestrator import (
+    count_all_classification_unknowns,
     count_classification_unknowns,
+    list_all_classification_unknown_transactions,
     list_classification_unknown_transactions,
     pause_backfill_state,
     resume_backfill_state,
@@ -386,6 +393,40 @@ def _strip_internal_keys(d: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in d.items() if not str(k).startswith("_")}
 
 
+def _reconcile_backfill_needs_classification(
+    session: Session,
+    user_id: str,
+    blob: dict[str, Any],
+    unknowns_live: int,
+) -> None:
+    """If live unknowns dropped below the pause threshold, clear a stale ``needs_classification`` status.
+
+    Chunk processing sets ``needs_classification`` whenever ``unknowns >= threshold`` and
+    refuses further work until ``resume_after_classification`` — but ``GET …/progress``
+    refreshes ``unknowns_pending`` from the DB every poll without touching ``status``.
+    That left the wizard showing "waiting for review" even while the backlog was again
+    below the pause line (after inline classify, merchant rules, etc.).  Mirror the
+    orchestrator's ``resume_after_classification`` transition so polling can resume
+    chunk POSTs without an extra classify round-trip.
+    """
+    if not blob or str(blob.get("status") or "") != "needs_classification":
+        return
+    thresh = effective_onboarding_unknown_threshold(session, user_id)
+    if unknowns_live >= thresh:
+        return
+    stmt = list(blob.get("_pending_statement_ids") or [])
+    alerts = list(blob.get("_pending_alert_ids") or [])
+    if stmt:
+        blob["status"] = "processing_statements"
+        blob["current_phase"] = "statements"
+    elif alerts:
+        blob["status"] = "processing_alerts"
+        blob["current_phase"] = "alerts"
+    else:
+        blob["status"] = "complete"
+        blob["current_phase"] = None
+
+
 def _merge_and_save_backfill(
     session: Session,
     user_id: str,
@@ -398,6 +439,9 @@ def _merge_and_save_backfill(
     row.backfill_progress_json = json.dumps(all_bf)
     row.updated_at = datetime.datetime.now(datetime.UTC)
     session.add(row)
+
+
+_BACKFILL_LOCKS: dict[tuple[str, str], str] = {}
 
 
 @router.post("/backfill/{source}")
@@ -414,11 +458,36 @@ def onboarding_backfill(
     if not source_key:
         raise HTTPException(status_code=400, detail="source must not be empty")
 
+    req_id = uuid.uuid4().hex[:12]
+    lock_key = (current_user, source_key)
+    held_by = _BACKFILL_LOCKS.get(lock_key)
+    if held_by is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Another backfill request ({held_by}) is already processing "
+                f"{source_key}. Wait for it to finish before sending another."
+            ),
+        )
+
+    _BACKFILL_LOCKS[lock_key] = req_id
+    try:
+        return _run_backfill_locked(session, current_user, source_key, body, req_id)
+    finally:
+        _BACKFILL_LOCKS.pop(lock_key, None)
+
+
+def _run_backfill_locked(
+    session: Session,
+    current_user: str,
+    source_key: str,
+    body: BackfillAdvanceBody,
+    req_id: str,
+) -> dict[str, Any]:
     row = _get_or_create_state(session, current_user)
     all_bf = _parse_json_object(row.backfill_progress_json, {})
     existing = dict(all_bf.get(source_key) or {})
 
-    req_id = uuid.uuid4().hex[:12]
     flow = EmailImportFlowLog(request_id=req_id, user_id=current_user, source_key=source_key)
     detail_parts = [
         f"chunk_size={body.chunk_size}",
@@ -438,6 +507,11 @@ def onboarding_backfill(
         raise
     flow.write("gmail_connected", "Gmail client authenticated successfully")
 
+    def _flush_backfill_progress_live(snapshot: dict[str, Any]) -> None:
+        """Let GET /progress reflect mid-request work (e.g. long InstaAlert Gmail listing)."""
+        _merge_and_save_backfill(session, current_user, source_key, snapshot)
+        session.commit()
+
     try:
         result = run_onboarding_backfill(
             session=session,
@@ -451,6 +525,7 @@ def onboarding_backfill(
             resume_after_classification=body.resume_after_classification,
             resume_from_pause=body.resume_from_pause,
             import_flow_log=flow,
+            progress_commit_hook=_flush_backfill_progress_live,
         )
     except ValueError as e:
         flow.write("validation_error", str(e))
@@ -487,6 +562,7 @@ def onboarding_backfill_progress(
     )
     if blob:
         blob["unknowns_pending"] = unknowns_live
+        _reconcile_backfill_needs_classification(session, current_user, blob, unknowns_live)
         all_bf[source_key] = blob
         row.backfill_progress_json = json.dumps(all_bf)
         row.updated_at = datetime.datetime.now(datetime.UTC)
@@ -822,10 +898,19 @@ def onboarding_classifier_status(
     session: Session = Depends(get_session),
     current_user: str = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Lightweight hints for the wizard (threshold + whether any LLM key is available)."""
+    """Hints for the wizard: threshold + which classifier keys **this user saved** in ``UserSecrets``.
+
+    Deliberately ignores server ``OPENAI_API_KEY`` / etc. in the environment so the Smart labels
+    step reflects paste/remove actions only. Runtime code still uses env + secrets via
+    :func:`api.services.classifier_runtime.user_has_classifier_api_key`.
+    """
+    ho, ha, hg = user_stored_classifier_api_key_presence(session, current_user)
     return {
         "llm_model": pipeline_cfg.LLM_MODEL,
-        "has_any_api_key": user_has_classifier_api_key(session, current_user),
+        "has_any_api_key": ho or ha or hg,
+        "has_openai_api_key": ho,
+        "has_anthropic_api_key": ha,
+        "has_google_api_key": hg,
         "unknown_threshold": effective_onboarding_unknown_threshold(session, current_user),
     }
 
@@ -833,9 +918,64 @@ def onboarding_classifier_status(
 # ── Phase 3b: inline classification batch ───────────────────────────────────────
 
 
+def _upsert_friend_contact(session: Session, user_id: str, display_name: str) -> None:
+    """If no FRIEND UserContact exists for this name, create one (idempotent)."""
+    norm = display_name.strip()
+    if not norm:
+        return
+    existing = session.exec(
+        select(UserContact)
+        .where(UserContact.user_id == user_id)
+        .where(UserContact.relationship == "FRIEND")
+        .where(UserContact.display_name == norm)
+    ).first()
+    if existing:
+        return
+    session.add(
+        UserContact(
+            user_id=user_id,
+            display_name=norm,
+            aliases_json=json.dumps([norm.upper()]),
+            relationship="FRIEND",
+            contact_source="ONBOARDING",
+        )
+    )
+
+
+def _upsert_self_contact(session: Session, user_id: str, display_name: str) -> None:
+    """Add an alias to the existing SELF UserContact, or create one."""
+    norm = display_name.strip()
+    if not norm:
+        return
+    self_row = session.exec(
+        select(UserContact)
+        .where(UserContact.user_id == user_id)
+        .where(UserContact.relationship == "SELF")
+    ).first()
+    alias_probe = norm.upper()
+    if self_row:
+        aliases: list[str] = json.loads(self_row.aliases_json or "[]")
+        if alias_probe not in aliases:
+            aliases.append(alias_probe)
+            self_row.aliases_json = json.dumps(aliases)
+            self_row.updated_at = datetime.datetime.now(datetime.UTC)
+            session.add(self_row)
+    else:
+        session.add(
+            UserContact(
+                user_id=user_id,
+                display_name=norm,
+                aliases_json=json.dumps([alias_probe]),
+                relationship="SELF",
+                contact_source="ONBOARDING",
+            )
+        )
+
+
 def _txn_brief(t: Transaction) -> dict[str, Any]:
     return {
         "id": t.id,
+        "source_statement": t.source_statement,
         "txn_date": t.txn_date.isoformat() if t.txn_date else None,
         "amount": t.amount,
         "direction": t.direction,
@@ -854,37 +994,46 @@ def onboarding_list_unknowns(
     *,
     session: Session = Depends(get_session),
     current_user: str = Depends(get_current_user),
-    source: str = Query(..., min_length=1, description="Pipeline source_key, e.g. hdfc_savings"),
-    limit: int = Query(200, ge=1, le=500),
+    source: str | None = Query(
+        default=None,
+        description="Pipeline source_key (e.g. hdfc_savings). Omit to list unknowns across all email sources.",
+    ),
+    limit: int = Query(20, ge=1, le=500),
+    offset: int = Query(0, ge=0, le=500_000),
 ) -> dict[str, Any]:
-    """Return unknown email-sourced transactions grouped by normalised narration."""
-    source_key = source.strip()
-    rows = list_classification_unknown_transactions(
-        session, user_id=current_user, source_key=source_key, limit=limit
-    )
-    buckets: dict[str, list[Transaction]] = defaultdict(list)
-    for t in rows:
-        fp = " ".join((t.raw_description or "").split()).upper()
-        if not fp:
-            fp = f"__empty__:{t.id}"
-        buckets[fp].append(t)
+    """Return a page of unknown email-sourced transactions (flat ``transactions`` list).
 
-    groups_out: list[dict[str, Any]] = []
-    for fp, members in sorted(buckets.items(), key=lambda kv: len(kv[1]), reverse=True):
-        groups_out.append(
-            {
-                "fingerprint": fp,
-                "count": len(members),
-                "sample_raw_description": members[0].raw_description,
-                "transactions": [_txn_brief(x) for x in members],
-            }
+    When ``source`` is omitted, rows from every ``source_statement`` are merged and ordered
+    by ``txn_date`` / ``id`` (oldest first so newly imported rows land at the bottom). ``groups`` is kept empty for backward compatibility.
+    """
+    source_key = source.strip() if source and source.strip() else None
+    if source_key:
+        pending_total = count_classification_unknowns(
+            session, user_id=current_user, source_key=source_key
+        )
+        rows = list_classification_unknown_transactions(
+            session,
+            user_id=current_user,
+            source_key=source_key,
+            limit=limit,
+            offset=offset,
+        )
+    else:
+        pending_total = count_all_classification_unknowns(session, user_id=current_user)
+        rows = list_all_classification_unknown_transactions(
+            session, user_id=current_user, limit=limit, offset=offset
         )
 
     return {
         "source": source_key,
+        "offset": offset,
+        "limit": limit,
         "total_transactions": len(rows),
-        "groups": groups_out,
+        "pending_total": pending_total,
+        "transactions": [_txn_brief(x) for x in rows],
+        "groups": [],
         "unknown_threshold": effective_onboarding_unknown_threshold(session, current_user),
+        "resume_threshold": effective_onboarding_resume_threshold(session, current_user),
     }
 
 
@@ -905,7 +1054,12 @@ class OnboardingClassifyItem(BaseModel):
 
 
 class OnboardingClassifyBody(BaseModel):
-    source: str = Field(min_length=1)
+    """When ``source`` is omitted, each item's transaction must be email-sourced; its ``source_statement`` is used."""
+
+    source: str | None = Field(
+        default=None,
+        description="Optional pipeline source_key; if set, every item must belong to this source.",
+    )
     items: list[OnboardingClassifyItem]
 
 
@@ -916,15 +1070,22 @@ def onboarding_classify(
     session: Session = Depends(get_session),
     current_user: str = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Apply batch corrections, optionally learn merchant rules, then caller resumes backfill."""
-    source_key = body.source.strip()
+    """Apply batch corrections, learn merchant rules, and seed UserContacts from category."""
+    source_key = body.source.strip() if body.source and body.source.strip() else None
     updated = 0
     rules = 0
+    contacts_created = 0
+    keywords_for_propagation: list[str] = []
     for item in body.items:
         txn = session.get(Transaction, item.txn_id)
         if not txn or txn.user_id != current_user:
             raise HTTPException(status_code=404, detail=f"Transaction {item.txn_id} not found")
-        if txn.source_statement != source_key or txn.source_type != "email":
+        if txn.source_type != "email":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Transaction {item.txn_id} is not an email-sourced row",
+            )
+        if source_key is not None and txn.source_statement != source_key:
             raise HTTPException(
                 status_code=400,
                 detail=f"Transaction {item.txn_id} is not an email row for source {source_key!r}",
@@ -939,8 +1100,22 @@ def onboarding_classify(
             txn.upi_type = item.upi_type.strip() or None
         txn.classification_source = "USER_REVIEWED"
         txn.updated_at = datetime.datetime.now(datetime.UTC)
+        if txn.spend_category is None and txn.direction == "OUTFLOW":
+            canon = transaction_to_canonical(txn)
+            apply_spend_category_heuristics(canon)
+            txn.spend_category = canon.spend_category.value if canon.spend_category else None
         session.add(txn)
         updated += 1
+
+        cat_upper = item.counterparty_category.strip()
+        cp_label = item.counterparty.strip()
+
+        if cat_upper == "Friends and Family":
+            _upsert_friend_contact(session, current_user, cp_label)
+            contacts_created += 1
+        elif cat_upper == "Self Transfer":
+            _upsert_self_contact(session, current_user, cp_label)
+            contacts_created += 1
 
         if item.apply_to_future:
             kw_src = (item.merchant_rule_keyword or item.counterparty).strip().upper()
@@ -949,21 +1124,35 @@ def onboarding_classify(
                     session,
                     current_user,
                     keyword=kw_src,
-                    display_name=item.counterparty.strip(),
-                    counterparty_category=item.counterparty_category.strip(),
+                    display_name=cp_label,
+                    counterparty_category=cat_upper,
                 )
                 rules += 1
+                keywords_for_propagation.append(kw_src)
 
     session.commit()
+
+    auto_propagated = propagate_merchant_keyword_hits(
+        session,
+        current_user,
+        keywords=keywords_for_propagation,
+        exclude_txn_ids={it.txn_id for it in body.items},
+    )
+    if auto_propagated:
+        session.commit()
+
+    remaining = count_all_classification_unknowns(session, user_id=current_user)
+    resume_thresh = effective_onboarding_resume_threshold(session, current_user)
+
     return {
         "status": "ok",
         "updated": updated,
         "rules_upserted": rules,
-        "resume_hint": (
-            "When backfill status is needs_classification, call "
-            "POST /api/onboarding/backfill/{source} with resume_after_classification=true "
-            "to continue chunk processing."
-        ),
+        "contacts_created": contacts_created,
+        "remaining_unknowns": remaining,
+        "resume_threshold": resume_thresh,
+        "should_resume": onboarding_should_resume_after_classify(remaining, resume_thresh),
+        "auto_propagated": auto_propagated,
     }
 
 

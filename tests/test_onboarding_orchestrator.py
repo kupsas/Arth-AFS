@@ -17,6 +17,7 @@ from api.models import Transaction
 from scraper.config_loader import BankSendersConfig
 from scraper.gmail_client import GmailMessage
 from scraper.onboarding_orchestrator import (
+    count_all_classification_unknowns,
     count_classification_unknowns,
     run_onboarding_backfill,
     sender_emails_for_source_key,
@@ -97,6 +98,17 @@ def _make_unknown_email_txn(
     )
 
 
+def test_count_all_classification_unknowns_sums_across_sources(
+    session: Session,
+) -> None:
+    session.add(_make_unknown_email_txn(i=1, source="hdfc_savings_test"))
+    session.add(_make_unknown_email_txn(i=2, source="icici_savings_test"))
+    session.commit()
+    assert count_classification_unknowns(session, user_id="u1", source_key="hdfc_savings_test") == 1
+    assert count_classification_unknowns(session, user_id="u1", source_key="icici_savings_test") == 1
+    assert count_all_classification_unknowns(session, user_id="u1") == 2
+
+
 def test_count_classification_unknowns_increments(
     session: Session,
 ) -> None:
@@ -133,10 +145,13 @@ def test_run_onboarding_backfill_processes_chunk(
     )
 
     class _FakeGmail:
-        def search_messages(self, query, **kwargs):
-            assert "from:alerts@" in query
+        def search_messages(self, query: str, **kwargs):
             assert "after:" in query
-            return [m1, m2]
+            # Statement PDF sender (.net) — monthly cadence in _MINI_BANK
+            if "alerts@hdfcbank.net" in query and "bank.in" not in query:
+                return [m1, m2]
+            # InstaAlerts deferred until after statements — searched on transition
+            return []
 
         def fetch_message_by_id(self, message_id: str) -> GmailMessage:
             return m1 if message_id == "mid1" else m2
@@ -202,7 +217,9 @@ def test_run_onboarding_backfill_pauses_on_unknown_threshold(
     session.commit()
 
     class _FakeGmail:
-        def search_messages(self, _query, **kwargs):
+        def search_messages(self, query: str, **kwargs):
+            if "alerts@hdfcbank.bank.in" in query:
+                return []
             return [m1]
 
         def fetch_message_by_id(self, _mid: str) -> GmailMessage:
@@ -225,6 +242,193 @@ def test_run_onboarding_backfill_pauses_on_unknown_threshold(
         )
     assert r.progress.get("status") == "needs_classification"
     assert int(r.progress.get("unknowns_pending") or 0) >= 3
+
+
+def test_partition_statement_senders_annual_before_monthly() -> None:
+    """Statement Gmail searches run in cadence order: annual before monthly."""
+    from scraper.onboarding_orchestrator import _partition_senders_for_source
+
+    bank: BankSendersConfig = {
+        "estatement@x.com": {
+            "accounts": {"1": {"source_key": "s", "account_id": "A"}},
+            "expected_cadence": "monthly",
+        },
+        "annual@x.com": {
+            "accounts": {"1": {"source_key": "s", "account_id": "A"}},
+            "expected_cadence": "annual",
+        },
+    }
+    stmt, alert = _partition_senders_for_source(bank, "s")
+    assert stmt == ["annual@x.com", "estatement@x.com"]
+    assert alert == []
+
+
+def test_count_classification_unknowns_ignores_missing_spend_when_cp_cat_set(
+    session: Session,
+) -> None:
+    """Queue is counterparty-focused: filled cp+cat leaves the count even if spend/upi are null."""
+    session.add(
+        Transaction(
+            content_hash="h" + "y" * 60,
+            txn_date=datetime.date(2024, 1, 2),
+            account_id="HDFC_SAL_3703",
+            user_id="u1",
+            source_statement="hdfc_savings_test",
+            source_type="email",
+            direction="OUTFLOW",
+            amount=2.0,
+            raw_description="UPI SOME MERCHANT",
+            txn_type="UPI_EXPENSE",
+            channel="UPI",
+            counterparty="Merchant",
+            counterparty_category="Food",
+            spend_category=None,
+            upi_type=None,
+            classification_source="RULES_USER",
+        )
+    )
+    session.commit()
+    assert count_classification_unknowns(session, user_id="u1", source_key="hdfc_savings_test") == 0
+
+
+def test_llm_sensitive_category_queued_when_counterparty_fields_complete(
+    session: Session,
+) -> None:
+    """LLM + Friends/Gifts/Misc with both labels set still appears for human review."""
+    session.add(
+        Transaction(
+            content_hash="h" + "s" * 60,
+            txn_date=datetime.date(2024, 3, 1),
+            account_id="HDFC_SAL_3703",
+            user_id="u1",
+            source_statement="hdfc_savings_test",
+            source_type="email",
+            direction="OUTFLOW",
+            amount=3.0,
+            raw_description="UPI SOMEONE",
+            txn_type="UPI_TRANSFER",
+            channel="UPI",
+            counterparty="Person A",
+            counterparty_category="Friends and Family",
+            classification_source="LLM",
+        )
+    )
+    session.commit()
+    assert count_classification_unknowns(session, user_id="u1", source_key="hdfc_savings_test") == 1
+
+
+def test_rules_friends_not_queued_when_fully_classified(
+    session: Session,
+) -> None:
+    """Rule-based Friends & Family is trusted — not duplicated in the review queue."""
+    session.add(
+        Transaction(
+            content_hash="h" + "t" * 60,
+            txn_date=datetime.date(2024, 3, 2),
+            account_id="HDFC_SAL_3703",
+            user_id="u1",
+            source_statement="hdfc_savings_test",
+            source_type="email",
+            direction="OUTFLOW",
+            amount=4.0,
+            raw_description="UPI RULED",
+            txn_type="UPI_TRANSFER",
+            channel="UPI",
+            counterparty="Person B",
+            counterparty_category="Friends and Family",
+            classification_source="RULES_USER",
+        )
+    )
+    session.commit()
+    assert count_classification_unknowns(session, user_id="u1", source_key="hdfc_savings_test") == 0
+
+
+def test_llm_sensitive_skipped_when_user_already_reviewed_same_counterparty(
+    session: Session,
+) -> None:
+    """After one USER_REVIEWED save for a name, new LLM sensitive rows for that label stay off-queue."""
+    session.add(
+        Transaction(
+            content_hash="h" + "a" * 60,
+            txn_date=datetime.date(2024, 4, 1),
+            account_id="HDFC_SAL_3703",
+            user_id="u1",
+            source_statement="hdfc_savings_test",
+            source_type="email",
+            direction="OUTFLOW",
+            amount=10.0,
+            raw_description="UPI NASEEMA 1",
+            txn_type="UPI_TRANSFER",
+            channel="UPI",
+            counterparty="Naseema Begum",
+            counterparty_category="Gifts & Personal Transfers",
+            classification_source="USER_REVIEWED",
+        )
+    )
+    session.add(
+        Transaction(
+            content_hash="h" + "b" * 60,
+            txn_date=datetime.date(2024, 4, 2),
+            account_id="HDFC_SAL_3703",
+            user_id="u1",
+            source_statement="hdfc_savings_test",
+            source_type="email",
+            direction="OUTFLOW",
+            amount=11.0,
+            raw_description="UPI NASEEMA 2",
+            txn_type="UPI_TRANSFER",
+            channel="UPI",
+            counterparty="  naseema begum ",
+            counterparty_category="Friends and Family",
+            classification_source="LLM",
+        )
+    )
+    session.commit()
+    assert count_classification_unknowns(session, user_id="u1", source_key="hdfc_savings_test") == 0
+
+
+def test_llm_sensitive_still_queued_when_only_rules_row_for_same_counterparty(
+    session: Session,
+) -> None:
+    """RULES_* on the same name does not count as human verification — LLM row still queues."""
+    session.add(
+        Transaction(
+            content_hash="h" + "c" * 60,
+            txn_date=datetime.date(2024, 4, 3),
+            account_id="HDFC_SAL_3703",
+            user_id="u1",
+            source_statement="hdfc_savings_test",
+            source_type="email",
+            direction="OUTFLOW",
+            amount=12.0,
+            raw_description="UPI MERCHANT",
+            txn_type="UPI_TRANSFER",
+            channel="UPI",
+            counterparty="Urban Company",
+            counterparty_category="Gifts & Personal Transfers",
+            classification_source="RULES_USER",
+        )
+    )
+    session.add(
+        Transaction(
+            content_hash="h" + "d" * 60,
+            txn_date=datetime.date(2024, 4, 4),
+            account_id="HDFC_SAL_3703",
+            user_id="u1",
+            source_statement="hdfc_savings_test",
+            source_type="email",
+            direction="OUTFLOW",
+            amount=13.0,
+            raw_description="UPI URBAN",
+            txn_type="UPI_TRANSFER",
+            channel="UPI",
+            counterparty="Urban Company",
+            counterparty_category="Miscellaneous",
+            classification_source="LLM",
+        )
+    )
+    session.commit()
+    assert count_classification_unknowns(session, user_id="u1", source_key="hdfc_savings_test") == 1
 
 
 def test_pause_resume_state_helpers() -> None:

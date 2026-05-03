@@ -1,26 +1,43 @@
 "use client";
 
 /**
- * Inline classification batch (Track 2 Phase 3b).
+ * Inline classification queue for onboarding (shown under **Import mail**).
  *
- * Shown when onboarding backfill pauses with ``needs_classification``. The parent
- * passes the active ``source`` (pipeline key, e.g. ``hdfc_savings``). We:
+ * **Beginner flow**
+ * 1. We load one *page* of rows from ``GET /api/onboarding/unknowns`` (oldest first — new rows join at the bottom): anything
+ *    still missing counterparty or category, **plus** LLM-labelled rows in sensitive categories
+ *    (Friends & Family, Gifts & Personal Transfers, Miscellaneous) so you can fix common mis-tags
+ *    (unless you already confirmed that counterparty on another transaction).
+ *    Omit ``source`` on this component to review **all** email-linked accounts in one queue.
+ * 2. Pick a **category** per row (or select many rows and use the bulk bar).
+ * 3. **Confirm** sends ``POST /api/onboarding/classify`` (no ``source`` when mixed), then
+ *    ``POST /api/onboarding/backfill/{source}?…`` with ``resume_after_classification`` for each
+ *    account that had rows in that batch so chunk import can continue.
+ * 4. While the mail importer is **paused for classification** (``needs_classification``), or after **every
+ *    email source** has finished (``complete`` on the last source but rows still need labels), an optional
+ *    **“rest of queue = Uber”** shortcut fetches *every* pending unknown (not only the visible page),
+ *    sets counterparty **Uber** + **Transport & Fuel**, and saves in chunks (with a destructive confirm).
+ * 5. While the parent is **actively pulling mail** (``processing*`` statuses), a translucent overlay
+ *    explains that the queue is temporarily read-only so saving labels does not fight the importer.
  *
- * 1. ``GET /api/onboarding/unknowns?source=…`` — rows still missing automation fields.
- * 2. Let the user fix counterparty + category (+ optional spend / txn metadata).
- * 3. ``POST /api/onboarding/classify`` — persists fixes + optional merchant rules.
- * 4. Parent should then call backfill with ``resume_after_classification: true``.
- *
- * Beginner tip: **Apply to future** stores a substring rule (like Settings → merchant
- * rules). Use **Skip** to leave a row untouched for later.
+ * **Selection** is stored as a ``Set`` of transaction ids so it survives page changes.
  */
 
 import * as React from "react";
-import { Loader2, Send } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -30,272 +47,703 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { buildApiUrl } from "@/lib/api-base";
+import {
+  fetchOnboardingUnknowns,
+  postOnboardingBackfillChunk,
+  postOnboardingClassify,
+  type OnboardingClassifyItem,
+  type OnboardingUnknownTxnBrief,
+} from "@/lib/api";
 import { COUNTERPARTY_CATEGORY_OPTIONS } from "@/lib/counterparty-categories";
 import { humanizeSourceKey } from "@/lib/source-label";
-import { getUserFacingErrorMessage, userMessageFromApiResponseBody } from "@/lib/user-facing-api-error";
-import type { CounterpartyCategory, SpendCategory } from "@/lib/types";
+import { getUserFacingErrorMessage } from "@/lib/user-facing-api-error";
+import type { CounterpartyCategory } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
-type UnknownTxnBrief = {
-  id: number;
-  txn_date: string | null;
-  amount: number;
-  direction: string;
-  channel: string | null;
-  raw_description: string;
-  txn_type: string | null;
-  upi_type: string | null;
-  counterparty: string | null;
-  counterparty_category: string | null;
-  spend_category: string | null;
-};
+const PAGE_SIZE = 20;
 
-type UnknownGroup = {
-  fingerprint: string;
-  count: number;
-  sample_raw_description: string;
-  transactions: UnknownTxnBrief[];
-};
+/** Server allows up to 500 rows per ``GET /api/onboarding/unknowns`` — use it when draining the whole queue. */
+const UNKNOWN_FULL_PAGE = 500;
 
-type UnknownsResponse = {
-  source: string;
-  total_transactions: number;
-  groups: UnknownGroup[];
-  unknown_threshold: number;
-};
+/** Keep each ``POST /api/onboarding/classify`` body reasonably small for slow networks / proxies. */
+const CLASSIFY_CHUNK_SIZE = 120;
 
-type Draft = {
-  counterparty: string;
-  category: CounterpartyCategory | "";
-  spend: SpendCategory | "";
-  applyFuture: boolean;
-  ruleKeyword: string;
-};
+/** Values must match ``COUNTERPARTY_CATEGORY_OPTIONS`` exactly (API stores the string as-is). */
+const UBER_QUEUE_COUNTERPARTY = "Uber";
+const UBER_QUEUE_CATEGORY: CounterpartyCategory = "Transport & Fuel";
 
-const SPEND_OPTIONS: { value: SpendCategory; label: string }[] = [
-  { value: "NEED", label: "Need" },
-  { value: "WANT", label: "Want" },
-  { value: "INVESTMENT", label: "Investment" },
-];
-
-async function fetchUnknowns(source: string): Promise<UnknownsResponse> {
-  const res = await fetch(buildApiUrl(`/api/onboarding/unknowns?source=${encodeURIComponent(source)}`), {
-    credentials: "include",
-  });
-  const t = await res.text();
-  if (!res.ok) {
-    throw new Error(userMessageFromApiResponseBody(t) || "Could not load transactions to review.");
+/**
+ * Walks unknown pages until empty so “mark rest as Uber” covers rows beyond the UI page size.
+ */
+async function fetchAllUnknownRowsInQueue(
+  scopedSource: string | undefined,
+): Promise<OnboardingUnknownTxnBrief[]> {
+  const acc: OnboardingUnknownTxnBrief[] = [];
+  let offset = 0;
+  while (true) {
+    const data = await fetchOnboardingUnknowns({
+      source: scopedSource,
+      limit: UNKNOWN_FULL_PAGE,
+      offset,
+    });
+    if (!data.transactions.length) break;
+    acc.push(...data.transactions);
+    if (data.transactions.length < UNKNOWN_FULL_PAGE) break;
+    offset += UNKNOWN_FULL_PAGE;
+    if (acc.length > data.pending_total + UNKNOWN_FULL_PAGE) break;
   }
-  if (!t.trim()) {
-    return { source, total_transactions: 0, groups: [], unknown_threshold: 0 };
-  }
-  return JSON.parse(t) as UnknownsResponse;
+  return acc;
 }
 
-async function postClassify(source: string, items: unknown[]): Promise<void> {
-  const res = await fetch(buildApiUrl("/api/onboarding/classify"), {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source, items }),
-  });
-  const t = await res.text();
-  if (!res.ok) {
-    throw new Error(userMessageFromApiResponseBody(t) || "Could not save your changes.");
-  }
-}
+/**
+ * Radix ``Select`` treats ``value={undefined}`` as *uncontrolled*. If we later pass a string,
+ * React warns about switching to controlled. We always pass a string and map this sentinel to
+ * "no category chosen" in our own state (empty string).
+ */
+const SELECT_NONE = "__none__" as const;
 
-function defaultDraft(t: UnknownTxnBrief): Draft {
-  return {
-    counterparty: t.counterparty ?? "",
-    category: (t.counterparty_category as CounterpartyCategory) ?? "",
-    spend: (t.spend_category as SpendCategory) ?? "",
-    applyFuture: true,
-    ruleKeyword: "",
-  };
+/** Fallback label when the bank narration has no parsed counterparty yet. */
+function defaultCounterpartyLabel(t: OnboardingUnknownTxnBrief): string {
+  const c = t.counterparty?.trim();
+  if (c) return c;
+  const raw = (t.raw_description || "").trim();
+  if (raw.length <= 48) return raw || "Unknown";
+  return `${raw.slice(0, 45)}…`;
 }
 
 export type ClassificationBatchReviewProps = {
-  /** Internal source id for API calls (e.g. ``hdfc_savings``). */
-  source: string;
-  /** Friendly label for headings; defaults to a humanized form of ``source``. */
+  /** Pipeline ``source_key``; omit to load unknowns across every email source. */
+  source?: string;
+  /** Optional heading override when ``source`` is set. */
   sourceLabel?: string;
-  /** Fires after a successful classify POST — parent resumes backfill. */
+  /**
+   * Live ``unknowns_pending`` from the parent's backfill progress poll. When this value
+   * changes (e.g. from 0 → 28), the component re-fetches its page so newly-discovered
+   * unknowns appear without a manual reload.
+   *
+   * The parent may also pass a **string** (e.g. ``status + source index``): progress
+   * ``unknowns_pending`` is per active source, while this list is often **all** email
+   * sources — when the last source hits ``complete`` the numeric pending can stay ``0``
+   * even though the combined queue still has rows, so the string key forces a refetch.
+   */
+  unknownsTrigger?: number | string;
+  /** After classify + per-source resume succeeds — parent may nudge the backfill poll loop. */
   onSubmitted?: () => void;
+  /**
+   * When true (e.g. backfill progress ``status === "needs_classification"``), show the
+   * **mark entire queue as Uber** shortcut so users can bulk-fix counterparty + category together.
+   */
+  importAwaitingClassification?: boolean;
+  /**
+   * When true, chunk import has finished for **all** wizard email sources (last source ``complete``).
+   * The Uber bulk shortcut still applies to any remaining global queue rows — same as mid-import pause.
+   */
+  allMailSourcesImported?: boolean;
+  /**
+   * When true, the Gmail backfill loop is still ingesting messages for this session. The list may
+   * update and saves can race with chunk import — parent passes this so we show a clear overlay
+   * instead of a “broken” confirm button (often greyed out until a category is picked).
+   */
+  mailImportActivelyProcessing?: boolean;
 };
 
 export function ClassificationBatchReview({
   source,
   sourceLabel,
+  unknownsTrigger,
   onSubmitted,
+  importAwaitingClassification = false,
+  allMailSourcesImported = false,
+  mailImportActivelyProcessing = false,
 }: ClassificationBatchReviewProps) {
-  const displaySource = sourceLabel?.trim() || humanizeSourceKey(source);
+  const scopedSource = source?.trim() || undefined;
+  const displayScope =
+    sourceLabel?.trim() ||
+    (scopedSource ? humanizeSourceKey(scopedSource) : "All email accounts");
+
+  const [page, setPage] = React.useState(0);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
-  const [rows, setRows] = React.useState<UnknownTxnBrief[]>([]);
+  const [rows, setRows] = React.useState<OnboardingUnknownTxnBrief[]>([]);
+  const [pendingTotal, setPendingTotal] = React.useState(0);
   const [threshold, setThreshold] = React.useState<number | null>(null);
-  const [drafts, setDrafts] = React.useState<Record<number, Draft>>({});
-  const [skipped, setSkipped] = React.useState<Set<number>>(() => new Set());
-  const [submitting, setSubmitting] = React.useState(false);
 
-  const reload = React.useCallback(async () => {
+  /** Per-txn category pick (required before confirm). */
+  const [categoryById, setCategoryById] = React.useState<Record<number, CounterpartyCategory | "">>({});
+  /** Editable merchant / counterparty label we send to the API. */
+  const [counterpartyById, setCounterpartyById] = React.useState<Record<number, string>>({});
+  /** ``source_statement`` for each id we have seen (used for resume + mixed classify). */
+  const [sourceById, setSourceById] = React.useState<Record<number, string>>({});
+
+  const [selectedIds, setSelectedIds] = React.useState<Set<number>>(() => new Set());
+  const [bulkCategory, setBulkCategory] = React.useState<string>(SELECT_NONE);
+  const [editingCpId, setEditingCpId] = React.useState<number | null>(null);
+
+  const [busy, setBusy] = React.useState(false);
+  /** Bumping this re-runs the list fetch without changing ``page`` (Reload page button). */
+  const [refetchNonce, setRefetchNonce] = React.useState(0);
+
+  /** Mirrors the checkbox while the destructive-confirm dialog is open (Base UI controlled checkbox). */
+  const [uberDialogOpen, setUberDialogOpen] = React.useState(false);
+
+  const totalPages = Math.max(1, Math.ceil(pendingTotal / PAGE_SIZE) || 1);
+
+  const mergeRowState = React.useCallback((txns: OnboardingUnknownTxnBrief[]) => {
+    setCategoryById((prev) => {
+      const next = { ...prev };
+      for (const t of txns) {
+        if (next[t.id] === undefined) {
+          next[t.id] = (t.counterparty_category as CounterpartyCategory) ?? "";
+        }
+      }
+      return next;
+    });
+    setCounterpartyById((prev) => {
+      const next = { ...prev };
+      for (const t of txns) {
+        if (next[t.id] === undefined) {
+          next[t.id] = defaultCounterpartyLabel(t);
+        }
+      }
+      return next;
+    });
+    setSourceById((prev) => {
+      const next = { ...prev };
+      for (const t of txns) {
+        if (t.source_statement) next[t.id] = t.source_statement;
+      }
+      return next;
+    });
+  }, []);
+
+  /** Same reload path as after a successful classify — keeps pagination coherent when the last page empties. */
+  const reloadQueueAfterMutation = React.useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
-      const data = await fetchUnknowns(source);
-      setThreshold(data.unknown_threshold);
-      const flat = data.groups.flatMap((g) => g.transactions);
-      setRows(flat);
-      const init: Record<number, Draft> = {};
-      for (const t of flat) init[t.id] = defaultDraft(t);
-      setDrafts(init);
-      setSkipped(new Set());
+      let pi = page;
+      while (true) {
+        const offset = pi * PAGE_SIZE;
+        const data = await fetchOnboardingUnknowns({
+          source: scopedSource,
+          limit: PAGE_SIZE,
+          offset,
+        });
+        setThreshold(data.unknown_threshold);
+        setPendingTotal(data.pending_total);
+        const rowBatch = data.transactions;
+        if (rowBatch.length || offset === 0 || data.pending_total === 0) {
+          if (pi !== page) setPage(pi);
+          setRows(rowBatch);
+          mergeRowState(rowBatch);
+          break;
+        }
+        pi -= 1;
+      }
     } catch (e) {
-      setError(getUserFacingErrorMessage(e) || "Could not load transactions to review.");
+      setError(getUserFacingErrorMessage(e) || "Could not reload the list.");
     } finally {
       setLoading(false);
     }
-  }, [source]);
+  }, [page, scopedSource, mergeRowState]);
 
   React.useEffect(() => {
-    // Defer so the first ``setLoading(true)`` inside ``reload`` is not synchronous in this effect
-    // (react-hooks/set-state-in-effect).
     queueMicrotask(() => {
-      void reload();
+      setSelectedIds(new Set());
+      setPage(0);
     });
-  }, [reload]);
+  }, [scopedSource]);
 
-  function setDraft(id: number, patch: Partial<Draft>) {
-    setDrafts((d) => ({ ...d, [id]: { ...d[id], ...patch } }));
+  React.useEffect(() => {
+    let cancelled = false;
+    async function runFetch() {
+      setLoading(true);
+      setError(null);
+      try {
+        let pi = page;
+        // If this page is empty but work remains (e.g. after bulk-clear on the last page), walk back.
+        while (true) {
+          const offset = pi * PAGE_SIZE;
+          const data = await fetchOnboardingUnknowns({
+            source: scopedSource,
+            limit: PAGE_SIZE,
+            offset,
+          });
+          if (cancelled) return;
+          setThreshold(data.unknown_threshold);
+          setPendingTotal(data.pending_total);
+          const rowBatch = data.transactions;
+          if (rowBatch.length || offset === 0 || data.pending_total === 0) {
+            if (pi !== page) setPage(pi);
+            setRows(rowBatch);
+            mergeRowState(rowBatch);
+            break;
+          }
+          pi -= 1;
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(getUserFacingErrorMessage(e) || "Could not load transactions to review.");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    void runFetch();
+    return () => {
+      cancelled = true;
+    };
+  }, [page, scopedSource, mergeRowState, refetchNonce, unknownsTrigger]);
+
+  const pageIds = React.useMemo(() => rows.map((r) => r.id), [rows]);
+  const allPageSelected =
+    pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
+
+  function toggleSelectAllOnPage() {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allPageSelected) {
+        for (const id of pageIds) next.delete(id);
+      } else {
+        for (const id of pageIds) next.add(id);
+      }
+      return next;
+    });
   }
 
-  async function onSubmit() {
-    setSubmitting(true);
-    setError(null);
-    const items: {
-      txn_id: number;
-      counterparty: string;
-      counterparty_category: string;
-      spend_category?: string | null;
-      apply_to_future: boolean;
-      merchant_rule_keyword?: string | null;
-    }[] = [];
+  function toggleOne(id: number) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
-    for (const t of rows) {
-      if (skipped.has(t.id)) continue;
-      const dr = drafts[t.id];
-      if (!dr) continue;
-      if (!dr.counterparty.trim() || !dr.category) {
-        setError(`Row #${t.id}: counterparty and category are required (or use Skip).`);
-        setSubmitting(false);
-        return;
+  function buildItem(txnId: number, category: string): OnboardingClassifyItem | null {
+    const cat = category.trim();
+    if (!cat) return null;
+    const cp = (counterpartyById[txnId] ?? "").trim();
+    if (!cp) return null;
+    return {
+      txn_id: txnId,
+      counterparty: cp,
+      counterparty_category: cat,
+      apply_to_future: true,
+      merchant_rule_keyword: null,
+    };
+  }
+
+  async function flushClassifyAndResume(
+    items: OnboardingClassifyItem[],
+    resolveSource: (txnId: number) => string | undefined,
+  ) {
+    const result = await postOnboardingClassify({
+      source: scopedSource ?? null,
+      items,
+    });
+
+    if (result.should_resume) {
+      const sources = new Set<string>();
+      for (const it of items) {
+        const sk = resolveSource(it.txn_id);
+        if (sk) sources.add(sk);
       }
-      items.push({
-        txn_id: t.id,
-        counterparty: dr.counterparty.trim(),
-        counterparty_category: dr.category,
-        spend_category: dr.spend || null,
-        apply_to_future: dr.applyFuture,
-        merchant_rule_keyword: dr.ruleKeyword.trim() || null,
-      });
+      for (const sk of sources) {
+        await postOnboardingBackfillChunk(sk, { resume_after_classification: true });
+      }
     }
+    return result;
+  }
 
-    if (!items.length) {
-      setError("Nothing to submit — classify at least one row or reload.");
-      setSubmitting(false);
-      return;
-    }
-
+  async function submitItems(items: OnboardingClassifyItem[]) {
+    if (!items.length) return;
+    setBusy(true);
+    setError(null);
     try {
-      await postClassify(source, items);
+      await flushClassifyAndResume(items, (id) => sourceById[id]);
+      const doneIds = new Set(items.map((i) => i.txn_id));
+      setSelectedIds((prev) => {
+        const n = new Set(prev);
+        for (const id of doneIds) n.delete(id);
+        return n;
+      });
+      setBulkCategory(SELECT_NONE);
       onSubmitted?.();
-      await reload();
+      await reloadQueueAfterMutation();
     } catch (e) {
       setError(getUserFacingErrorMessage(e) || "Could not save your changes.");
     } finally {
-      setSubmitting(false);
+      setBusy(false);
     }
   }
 
-  if (loading) {
-    return (
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        Loading unknown transactions…
-      </div>
-    );
+  /**
+   * Fetches the full unknown backlog (all pages), then classifies every row as Uber / Transport & Fuel.
+   * Used after the user confirms in the destructive dialog — not reversible as a single undo.
+   */
+  async function onUberQueueBulkConfirmed() {
+    setUberDialogOpen(false);
+    setBusy(true);
+    setError(null);
+    try {
+      const queueRows = await fetchAllUnknownRowsInQueue(scopedSource);
+      if (!queueRows.length) {
+        setError("Nothing left in the review queue right now.");
+        return;
+      }
+      const sourceLookup: Record<number, string> = {};
+      for (const r of queueRows) {
+        if (r.source_statement) sourceLookup[r.id] = r.source_statement;
+      }
+      const resolveSource = (id: number) => sourceLookup[id] ?? sourceById[id];
+      const items: OnboardingClassifyItem[] = queueRows.map((r) => ({
+        txn_id: r.id,
+        counterparty: UBER_QUEUE_COUNTERPARTY,
+        counterparty_category: UBER_QUEUE_CATEGORY,
+        apply_to_future: true,
+        merchant_rule_keyword: null,
+      }));
+      for (let i = 0; i < items.length; i += CLASSIFY_CHUNK_SIZE) {
+        const slice = items.slice(i, i + CLASSIFY_CHUNK_SIZE);
+        await flushClassifyAndResume(slice, resolveSource);
+      }
+      setSelectedIds(new Set());
+      setBulkCategory(SELECT_NONE);
+      onSubmitted?.();
+      await reloadQueueAfterMutation();
+    } catch (e) {
+      setError(getUserFacingErrorMessage(e) || "Could not mark the queue as Uber.");
+    } finally {
+      setBusy(false);
+    }
   }
 
+  async function onConfirmRow(txnId: number) {
+    const cat = categoryById[txnId] ?? "";
+    const item = buildItem(txnId, cat);
+    if (!item) {
+      setError("Pick a category and ensure the counterparty label is not empty.");
+      return;
+    }
+    await submitItems([item]);
+  }
+
+  async function onConfirmBulk() {
+    if (bulkCategory === SELECT_NONE) {
+      setError("Pick a category in the bulk bar first.");
+      return;
+    }
+    const ids = [...selectedIds];
+    const items: OnboardingClassifyItem[] = [];
+    for (const id of ids) {
+      const item = buildItem(id, bulkCategory);
+      if (!item) {
+        setError(`Row #${id}: needs a non-empty counterparty label (tap to edit).`);
+        return;
+      }
+      items.push(item);
+    }
+    if (!items.length) {
+      setError("Select at least one transaction.");
+      return;
+    }
+    await submitItems(items);
+  }
+
+  /**
+   * Uber bulk row: safe when import is paused for classification **or** all Gmail sources are done
+   * but the combined unknown queue is not empty (no chunk work left to race ``POST /classify``).
+   */
+  const showUberQueueBulkShortcut =
+    pendingTotal > 0 && (importAwaitingClassification || allMailSourcesImported);
+
   return (
-    <Card>
+    <>
+      <Dialog open={uberDialogOpen} onOpenChange={setUberDialogOpen}>
+        <DialogContent showCloseButton={false} className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Mark entire queue as Uber?</DialogTitle>
+            <DialogDescription>
+              This is effectively <strong>irreversible in bulk</strong>: about{" "}
+              <strong>{pendingTotal.toLocaleString()}</strong> transaction
+              {pendingTotal === 1 ? "" : "s"} still in this review queue will be saved as counterparty{" "}
+              <strong>{UBER_QUEUE_COUNTERPARTY}</strong> and category <strong>{UBER_QUEUE_CATEGORY}</strong>
+              , including rows you have not opened. We also persist <strong>apply to future</strong> so
+              similar narrations learn a merchant rule keyed on <strong>UBER</strong>. Only continue if
+              you have already fixed non-Uber/Rapido rows and everything that is clearly not Uber.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="-mx-4 -mb-4 flex flex-col-reverse gap-3 rounded-b-xl border-t border-border/50 bg-muted/25 px-6 pb-6 pt-5 sm:flex-row sm:justify-end sm:gap-4">
+            <Button
+              type="button"
+              variant="outline"
+              size="lg"
+              className="min-h-10 px-6"
+              onClick={() => setUberDialogOpen(false)}
+              disabled={busy}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              size="lg"
+              className="min-h-10 px-6"
+              disabled={busy}
+              onClick={() => void onUberQueueBulkConfirmed()}
+            >
+              {busy ? "Saving…" : "Yes, mark all"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Card className="border-dashed">
       <CardHeader>
-        <CardTitle>Classify pending transactions</CardTitle>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <CardTitle className="flex items-center gap-2">
+            Review classification queue
+            {loading && !rows.length ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
+          </CardTitle>
+          {pendingTotal > 0 && (
+            <span
+              className="rounded-md border border-border bg-muted/50 px-2.5 py-1 text-sm font-medium tabular-nums text-foreground"
+              title="Gaps (missing counterparty or category), LLM rows in Friends & Family / Gifts & Personal Transfers / Miscellaneous (unless that counterparty was already confirmed in a prior review), and the count the importer uses before pausing."
+            >
+              {pendingTotal.toLocaleString()} pending
+            </span>
+          )}
+        </div>
         <CardDescription>
-          Account: <span className="font-medium text-foreground">{displaySource}</span>
+          Scope: <span className="font-medium text-foreground">{displayScope}</span>
+          {" — "}
+          Rows here are either missing labels or are LLM-tagged Friends &amp; Family, Gifts &amp;
+          Personal Transfers, or Miscellaneous (worth double-checking). Names you already saved in a
+          prior review round are skipped for that LLM pattern.
           {threshold != null && (
             <>
               {" "}
-              — we pause here when about {threshold} transactions still need your input (the limit is
-              a bit lower if you have not added an optional AI key).
+              Import pauses when about {threshold} need review (lower if no optional AI key).
             </>
           )}
         </CardDescription>
       </CardHeader>
-      <CardContent className="flex flex-col gap-4">
+      <CardContent className="relative flex min-h-48 flex-col gap-3">
+        {mailImportActivelyProcessing && (
+          <div
+            className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 rounded-b-lg bg-background/70 px-5 text-center shadow-[inset_0_0_0_1px_hsl(var(--border)/0.35)] backdrop-blur-[3px]"
+            role="status"
+            aria-live="polite"
+            aria-label="Import in progress"
+          >
+            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" aria-hidden />
+            <p className="max-w-sm text-sm font-medium text-foreground">
+              Transactions being processed, please wait.
+            </p>
+            <p className="max-w-xs text-xs text-muted-foreground">
+              You can confirm labels after this batch pauses for review.
+            </p>
+          </div>
+        )}
         {error && <p className="text-sm text-destructive">{error}</p>}
-        {!rows.length && <p className="text-sm text-muted-foreground">No unknown rows — you are clear.</p>}
-        <div className="flex max-h-[min(70vh,720px)] flex-col gap-3 overflow-y-auto pr-1">
-          {rows.map((t) => {
-            const dr = drafts[t.id] ?? defaultDraft(t);
-            const isSkipped = skipped.has(t.id);
-            return (
-              <div
-                key={t.id}
-                className={`rounded-lg border p-3 text-sm ${isSkipped ? "opacity-50" : ""}`}
+
+        {showUberQueueBulkShortcut && (
+          <div className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-4 py-3.5">
+            <div className="flex gap-3">
+              <Checkbox
+                id="uber-queue-bulk"
+                className="mt-1 shrink-0"
+                checked={uberDialogOpen}
+                onCheckedChange={(v) => {
+                  if (v === true) setUberDialogOpen(true);
+                  else setUberDialogOpen(false);
+                }}
+                disabled={busy}
+                aria-labelledby="uber-queue-bulk-label"
+              />
+              {/*
+                Label defaults to `display:flex` + gap between *every* child node, which splits
+                plain text and <strong> into separate flex items and creates ugly “rivers” of space.
+                One <span> keeps the sentence normal inline flow.
+              */}
+              <Label
+                id="uber-queue-bulk-label"
+                htmlFor="uber-queue-bulk"
+                className="min-w-0 flex-1 cursor-pointer font-normal leading-snug text-foreground"
               >
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div>
-                    <div className="text-xs text-muted-foreground">
-                      #{t.id} · {t.txn_date} · {t.direction} · ₹{t.amount.toFixed(2)} ·{" "}
-                      {t.channel ?? "—"}
-                    </div>
-                    <div className="mt-1 font-mono text-xs leading-snug">{t.raw_description}</div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() =>
-                      setSkipped((prev) => {
-                        const n = new Set(prev);
-                        if (n.has(t.id)) n.delete(t.id);
-                        else n.add(t.id);
-                        return n;
-                      })
-                    }
+                <span className="block text-pretty text-sm leading-relaxed">
+                  I finished fixing non-Uber/Rapido rows and am ready to mark{" "}
+                  <strong>every remaining row in this queue</strong> as <strong>Uber</strong> (
+                  {UBER_QUEUE_CATEGORY}).
+                </span>
+              </Label>
+            </div>
+          </div>
+        )}
+
+        {selectedIds.size > 0 && (
+          <div className="sticky top-0 z-10 rounded-lg border bg-card/95 p-3 shadow-sm backdrop-blur">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium tabular-nums">{selectedIds.size} selected</span>
+              <Label className="sr-only" htmlFor="bulk-cat">
+                Category for selected
+              </Label>
+              <Select
+                value={bulkCategory}
+                onValueChange={(v) => setBulkCategory(v ?? SELECT_NONE)}
+              >
+                <SelectTrigger id="bulk-cat" className="h-8 w-full max-w-[220px] text-xs">
+                  <SelectValue placeholder="Bulk category" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={SELECT_NONE} className="text-muted-foreground">
+                    Choose category…
+                  </SelectItem>
+                  {COUNTERPARTY_CATEGORY_OPTIONS.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button type="button" size="sm" disabled={busy} onClick={() => void onConfirmBulk()}>
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Confirm"}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  setSelectedIds(new Set())
+                  setBulkCategory(SELECT_NONE)
+                }}
+              >
+                Clear
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {!rows.length && !loading && (
+          <p className="text-sm text-muted-foreground">No rows to review on this page — you are clear.</p>
+        )}
+
+        {!!rows.length && (
+          <>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                disabled={busy || !pageIds.length}
+                onClick={toggleSelectAllOnPage}
+              >
+                {allPageSelected ? "Clear page" : "Select page"}
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                {selectedIds.size > 0 && `${selectedIds.size} selected · `}
+                Page {page + 1}/{totalPages}
+              </span>
+            </div>
+
+            <div className="flex max-h-[min(60vh,560px)] flex-col gap-2 overflow-y-auto pr-0.5">
+              {rows.map((t) => {
+                const checked = selectedIds.has(t.id);
+                const cat = categoryById[t.id] ?? "";
+                const cp = counterpartyById[t.id] ?? defaultCounterpartyLabel(t);
+                const sk = t.source_statement ?? sourceById[t.id] ?? "";
+                return (
+                  <div
+                    key={t.id}
+                    className={cn(
+                      "rounded-lg border p-3 text-sm transition-colors",
+                      checked && "border-primary/40 bg-primary/5",
+                    )}
                   >
-                    {isSkipped ? "Un-skip" : "Skip"}
-                  </Button>
-                </div>
-                {!isSkipped && (
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    <div className="grid gap-1">
-                      <Label>Counterparty</Label>
-                      <Input
-                        value={dr.counterparty}
-                        onChange={(e) => setDraft(t.id, { counterparty: e.target.value })}
+                    {/* Row 1: checkbox + counterparty + amount + confirm */}
+                    <div className="flex items-start gap-2">
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={() => toggleOne(t.id)}
+                        aria-label={`Select transaction ${t.id}`}
+                        disabled={busy}
+                        className="mt-0.5 shrink-0"
                       />
-                    </div>
-                    <div className="grid gap-1">
-                      <Label>Category</Label>
-                      <Select
-                        value={dr.category || undefined}
-                        onValueChange={(v) => setDraft(t.id, { category: v as CounterpartyCategory })}
+                      <div className="min-w-0 flex-1">
+                        {editingCpId === t.id ? (
+                          <Input
+                            className="h-7 text-sm"
+                            value={cp}
+                            autoFocus
+                            onChange={(e) =>
+                              setCounterpartyById((prev) => ({ ...prev, [t.id]: e.target.value }))
+                            }
+                            onBlur={() => setEditingCpId(null)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") setEditingCpId(null);
+                            }}
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            className="block max-w-full truncate text-left font-medium text-foreground hover:underline"
+                            title="Tap to edit counterparty label"
+                            onClick={() => setEditingCpId(t.id)}
+                          >
+                            {cp}
+                          </button>
+                        )}
+                      </div>
+                      <span className="shrink-0 tabular-nums font-medium">
+                        ₹{Number(t.amount).toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                      </span>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        className="h-7 w-7 shrink-0"
+                        disabled={busy || !cat}
+                        title="Confirm this row"
+                        onClick={() => void onConfirmRow(t.id)}
                       >
-                        <SelectTrigger>
+                        <Check className="h-4 w-4" />
+                      </Button>
+                    </div>
+
+                    {/* Row 2: meta chips — source, date, direction, narration */}
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 pl-6 text-xs text-muted-foreground">
+                      {sk && (
+                        <Badge variant="secondary" className="font-normal text-[11px] px-1.5 py-0">
+                          {humanizeSourceKey(sk)}
+                        </Badge>
+                      )}
+                      <span className="tabular-nums">{t.txn_date ?? "—"}</span>
+                      <span>{t.direction}</span>
+                      <span className="truncate font-mono text-[10px]" title={t.raw_description}>
+                        {t.raw_description}
+                      </span>
+                    </div>
+
+                    {/* Row 3: category dropdown */}
+                    <div className="mt-2 pl-6">
+                      <Select
+                        value={cat ? cat : SELECT_NONE}
+                        onValueChange={(v) =>
+                          setCategoryById((prev) => ({
+                            ...prev,
+                            [t.id]: !v || v === SELECT_NONE ? "" : (v as CounterpartyCategory),
+                          }))
+                        }
+                      >
+                        <SelectTrigger className="h-8 w-full max-w-xs text-xs">
                           <SelectValue placeholder="Pick a category" />
                         </SelectTrigger>
                         <SelectContent>
+                          <SelectItem value={SELECT_NONE} className="text-muted-foreground">
+                            Pick a category…
+                          </SelectItem>
                           {COUNTERPARTY_CATEGORY_OPTIONS.map((c) => (
                             <SelectItem key={c} value={c}>
                               {c}
@@ -304,73 +752,50 @@ export function ClassificationBatchReview({
                         </SelectContent>
                       </Select>
                     </div>
-                    {t.direction === "OUTFLOW" && (
-                      <div className="grid gap-1">
-                        <Label>Spend tag (optional)</Label>
-                        <Select
-                          value={dr.spend || "__none__"}
-                          onValueChange={(v) =>
-                            setDraft(t.id, { spend: v === "__none__" ? "" : (v as SpendCategory) })
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="—" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="__none__">—</SelectItem>
-                            {SPEND_OPTIONS.map((o) => (
-                              <SelectItem key={o.value} value={o.value}>
-                                {o.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    )}
-                    <div className="grid gap-1 sm:col-span-2">
-                      <Label>Custom rule keyword (optional)</Label>
-                      <Input
-                        placeholder="Defaults to counterparty — use a narration substring to match more rows"
-                        value={dr.ruleKeyword}
-                        onChange={(e) => setDraft(t.id, { ruleKeyword: e.target.value })}
-                      />
-                    </div>
-                    <label className="flex items-center gap-2 sm:col-span-2">
-                      <Checkbox
-                        checked={dr.applyFuture}
-                        onCheckedChange={(c) => setDraft(t.id, { applyFuture: Boolean(c) })}
-                      />
-                      <span>Apply to future similar transactions (creates a merchant rule)</span>
-                    </label>
                   </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" onClick={() => void onSubmit()} disabled={submitting || !rows.length}>
-            {submitting ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Submitting…
-              </>
-            ) : (
-              <>
-                <Send className="mr-2 h-4 w-4" />
-                Submit classifications
-              </>
-            )}
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        {/* Pagination */}
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t pt-3">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy || page <= 0}
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+          >
+            <ChevronLeft className="h-4 w-4" />
+            Prev
           </Button>
-          <Button type="button" variant="outline" onClick={() => void reload()} disabled={submitting}>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {page + 1} / {totalPages}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy || page >= totalPages - 1}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            Next
+            <ChevronRight className="h-4 w-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => setRefetchNonce((n) => n + 1)}
+          >
             Reload
           </Button>
         </div>
-        <p className="text-xs text-muted-foreground">
-          After you submit, Arth saves your choices and continues pulling the rest of your mail for{" "}
-          {displaySource}.
-        </p>
       </CardContent>
     </Card>
+    </>
   );
 }

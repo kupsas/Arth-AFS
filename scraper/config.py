@@ -42,7 +42,7 @@ GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 #       "display_name": str,       # human label for onboarding / UI
 #       "source_type": str,        # savings | credit_card | broker (coarse bucket for wizard)
 #       "discovery_subject_patterns": list[str],  # regexes matched against Subject during Gmail discovery
-#       "expected_cadence": str,   # monthly | quarterly | per_transaction
+#       "expected_cadence": str,   # annual | yearly | quarterly | monthly | per_transaction
 #   }
 #
 # The "last_4_digits" key is what appears in the email body (card/account number).

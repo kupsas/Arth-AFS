@@ -183,17 +183,13 @@ def _contact_name_list(contacts: list[KnownContact]) -> list[str]:
     return out
 
 
-def _match_contact_display(upi_name: str, contacts: list[KnownContact]) -> str | None:
-    """Return the contact’s display name when the UPI name matches the person."""
-    for c in contacts:
-        for candidate in [c.display_name, *c.aliases]:
-            if _names_match(upi_name, candidate):
-                return c.display_name
-    return None
-
-
 def _find_matching_contact_display(desc: str, contacts: list[KnownContact]) -> str | None:
-    """Bank / RDA narration: resolve which contact matched and return display name."""
+    """Resolve which contact matched the narration and return their display name.
+
+    Uses :func:`_find_person_in_desc` on the **full** description for every channel
+    (UPI, bank, RDA, …) so substring, two-word ordered subsequence, and 3+ word
+    rules behave the same everywhere.
+    """
     for c in contacts:
         for candidate in [c.display_name, *c.aliases]:
             if _find_person_in_desc(desc, [candidate]):
@@ -410,6 +406,16 @@ def _classify_spend_category(txn: CanonicalTransaction) -> None:
     # Miscellaneous and unknown categories → let LLM decide
 
 
+def apply_spend_category_heuristics(txn: CanonicalTransaction) -> None:
+    """Set ``spend_category`` from direction, ``txn_type``, and ``counterparty_category``.
+
+    Thin wrapper around :func:`_classify_spend_category` for callers (e.g. onboarding
+    ``POST /classify``) that already set counterparty fields and only need NEED/WANT/INVESTMENT
+    alignment without re-running the full rules pipeline.
+    """
+    _classify_spend_category(txn)
+
+
 # ---------------------------------------------------------------------------
 # Channel classification  (very high confidence — narration prefixes)
 # ---------------------------------------------------------------------------
@@ -577,9 +583,7 @@ def _classify_txn_type(txn: CanonicalTransaction, cfg: UserClassificationConfig)
             return
         # Family UPI transfers are SELF_TRANSFER in the ground truth
         # (counterparty_category is set to "Friends and Family" later).
-        upi_name = _extract_upi_name(desc)
-        fam_strings = _contact_name_list(cfg.family_contacts)
-        if upi_name and _check_against_list(upi_name, fam_strings):
+        if _find_matching_contact_display(desc, cfg.family_contacts):
             txn.txn_type = TxnType.SELF_TRANSFER
             _set_rules_source(txn, user_rule=True)
             return
@@ -620,8 +624,8 @@ def _classify_txn_type_card(
         txn.txn_type = TxnType.LOAN_INSURANCE_PAYMENT
         return
 
-    # IGST / GST fees charged on the statement date
-    if desc_upper.startswith("IGST-"):
+    # IGST / GST fees (HDFC may prefix the cardholder name before "IGST-…")
+    if "IGST" in desc_upper:
         txn.txn_type = TxnType.EXPENSE_OTHER
         return
 
@@ -877,37 +881,6 @@ def _tokens_contain_ordered_sequence(tokens: list[str], sequence: list[str]) -> 
     return True
 
 
-def _names_match(extracted: str, canonical: str) -> bool:
-    """Check if an extracted transaction name matches a canonical name.
-
-    Handles three scenarios:
-      - Exact match (after normalisation)
-      - UPI truncation (~20-char limit) via prefix matching
-      - Name reordering (e.g. RDA "VENKATA VINOD KRISHNA KUPPA"
-        vs canonical "KUPPA VENKATA VINOD KRISHNA") via word-set matching
-    """
-    e = _normalize_name(extracted)
-    c = _normalize_name(canonical)
-
-    if e == c:
-        return True
-
-    # Prefix: one string starts with the other (handles UPI truncation)
-    if min(len(e), len(c)) >= 5:
-        if c.startswith(e) or e.startswith(c):
-            return True
-
-    # Word-set: all words match regardless of order (needs >= 3 words to
-    # reduce false positives from common first/last names)
-    e_words = set(e.split())
-    c_words = set(c.split())
-    if len(e_words) >= 3 and len(c_words) >= 3:
-        if c_words.issubset(e_words) or e_words.issubset(c_words):
-            return True
-
-    return False
-
-
 def _extract_upi_name(desc: str) -> str | None:
     """Extract the person/business name from a UPI description.
 
@@ -931,16 +904,8 @@ def _extract_upi_name(desc: str) -> str | None:
     return name if name else None
 
 
-def _check_against_list(name: str, name_list: list[str]) -> str | None:
-    """Return the matched canonical name if *name* matches any entry, else *None*."""
-    for canonical in name_list:
-        if _names_match(name, canonical):
-            return canonical
-    return None
-
-
 def _find_person_in_desc(desc: str, name_list: list[str]) -> str | None:
-    """Scan a full description (NEFT / IMPS / RDA) for any name in the list.
+    """Scan a full description (UPI, NEFT / IMPS / RDA, …) for any name in the list.
 
     Uses substring matching on the normalised description, prefix fallback for
     long truncated names, **ordered two-word subsequence** matching (both word
@@ -1109,6 +1074,24 @@ def _classify_swiggy_sub(desc_upper: str) -> str | None:
     return "Swiggy"
 
 
+def _user_correction_keyword_matches_narration(desc_upper: str, keyword: str) -> bool:
+    """Match ``USER_CORRECTION`` / ``USER_DB`` merchant keywords against a bank narration.
+
+    Prefer the full uppercased phrase as a substring; if that fails but the keyword
+    has multiple significant tokens, require **each** token to appear somewhere in
+    the narration (UPI lines often split or punctuate names so the full phrase is absent).
+    """
+    kw = (keyword or "").strip().upper()
+    if len(kw) < 2:
+        return False
+    if kw in desc_upper:
+        return True
+    parts = [p for p in kw.split() if len(p) >= 2]
+    if len(parts) <= 1:
+        return False
+    return all(p in desc_upper for p in parts)
+
+
 # ---------------------------------------------------------------------------
 # Credit card counterparty classifier
 # ---------------------------------------------------------------------------
@@ -1150,7 +1133,7 @@ def _classify_cc_counterparty(txn: CanonicalTransaction, cfg: UserClassification
 
     # ── 2. EXPENSE_OTHER outflows (GST, forex markup, DCC fees, SmartBuy holds) ──
     if txn.txn_type == TxnType.EXPENSE_OTHER:
-        if desc_upper.startswith("IGST"):
+        if "IGST" in desc_upper:
             txn.counterparty = "GST"
             txn.counterparty_category = CounterpartyCategory.FEES_CHARGES_INTEREST
             return
@@ -1192,14 +1175,19 @@ def _classify_cc_counterparty(txn: CanonicalTransaction, cfg: UserClassification
             return
         # 4b. Recurring merchant keyword table (first match wins)
         for rule in cfg.merchant_rules:
-            if rule.keyword.upper() in desc_upper:
-                txn.counterparty = rule.display_name
-                txn.counterparty_category = rule.category
-                _set_rules_source(
-                    txn,
-                    user_rule=(rule.source == MerchantRuleSource.USER_DB),
-                )
-                return
+            user_db = rule.source == MerchantRuleSource.USER_DB
+            if user_db:
+                if not _user_correction_keyword_matches_narration(desc_upper, rule.keyword):
+                    continue
+            elif rule.keyword.upper() not in desc_upper:
+                continue
+            txn.counterparty = rule.display_name
+            txn.counterparty_category = rule.category
+            _set_rules_source(
+                txn,
+                user_rule=user_db,
+            )
+            return
         # 4c. Unknown merchant → leave for LLM
 
 
@@ -1254,6 +1242,25 @@ def _classify_counterparty_category(
     # ── Credit card: full counterparty classification ─────────────────
     if txn.channel == Channel.CARD:
         _classify_cc_counterparty(txn, cfg)
+        return
+
+    # ── User + starter merchant keywords (UPI / bank / other narrations) ─
+    # ``cfg.merchant_rules`` substring-matches the *full* narration (same as
+    # card merchants in ``_classify_cc_counterparty``). Historically only CARD
+    # consulted this list, so UPI rows never picked up ``USER_CORRECTION`` hits.
+    for rule in cfg.merchant_rules:
+        user_db = rule.source == MerchantRuleSource.USER_DB
+        if user_db:
+            if not _user_correction_keyword_matches_narration(desc_upper, rule.keyword):
+                continue
+        elif rule.keyword.upper() not in desc_upper:
+            continue
+        txn.counterparty = rule.display_name
+        txn.counterparty_category = rule.category
+        _set_rules_source(
+            txn,
+            user_rule=user_db,
+        )
         return
 
     # ── Bank interest (savings account credits) ─────────────────────────
@@ -1312,22 +1319,12 @@ def _classify_counterparty_category(
     # ── SELF_TRANSFER: distinguish "self" from "family" ──────────────────
     if txn.txn_type == TxnType.SELF_TRANSFER:
         fam = cfg.family_contacts
-        if txn.channel == Channel.UPI:
-            upi_name = _extract_upi_name(desc)
-            if upi_name:
-                disp = _match_contact_display(upi_name, fam)
-                if disp:
-                    txn.counterparty = disp
-                    txn.counterparty_category = CounterpartyCategory.FRIENDS_FAMILY
-                    _set_rules_source(txn, user_rule=True)
-                    return
-        else:
-            disp = _find_matching_contact_display(desc, fam)
-            if disp:
-                txn.counterparty = disp
-                txn.counterparty_category = CounterpartyCategory.FRIENDS_FAMILY
-                _set_rules_source(txn, user_rule=True)
-                return
+        disp = _find_matching_contact_display(desc, fam)
+        if disp:
+            txn.counterparty = disp
+            txn.counterparty_category = CounterpartyCategory.FRIENDS_FAMILY
+            _set_rules_source(txn, user_rule=True)
+            return
         self_label = (cfg.self_name or "").strip() or "Self"
         txn.counterparty = self_label
         txn.counterparty_category = CounterpartyCategory.SELF_TRANSFER
@@ -1353,24 +1350,13 @@ def _classify_counterparty_category(
         (cfg.acquaintance_contacts, CounterpartyCategory.GIFTS_PERSONAL_TRANSFERS),
     ]
 
-    if txn.channel == Channel.UPI:
-        upi_name = _extract_upi_name(desc)
-        if upi_name:
-            for contacts, category in ordered_contact_groups:
-                disp = _match_contact_display(upi_name, contacts)
-                if disp:
-                    txn.counterparty = disp
-                    txn.counterparty_category = category
-                    _set_rules_source(txn, user_rule=True)
-                    return
-    else:
-        for contacts, category in ordered_contact_groups:
-            disp = _find_matching_contact_display(desc, contacts)
-            if disp:
-                txn.counterparty = disp
-                txn.counterparty_category = category
-                _set_rules_source(txn, user_rule=True)
-                return
+    for contacts, category in ordered_contact_groups:
+        disp = _find_matching_contact_display(desc, contacts)
+        if disp:
+            txn.counterparty = disp
+            txn.counterparty_category = category
+            _set_rules_source(txn, user_rule=True)
+            return
 
     # ── UPI outflow heuristics ────────────────────────────────────────────
     if txn.channel == Channel.UPI and txn.direction == Direction.OUTFLOW:

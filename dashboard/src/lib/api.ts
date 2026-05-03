@@ -123,14 +123,17 @@ type QueryParams = Record<string, string | number | boolean | undefined | null>;
  * Throws ApiError on non-2xx responses.
  * Redirects to /login on 401 (session expired or missing).
  */
-async function get<T>(path: string, params?: QueryParams): Promise<T> {
+async function get<T>(
+  path: string,
+  params?: QueryParams,
+  opts?: { signal?: AbortSignal },
+): Promise<T> {
   const url = buildApiUrl(path, params);
 
   const res = await fetch(url, {
     headers: { "Content-Type": "application/json" },
-    // credentials: "include" is required for the browser to send the
-    // httpOnly "arth_session" cookie on cross-port requests (3000 → 8000).
     credentials: "include",
+    signal: opts?.signal,
   });
 
   if (res.status === 401) {
@@ -187,12 +190,14 @@ async function post<T>(
   path: string,
   body: unknown,
   params?: QueryParams,
+  opts?: { signal?: AbortSignal },
 ): Promise<T> {
   const res = await fetch(buildApiUrl(path, params), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
     body: JSON.stringify(body),
+    signal: opts?.signal,
   });
 
   if (res.status === 401) {
@@ -1102,6 +1107,80 @@ export function fetchOnboardingBackfillSources(): Promise<OnboardingBackfillSour
   return get<OnboardingBackfillSourceRow[]>("/api/onboarding/backfill-sources");
 }
 
+/** GET /api/onboarding/unknowns — paged unknown transactions (omit source for all accounts). */
+export type OnboardingUnknownTxnBrief = {
+  id: number
+  source_statement: string | null
+  txn_date: string | null
+  amount: number
+  direction: string
+  channel: string | null
+  raw_description: string
+  txn_type: string | null
+  upi_type: string | null
+  counterparty: string | null
+  counterparty_category: string | null
+  spend_category: string | null
+}
+
+export type OnboardingUnknownsResponse = {
+  source: string | null
+  offset: number
+  limit: number
+  total_transactions: number
+  pending_total: number
+  transactions: OnboardingUnknownTxnBrief[]
+  groups: unknown[]
+  unknown_threshold: number
+  resume_threshold: number
+}
+
+export function fetchOnboardingUnknowns(params: {
+  source?: string
+  limit?: number
+  offset?: number
+  signal?: AbortSignal
+}): Promise<OnboardingUnknownsResponse> {
+  const q = new URLSearchParams()
+  if (params.source) q.set("source", params.source)
+  if (params.limit != null) q.set("limit", String(params.limit))
+  if (params.offset != null) q.set("offset", String(params.offset))
+  const qs = q.toString()
+  const path = qs ? `/api/onboarding/unknowns?${qs}` : "/api/onboarding/unknowns"
+  return get<OnboardingUnknownsResponse>(path, undefined, params.signal ? { signal: params.signal } : undefined)
+}
+
+export type OnboardingClassifyItem = {
+  txn_id: number
+  counterparty: string
+  counterparty_category: string
+  spend_category?: string | null
+  txn_type?: string | null
+  upi_type?: string | null
+  apply_to_future?: boolean
+  merchant_rule_keyword?: string | null
+}
+
+export type OnboardingClassifyResponse = {
+  status: string
+  updated: number
+  rules_upserted: number
+  contacts_created: number
+  remaining_unknowns: number
+  resume_threshold: number
+  should_resume: boolean
+  /** Rows re-tagged in-DB from new merchant keywords (UPI / bank narrations). */
+  auto_propagated?: number
+}
+
+/** POST /api/onboarding/classify — omit ``source`` to classify rows from mixed ``source_statement`` values. */
+export function postOnboardingClassify(body: {
+  source?: string | null
+  items: OnboardingClassifyItem[]
+}): Promise<OnboardingClassifyResponse> {
+  return post("/api/onboarding/classify", body)
+}
+
 /** POST /api/onboarding/backfill/{source} */
 export function postOnboardingBackfillChunk(
   source: string,
@@ -1110,16 +1189,20 @@ export function postOnboardingBackfillChunk(
     resume_after_classification?: boolean;
     resume_from_pause?: boolean;
   },
+  opts?: { signal?: AbortSignal },
 ): Promise<Record<string, unknown>> {
   return post<Record<string, unknown>>(
     `/api/onboarding/backfill/${encodeURIComponent(source)}`,
     body ?? {},
+    undefined,
+    opts,
   );
 }
 
 /** GET /api/onboarding/backfill/{source}/progress */
 export function fetchOnboardingBackfillProgress(
   source: string,
+  opts?: { signal?: AbortSignal },
 ): Promise<{
   source: string;
   status: string;
@@ -1130,7 +1213,11 @@ export function fetchOnboardingBackfillProgress(
   error_message: string | null;
   current_phase: string | null;
 }> {
-  return get(`/api/onboarding/backfill/${encodeURIComponent(source)}/progress`);
+  return get(
+    `/api/onboarding/backfill/${encodeURIComponent(source)}/progress`,
+    undefined,
+    opts,
+  );
 }
 
 /** POST /api/onboarding/persist-sources — seed scraper DB rows from last discovery scan. */
@@ -1156,10 +1243,13 @@ export function postOnboardingComplete(): Promise<{ ok: boolean; current_step: s
   return post<{ ok: boolean; current_step: string }>("/api/onboarding/complete", {});
 }
 
-/** GET /api/onboarding/classifier-status */
+/** GET /api/onboarding/classifier-status — saved keys only (UserSecrets); ignores server env keys. */
 export function fetchOnboardingClassifierStatus(): Promise<{
   llm_model: string;
   has_any_api_key: boolean;
+  has_openai_api_key: boolean;
+  has_anthropic_api_key: boolean;
+  has_google_api_key: boolean;
   unknown_threshold: number;
 }> {
   return get("/api/onboarding/classifier-status");

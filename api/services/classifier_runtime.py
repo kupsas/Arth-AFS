@@ -57,21 +57,58 @@ def _triplet_from_secrets_dict(data: dict[str, str]) -> tuple[str | None, str | 
     return o, a, g
 
 
-def user_has_classifier_api_key(session: Session, user_id: str) -> bool:
-    """True if env **or** stored user secrets provide at least one LLM provider key."""
-    if any(_triplet_from_process_env()):
-        return True
+def user_classifier_api_key_presence(session: Session, user_id: str) -> tuple[bool, bool, bool]:
+    """Return (openai, anthropic, google) if **either** process env **or** ``UserSecrets`` has that key.
+
+    Used by :func:`user_has_classifier_api_key` for runtime / onboarding thresholds so deployments
+    with global API keys still enable LLM without per-user paste.
+    """
+    eo, ea, eg = _triplet_from_process_env()
+    ho = bool(eo)
+    ha = bool(ea)
+    hg = bool(eg)
+    row = session.exec(select(UserSecrets).where(UserSecrets.user_id == user_id)).first()
+    if row and row.secrets_json:
+        try:
+            raw = json.loads(row.secrets_json)
+        except json.JSONDecodeError:
+            raw = None
+        if isinstance(raw, dict):
+            o, a, g = _triplet_from_secrets_dict({str(k): str(v) for k, v in raw.items()})
+            ho = ho or bool((o or "").strip())
+            ha = ha or bool((a or "").strip())
+            hg = hg or bool((g or "").strip())
+    return ho, ha, hg
+
+
+def user_stored_classifier_api_key_presence(session: Session, user_id: str) -> tuple[bool, bool, bool]:
+    """Return (openai, anthropic, google) flags from encrypted ``UserSecrets`` JSON only.
+
+    Ignores process environment — matches what the dashboard wizard saves/removes via
+    ``POST /api/onboarding/api-key``. Use this for ``GET /classifier-status`` so local ``.env``
+    keys do not look like “user pasted keys”, and removal updates the payload immediately.
+    """
     row = session.exec(select(UserSecrets).where(UserSecrets.user_id == user_id)).first()
     if not row or not row.secrets_json:
-        return False
+        return False, False, False
     try:
         raw = json.loads(row.secrets_json)
     except json.JSONDecodeError:
-        return False
+        return False, False, False
     if not isinstance(raw, dict):
-        return False
+        return False, False, False
     o, a, g = _triplet_from_secrets_dict({str(k): str(v) for k, v in raw.items()})
-    return bool((o or "").strip() or (a or "").strip() or (g or "").strip())
+    return (
+        bool((o or "").strip()),
+        bool((a or "").strip()),
+        bool((g or "").strip()),
+    )
+
+
+def user_has_classifier_api_key(session: Session, user_id: str) -> bool:
+    """True if env **or** stored user secrets provide at least one LLM provider key."""
+    ho, ha, hg = user_classifier_api_key_presence(session, user_id)
+    return ho or ha or hg
 
 
 def effective_onboarding_unknown_threshold(session: Session, user_id: str) -> int:
@@ -83,6 +120,33 @@ def effective_onboarding_unknown_threshold(session: Session, user_id: str) -> in
     if not user_has_classifier_api_key(session, user_id):
         return low
     return high
+
+
+def effective_onboarding_resume_threshold(session: Session, user_id: str) -> int:
+    """Resume policy for chunk import after ``POST /api/onboarding/classify``.
+
+    Default ``0``: resume as soon as the review queue is empty. Set
+    ``ONBOARDING_RESUME_THRESHOLD`` to a positive integer for hysteresis (resume only
+    while unknowns stay strictly below that count).
+
+    ``session`` / ``user_id`` are reserved for future per-user tuning.
+    """
+    _ = session, user_id
+    return int(os.getenv("ONBOARDING_RESUME_THRESHOLD", "0"))
+
+
+def onboarding_should_resume_after_classify(
+    remaining_unknowns: int, resume_threshold: int
+) -> bool:
+    """Whether the client should POST backfill with ``resume_after_classification``.
+
+    * ``resume_threshold <= 0`` — resume only when ``remaining_unknowns == 0``.
+    * ``resume_threshold > 0`` — resume while ``remaining_unknowns < resume_threshold``.
+    """
+    rt = int(resume_threshold)
+    if rt <= 0:
+        return int(remaining_unknowns) == 0
+    return int(remaining_unknowns) < rt
 
 
 @contextmanager

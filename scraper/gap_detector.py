@@ -390,11 +390,13 @@ def filter_onboarding_alert_ids_after_statements(
     ``alert_items`` entries must include ``id`` (Gmail message id) and ``received_at``
     (ISO-8601 string).  Returns message ids **oldest first**.
 
-    When the statement queue was empty at onboarding start (no PDF/statement senders for
-    this ``source_key``), every alert id is returned — we cannot infer month-level coverage.
+    When **no statement-cadence senders** are configured for this ``source_key`` (no annual /
+    monthly / quarterly senders in bank config), every alert id is returned — we cannot
+    infer month-level coverage from statement PDFs.
 
-    When statements ran first and month gaps are empty, returns ``[]`` (statement PDFs
-    are treated as source-of-truth; redundant alert volume is skipped).
+    When statement senders **are** configured and statements ran first and month gaps are
+    empty, returns ``[]`` (statement PDFs are treated as source-of-truth; redundant alert
+    volume is skipped).
 
     When gaps exist, only alerts whose *received* date falls inside a gap month window
     are kept (parallel fill for holes).

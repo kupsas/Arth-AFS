@@ -176,16 +176,23 @@ def _record_email(
 ) -> None:
     """Insert a ProcessedEmail row marking this message as handled.
 
-    Args:
-        session:       Open DB session.
-        msg:           The GmailMessage we just handled.
-        sender:        The *normalised* sender address (no display name).
-                       We store this instead of msg.sender so lookups in
-                       _get_lookback_date() work correctly.
-        status:        "processed" | "skipped" | "failed"
-        txn_count:     How many transactions were created (0 for skipped/failed).
-        error_message: Exception message if status="failed".
+    Idempotent: if a row with this gmail_message_id already exists, the call
+    is silently skipped so that retried/resumed backfill chunks don't crash.
+
+    Uses a SELECT guard **plus** a catch on IntegrityError so that concurrent
+    requests processing the same message (race window between SELECT and INSERT)
+    do not blow up.  The rollback on IntegrityError resets the session so the
+    caller can keep using it for subsequent emails.
     """
+    existing = session.exec(
+        select(ProcessedEmail).where(
+            ProcessedEmail.gmail_message_id == msg.id
+        )
+    ).first()
+    if existing is not None:
+        logger.debug("Skipping _record_email for %s — already in ledger", msg.id)
+        return
+
     pe = ProcessedEmail(
         gmail_message_id=msg.id,
         sender=sender,
@@ -196,7 +203,17 @@ def _record_email(
         error_message=error_message,
     )
     session.add(pe)
-    session.commit()
+    try:
+        session.commit()
+    except Exception as exc:
+        if "UNIQUE constraint failed" in str(exc) or "IntegrityError" in type(exc).__name__:
+            logger.debug(
+                "Concurrent insert for processed_emails %s — rolling back duplicate (harmless race)",
+                msg.id,
+            )
+            session.rollback()
+        else:
+            raise
 
 
 def _process_email(
@@ -527,6 +544,7 @@ def scrape_new_emails(
             except Exception as exc:
                 error_msg = f"[{msg.id}] {msg.subject[:60]}: {exc}"
                 logger.exception("Failed to process email %s (%s)", msg.id, msg.subject[:60])
+                session.rollback()
                 result.emails_failed += 1
                 result.errors.append(error_msg)
 
@@ -643,6 +661,7 @@ def run_historical_backfill(
                     result.emails_skipped += 1
                 already_done.add(msg.id)
             except Exception as exc:
+                session.rollback()
                 result.emails_failed += 1
                 result.errors.append(f"[{msg.id}] {exc}")
                 try:
@@ -713,6 +732,7 @@ def run_historical_backfill(
                     result.emails_skipped += 1
                 already_done.add(msg.id)
             except Exception as exc:
+                session.rollback()
                 result.emails_failed += 1
                 result.errors.append(f"[{msg.id}] {exc}")
                 try:

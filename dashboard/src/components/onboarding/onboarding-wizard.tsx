@@ -16,15 +16,17 @@ import * as React from "react"
 import { GoalTemplateWizard } from "@/components/onboarding/goal-template-wizard"
 import { OnboardingOptionalLlmKeys } from "@/components/onboarding/onboarding-optional-llm-keys"
 import { PreClassificationForm } from "@/components/onboarding/pre-classification-form"
+import { ClassificationBatchReview } from "@/components/onboarding/classification-batch-review"
 import { StepBackfill, type BackfillProgressSnapshot } from "@/components/onboarding/step-backfill"
-import { StepClassification } from "@/components/onboarding/step-classification"
 import { StepDiscovery } from "@/components/onboarding/step-discovery"
 import { StepGapDetection } from "@/components/onboarding/step-gap-detection"
 import { StepSummary } from "@/components/onboarding/step-summary"
 import { StepWelcome } from "@/components/onboarding/step-welcome"
 import { Button } from "@/components/ui/button"
 import {
+  ApiError,
   fetchOnboardingBackfillProgress,
+  fetchOnboardingUnknowns,
   patchOnboardingState,
   postOnboardingBackfillChunk,
   postOnboardingBackfillResume,
@@ -46,7 +48,6 @@ export type WizardStepId =
   | "preclass"
   | "apikey"
   | "backfill"
-  | "classification"
   | "gaps"
   | "goals"
   | "summary"
@@ -57,7 +58,6 @@ const STEP_META: { id: WizardStepId; label: string }[] = [
   { id: "preclass", label: "Your name" },
   { id: "apikey", label: "Smart labels (opt.)" },
   { id: "backfill", label: "Import mail" },
-  { id: "classification", label: "Review" },
   { id: "gaps", label: "Coverage" },
   { id: "goals", label: "Goals" },
   { id: "summary", label: "Done" },
@@ -68,7 +68,7 @@ const WIZARD_STEP_IDS = new Set<WizardStepId>(STEP_META.map((s) => s.id))
 
 /**
  * Map persisted ``OnboardingState.current_step`` to the in-memory panel id.
- * ``classification`` needs ``classifySource`` in React state — resume via backfill loop instead.
+ * ``classification`` used to be a separate step; we now embed review under **Import mail**.
  * ``completed`` means the user finished — start a fresh connect-account flow at welcome.
  */
 function panelFromServerStep(step: string): WizardStepId {
@@ -121,8 +121,9 @@ export function OnboardingWizard({
   const [bfSourceIdx, setBfSourceIdx] = React.useState(0)
   const [bfTick, setBfTick] = React.useState(0)
   const [bfProgress, setBfProgress] = React.useState<BackfillProgressSnapshot | null>(null)
+  /** True during ``POST /backfill`` — counts stay stale until the request returns; see StepBackfill. */
+  const [bfChunkPosting, setBfChunkPosting] = React.useState(false)
   const [bfError, setBfError] = React.useState<string | null>(null)
-  const [classifySource, setClassifySource] = React.useState<string | null>(null)
   const [resumeBusy, setResumeBusy] = React.useState(false)
 
   const queryClient = useQueryClient()
@@ -147,6 +148,18 @@ export function OnboardingWizard({
   const activeSourceKey = sourcesQ.data?.[bfSourceIdx]?.source_key ?? null
   const activeSourceLabel = activeSourceKey ? humanizeSourceKey(activeSourceKey) : null
 
+  /**
+   * Last email source finished ingesting (no more chunk work for this account). The combined
+   * classification queue can still list rows from *any* prior source — ``unknowns_pending`` on
+   * ``GET …/progress`` is only for the active source, so we must not treat “this source: 0” as
+   * “nothing left to review” when deciding auto-advance or read-only overlays.
+   */
+  const backfillSourcesLen = sourcesQ.data?.length ?? 0
+  const allMailSourcesFinished =
+    backfillSourcesLen > 0 &&
+    bfSourceIdx === backfillSourcesLen - 1 &&
+    bfProgress?.status === "complete"
+
   // Persist coarse wizard position so a refresh mid-flow still shows the same step name.
   // Skip while onboarding state is still loading and the user has not navigated yet — otherwise
   // we would PATCH the default ``welcome`` over the real server step.
@@ -162,22 +175,27 @@ export function OnboardingWizard({
     const prev = prevPanelRef.current
     prevPanelRef.current = panel
     if (panel !== "backfill") return
-    if (prev === "classification" || prev === "backfill") return
+    if (prev === "backfill") return
     setBfSourceIdx(0)
     setBfProgress(null)
     setBfError(null)
   }, [panel])
+
+  // Avoid showing the previous source's numbers on the new tab while the first GET loads.
+  React.useEffect(() => {
+    setBfProgress(null)
+  }, [bfSourceIdx])
 
   // ── Automated chunk loop (only while the backfill panel is visible) ─────────
   React.useEffect(() => {
     if (panel !== "backfill") return
     if (!sourcesQ.data?.length) return
 
-    let cancelled = false
+    const ac = new AbortController()
+    const { signal } = ac
 
     async function run() {
       setBfError(null)
-      // Re-read from the query inside the async closure so TypeScript knows the list exists.
       const currentList = sourcesQ.data
       if (!currentList?.length) {
         setUserPanel("gaps")
@@ -189,25 +207,44 @@ export function OnboardingWizard({
         return
       }
 
-      while (!cancelled) {
+      while (!signal.aborted) {
         let prog: BackfillProgressSnapshot
         try {
-          prog = await fetchOnboardingBackfillProgress(sk)
+          prog = await fetchOnboardingBackfillProgress(sk, { signal })
         } catch {
+          if (signal.aborted) return
           await new Promise((r) => setTimeout(r, 1000))
           continue
         }
-        if (cancelled) return
+        if (signal.aborted) return
         setBfProgress(prog)
 
         if (prog.status === "needs_classification") {
-          setClassifySource(sk)
-          setUserPanel("classification")
-          return
+          await new Promise((r) => setTimeout(r, 2000))
+          continue
         }
 
         if (prog.status === "complete") {
           if (bfSourceIdx >= currentList.length - 1) {
+            // ``GET …/progress`` unknowns are per-source; the review card loads **all** email-linked
+            // unknowns. Stay on Import mail until that global queue is empty so rows are not hidden.
+            let pendingGlobal = prog.unknowns_pending ?? 0
+            try {
+              const snap = await fetchOnboardingUnknowns({
+                limit: 1,
+                offset: 0,
+                signal,
+              })
+              pendingGlobal = snap.pending_total
+            } catch {
+              if (signal.aborted) return
+              // If the global check fails, fall back to this source’s count only.
+              pendingGlobal = prog.unknowns_pending ?? 0
+            }
+            if (signal.aborted) return
+            if (pendingGlobal > 0) {
+              return
+            }
             setUserPanel("gaps")
             return
           }
@@ -228,14 +265,22 @@ export function OnboardingWizard({
           return
         }
 
-        // ``idle`` with nothing queued — prime the first chunk.
         try {
+          // Do **not** pass ``signal`` into the POST: aborting the fetch does not stop the
+          // server, so the in-memory backfill lock would still be held → 409 spam and a UI
+          // that looks frozen until the server finishes anyway.
+          setBfChunkPosting(true)
           await postOnboardingBackfillChunk(sk, { chunk_size: 10 })
         } catch (e) {
-          if (!cancelled) {
-            setBfError(getUserFacingErrorMessage(e) || "We couldn’t start the next batch. Try again.")
+          if (signal.aborted) return
+          if (e instanceof ApiError && e.status === 409) {
+            await new Promise((r) => setTimeout(r, 2000))
+            continue
           }
+          setBfError(getUserFacingErrorMessage(e) || "We couldn’t start the next batch. Try again.")
           return
+        } finally {
+          setBfChunkPosting(false)
         }
         await new Promise((r) => setTimeout(r, 400))
       }
@@ -243,7 +288,7 @@ export function OnboardingWizard({
 
     void run()
     return () => {
-      cancelled = true
+      ac.abort()
     }
   }, [panel, bfSourceIdx, bfTick, sourcesQ.data])
 
@@ -257,11 +302,13 @@ export function OnboardingWizard({
     setBfError(null)
     try {
       await postOnboardingBackfillResume(sk)
+      setBfChunkPosting(true)
       await postOnboardingBackfillChunk(sk, { resume_from_pause: true, chunk_size: 10 })
       setBfTick((t) => t + 1)
     } catch (e) {
       setBfError(getUserFacingErrorMessage(e) || "We couldn’t resume the import. Try again.")
     } finally {
+      setBfChunkPosting(false)
       setResumeBusy(false)
     }
   }
@@ -284,8 +331,7 @@ export function OnboardingWizard({
     if (prev) setUserPanel(prev)
   }
 
-  const canBack = panel !== "classification" && panel !== "summary"
-  const hideChrome = panel === "classification"
+  const canBack = panel !== "summary"
 
   return (
     <div
@@ -295,35 +341,33 @@ export function OnboardingWizard({
         className,
       )}
     >
-      {!hideChrome && (
-        <header className="mb-8 space-y-3">
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            {mode === "setup" ? "First-run onboarding" : "Connect account"}
-          </p>
-          <h1 className="text-3xl font-semibold tracking-tight">
-            {mode === "setup" ? "Set up Arth" : "Add mail-driven accounts"}
-          </h1>
-          <div className="h-2 w-full max-w-md rounded-full bg-muted overflow-hidden">
-            <div
-              className="h-full bg-primary transition-all duration-300"
-              style={{ width: `${progressPct}%` }}
-            />
-          </div>
-          <ol className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-            {STEP_META.map((s, idx) => (
-              <li
-                key={s.id}
-                className={cn(
-                  "rounded-full border px-2 py-0.5",
-                  idx === stepIndex && "border-primary text-foreground bg-primary/5",
-                )}
-              >
-                {s.label}
-              </li>
-            ))}
-          </ol>
-        </header>
-      )}
+      <header className="mb-8 space-y-3">
+        <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          {mode === "setup" ? "First-run onboarding" : "Connect account"}
+        </p>
+        <h1 className="text-3xl font-semibold tracking-tight">
+          {mode === "setup" ? "Set up Arth" : "Add mail-driven accounts"}
+        </h1>
+        <div className="h-2 w-full max-w-md rounded-full bg-muted overflow-hidden">
+          <div
+            className="h-full bg-primary transition-all duration-300"
+            style={{ width: `${progressPct}%` }}
+          />
+        </div>
+        <ol className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+          {STEP_META.map((s, idx) => (
+            <li
+              key={s.id}
+              className={cn(
+                "rounded-full border px-2 py-0.5",
+                idx === stepIndex && "border-primary text-foreground bg-primary/5",
+              )}
+            >
+              {s.label}
+            </li>
+          ))}
+        </ol>
+      </header>
 
       <div className="flex-1">
         {panel === "welcome" && (
@@ -366,8 +410,28 @@ export function OnboardingWizard({
                   title={activeSourceLabel ?? activeSourceKey ?? "…"}
                   progress={bfProgress}
                   error={bfError}
+                  sources={sourcesQ.data}
+                  activeSourceIndex={bfSourceIdx}
                   onResumeFromPause={bfProgress?.status === "paused" ? handleResumePause : undefined}
                   resumeBusy={resumeBusy}
+                  importBusy={bfChunkPosting}
+                />
+                <ClassificationBatchReview
+                  importAwaitingClassification={bfProgress?.status === "needs_classification"}
+                  allMailSourcesImported={allMailSourcesFinished}
+                  mailImportActivelyProcessing={
+                    !allMailSourcesFinished &&
+                    (bfChunkPosting ||
+                      bfProgress?.current_phase === "listing_alerts" ||
+                      (bfProgress != null &&
+                        (bfProgress.status === "processing" ||
+                          bfProgress.status === "processing_statements" ||
+                          bfProgress.status === "processing_alerts")))
+                  }
+                  unknownsTrigger={`${bfSourceIdx}:${bfProgress?.status ?? "none"}:${bfProgress?.unknowns_pending ?? 0}`}
+                  onSubmitted={() => {
+                    setBfTick((t) => t + 1)
+                  }}
                 />
                 <Button type="button" variant="ghost" size="sm" onClick={() => setUserPanel("gaps")}>
                   Skip remaining mail → gap check
@@ -381,22 +445,12 @@ export function OnboardingWizard({
             )}
           </div>
         )}
-        {panel === "classification" && classifySource && (
-          <StepClassification
-            source={classifySource}
-            sourceLabel={humanizeSourceKey(classifySource)}
-            onContinueBackfill={() => {
-              setUserPanel("backfill")
-              setBfTick((t) => t + 1)
-            }}
-          />
-        )}
         {panel === "gaps" && <StepGapDetection />}
         {panel === "goals" && <GoalTemplateWizard />}
         {panel === "summary" && <StepSummary onDone={onFinished} />}
       </div>
 
-      {!hideChrome && panel !== "welcome" && panel !== "discovery" && (
+      {panel !== "welcome" && panel !== "discovery" && (
         <footer className="mt-10 flex flex-wrap items-center justify-between gap-3 border-t pt-6">
           <Button type="button" variant="ghost" onClick={() => goBack()} disabled={!canBack}>
             Back

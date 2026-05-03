@@ -52,10 +52,20 @@ def _flow_client(
     ):
         monkeypatch.setenv(k, "")
 
+    # Neuter init_db so the lifespan doesn't touch the production SQLite file.
+    # The scheduler and startup maintenance are handled by the autouse fixture
+    # _neuter_lifespan_side_effects in conftest.py.
     from api import database as _db_mod
+    import api.main as _main_mod
 
-    _orig = _db_mod.init_db
-    _db_mod.init_db = lambda: None
+    _orig_db_init = _db_mod.init_db
+    _orig_main_init = _main_mod.init_db
+
+    def _noop_init() -> None:
+        return None
+
+    _db_mod.init_db = _noop_init
+    _main_mod.init_db = _noop_init
 
     def _override_session():
         with Session(engine) as session:
@@ -63,11 +73,13 @@ def _flow_client(
 
     app.dependency_overrides[get_session] = _override_session
     app.dependency_overrides[get_current_user] = lambda: "flow_user"
-    with TestClient(app) as c:
-        yield c
-
-    _db_mod.init_db = _orig
-    app.dependency_overrides.clear()
+    try:
+        with TestClient(app) as c:
+            yield c
+    finally:
+        _db_mod.init_db = _orig_db_init
+        _main_mod.init_db = _orig_main_init
+        app.dependency_overrides.clear()
     # Reset pipeline LLM state for any module that set ``none`` in tests
     pc = importlib.import_module("pipeline.config")
     monkeypatch.setattr(pc, "LLM_MODEL", "auto", raising=False)
@@ -200,7 +212,11 @@ def test_classifier_status_and_stored_api_key(
     """``POST /api-key`` round-trips through ``UserSecrets``; status reflects a key when env is empty."""
     s = flow_client.get("/api/onboarding/classifier-status")
     assert s.status_code == 200
-    assert s.json()["has_any_api_key"] is False
+    j0 = s.json()
+    assert j0["has_any_api_key"] is False
+    assert j0["has_openai_api_key"] is False
+    assert j0["has_anthropic_api_key"] is False
+    assert j0["has_google_api_key"] is False
 
     r = flow_client.post(
         "/api/onboarding/api-key", json={"openai_api_key": "sk-insecure-test-xyz"}
@@ -208,13 +224,22 @@ def test_classifier_status_and_stored_api_key(
     assert r.status_code == 200, r.text
 
     s2 = flow_client.get("/api/onboarding/classifier-status")
-    assert s2.json()["has_any_api_key"] is True
+    j2 = s2.json()
+    assert j2["has_any_api_key"] is True
+    assert j2["has_openai_api_key"] is True
+    assert j2["has_anthropic_api_key"] is False
+    assert j2["has_google_api_key"] is False
     with Session(engine) as session:  # type: ignore[call-arg]
         row = session.exec(select(UserSecrets).where(UserSecrets.user_id == "flow_user")).first()
         assert row and row.secrets_json and "insecure" in row.secrets_json
     # Teardown: clear the key so a later test does not see process-level env as “filled”
     r_clear = flow_client.post("/api/onboarding/api-key", json={"openai_api_key": ""})
     assert r_clear.status_code == 200
+    s3 = flow_client.get("/api/onboarding/classifier-status")
+    assert s3.status_code == 200
+    j3 = s3.json()
+    assert j3["has_any_api_key"] is False
+    assert j3["has_openai_api_key"] is False
 
 
 def test_preclassification_get_returns_saved_raw(
@@ -276,3 +301,56 @@ def test_preclassification_get_returns_saved_raw(
         assert ("FRIEND", "Rahul Verma") in by_rel
         for c in contacts:
             assert c.contact_source == "ONBOARDING"
+
+
+def test_backfill_progress_reconciles_stale_needs_classification(
+    engine: object,
+    flow_client: TestClient,
+) -> None:
+    """GET progress clears ``needs_classification`` when live unknowns are below the pause threshold."""
+    sk = "hdfc_savings"
+    blob = {
+        "status": "needs_classification",
+        "emails_found": 44,
+        "emails_processed": 30,
+        "transactions_parsed": 631,
+        "unknowns_pending": 28,
+        "error_message": None,
+        "_pending_alert_ids": ["m1", "m2"],
+    }
+    with Session(engine) as session:  # type: ignore[call-arg]
+        session.add(
+            OnboardingState(
+                user_id="flow_user",
+                current_step="backfill",
+                backfill_progress_json=json.dumps({sk: blob}),
+            )
+        )
+        session.commit()
+
+    with (
+        patch(
+            "api.routes.onboarding.count_classification_unknowns",
+            return_value=15,
+        ),
+        patch(
+            "api.routes.onboarding.effective_onboarding_unknown_threshold",
+            return_value=20,
+        ),
+    ):
+        r = flow_client.get(f"/api/onboarding/backfill/{sk}/progress")
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["unknowns_pending"] == 15
+    assert body["status"] == "processing_alerts"
+    assert body["current_phase"] == "alerts"
+
+    with Session(engine) as session:  # type: ignore[call-arg]
+        st = session.exec(
+            select(OnboardingState).where(OnboardingState.user_id == "flow_user")
+        ).one()
+        saved = json.loads(st.backfill_progress_json or "{}")[sk]
+        assert saved["status"] == "processing_alerts"
+        assert saved["unknowns_pending"] == 15
+        assert saved["_pending_alert_ids"] == ["m1", "m2"]

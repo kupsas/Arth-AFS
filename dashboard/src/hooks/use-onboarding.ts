@@ -63,6 +63,9 @@ export function useOnboardingClassifierStatus(
     UseQueryOptions<{
       llm_model: string
       has_any_api_key: boolean
+      has_openai_api_key: boolean
+      has_anthropic_api_key: boolean
+      has_google_api_key: boolean
       unknown_threshold: number
     }>
   >,

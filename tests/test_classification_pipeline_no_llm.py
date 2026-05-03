@@ -105,3 +105,24 @@ def test_user_stored_openai_key_persisted_in_user_secrets(engine: object) -> Non
         row = session.exec(select(UserSecrets).where(UserSecrets.user_id == "key_user")).first()
         assert row is not None
         assert "sk-test-abc" in (row.secrets_json or "")
+
+
+def test_user_stored_classifier_presence_ignores_process_env(
+    engine: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``user_stored_classifier_api_key_presence`` must not treat ``OPENAI_*`` in env as stored keys."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env-not-usersecrets")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-from-env")
+    with Session(engine) as session:  # type: ignore[call-arg]
+        ho, ha, hg = cr.user_stored_classifier_api_key_presence(session, "no_row_yet")
+        assert (ho, ha, hg) == (False, False, False)
+
+
+def test_onboarding_should_resume_after_classify_zero_threshold() -> None:
+    """Default resume policy: only continue backfill when the review queue is empty."""
+    assert cr.onboarding_should_resume_after_classify(0, 0) is True
+    assert cr.onboarding_should_resume_after_classify(1, 0) is False
+    assert cr.onboarding_should_resume_after_classify(0, 5) is True
+    assert cr.onboarding_should_resume_after_classify(4, 5) is True
+    assert cr.onboarding_should_resume_after_classify(5, 5) is False
