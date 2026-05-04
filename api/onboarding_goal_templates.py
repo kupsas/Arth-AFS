@@ -21,6 +21,10 @@ from api.services.inflation_service import (
 
 # All amounts are INR (numeric, not strings).
 # Timeframes in years; emergency uses fractional years (0.5 = six months).
+#
+# ``goal_class`` drives onboarding UX and POST /api/goals validation:
+#   POINT_IN_TIME — lump-sum / corpus toward ``target_date``
+#   RECURRING_CASH_FLOW — ``recurrence_amount`` + ``recurrence_frequency`` (EMI, annual trip, …)
 GOAL_TEMPLATES: list[dict[str, Any]] = [
     {
         "id": "house",
@@ -104,7 +108,7 @@ GOAL_TEMPLATES: list[dict[str, Any]] = [
     },
     {
         "id": "travel",
-        "name": "Travel fund",
+        "name": "Annual vacation & travel",
         "icon": "✈️",
         "default_target_amount_min": 100_000,
         "default_target_amount_max": 500_000,
@@ -121,6 +125,24 @@ GOAL_TEMPLATES: list[dict[str, Any]] = [
         "recurrence_frequency": "ANNUAL",
     },
     {
+        "id": "loan_emi",
+        "name": "Loan / EMI payments",
+        "icon": "🏦",
+        "default_target_amount_min": 15_000,
+        "default_target_amount_max": 120_000,
+        "default_timeframe_years_min": 2.0,
+        "default_timeframe_years_max": 10.0,
+        "suggested_priority": 1,
+        "default_expected_return_rate": 0.0,
+        "goal_type": "DEBT_PAYOFF",
+        "goal_class": "RECURRING_CASH_FLOW",
+        "goal_subtype": "LOAN_PAYOFF",
+        "time_horizon": "MONTHLY",
+        "funding_mode": "CONSTRAINT",
+        "recurrence_amount_hint": 50_000,
+        "recurrence_frequency": "MONTHLY",
+    },
+    {
         "id": "custom",
         "name": "Custom goal",
         "icon": "✨",
@@ -135,6 +157,27 @@ GOAL_TEMPLATES: list[dict[str, Any]] = [
         "goal_subtype": "CUSTOM",
         "time_horizon": "MULTI_YEAR",
         "funding_mode": "ACCUMULATION",
+    },
+]
+
+# Shipped on every ``GET /api/onboarding/goal-templates`` so the client can group
+# cards without hard-coding copy. Order is the suggested UX order (PIT first).
+TEMPLATE_LIST_SECTIONS: list[dict[str, str]] = [
+    {
+        "goal_class": "POINT_IN_TIME",
+        "title": "One-time goals",
+        "description": (
+            "Save toward a target date — home, vehicle, wedding, retirement, emergency "
+            "fund, or your own amount (custom)."
+        ),
+    },
+    {
+        "goal_class": "RECURRING_CASH_FLOW",
+        "title": "Recurring cash flows",
+        "description": (
+            "Budgets that repeat on a schedule — annual vacation set-aside or monthly "
+            "loan EMI (principal is nominal; planning copy below is display-only)."
+        ),
     },
 ]
 
@@ -160,6 +203,69 @@ def _future_value_today_denominated(
     return target_today * ((1.0 + r) ** years)
 
 
+def _period_word(recurrence_frequency: str | None) -> str:
+    f = (recurrence_frequency or "ANNUAL").strip().upper()
+    return {"MONTHLY": "month", "QUARTERLY": "quarter", "ANNUAL": "year"}.get(
+        f, "period"
+    )
+
+
+def _pit_template_preview(
+    t_amt: float,
+    t_y: float,
+    *,
+    infl_pct: float,
+    lbl: str,
+) -> dict[str, Any]:
+    fv = _future_value_today_denominated(t_amt, infl_pct, t_y)
+    return {
+        "target_today_in_inr": t_amt,
+        "horizon_years": t_y,
+        "inflation_annual_percent_used": infl_pct,
+        "inflation_fv_inr": round(fv, 2),
+        "preview_mechanism": "POINT_IN_TIME",
+        "copy": (
+            f"Target: ₹{t_amt:,.0f} in today's rupees — "
+            f"inflation-adjusted ≈ ₹{fv:,.0f} in ~{t_y:.1f}y "
+            f"at {infl_pct:.1f}%/yr ({lbl})."
+        ),
+    }
+
+
+def _recurring_template_preview(
+    t_amt: float,
+    t_y: float,
+    *,
+    goal_subtype: str,
+    recurrence_frequency: str | None,
+    infl_pct: float,
+    lbl: str,
+) -> dict[str, Any]:
+    period = _period_word(recurrence_frequency)
+    if goal_subtype == "LOAN_PAYOFF":
+        fv = t_amt
+        copy = (
+            f"EMI-style outflow: about ₹{t_amt:,.0f} per {period} (today's rupees), "
+            f"planning window ~{t_y:.1f} years. Loan payments are tracked in nominal "
+            "rupees (no leisure-style inflation compounding on this line)."
+        )
+    else:
+        fv = _future_value_today_denominated(t_amt, infl_pct, t_y)
+        copy = (
+            f"Recurring budget: about ₹{t_amt:,.0f} per {period} (today's rupees). "
+            f"If similar costs rise ~{infl_pct:.1f}%/yr ({lbl}), a rough run-rate after "
+            f"~{t_y:.1f}y might be nearer ₹{fv:,.0f} per {period} — display only."
+        )
+    return {
+        "target_today_in_inr": t_amt,
+        "horizon_years": t_y,
+        "inflation_annual_percent_used": infl_pct,
+        "inflation_fv_inr": round(fv, 2),
+        "preview_mechanism": "RECURRING_CASH_FLOW",
+        "copy": copy,
+    }
+
+
 def build_goal_templates_response(
     session: Session,
     *,
@@ -174,9 +280,13 @@ def build_goal_templates_response(
     The math is **display-only** — live goals still use the simulation stack.
 
     Pass ``target_amount`` + ``years`` together with ``template_id`` to get a
-    per-template *preview* (category-specific inflation).  Without
-    ``template_id``, a single ``headline_preview`` using CPI_GENERAL is
-    included instead so the list response stays small.
+    per-template *preview*: lump-sum FV for ``POINT_IN_TIME``, recurring wording
+    for ``RECURRING_CASH_FLOW``. Without ``template_id``, ``headline_preview``
+    (one-time FV) and ``headline_preview_recurring`` (run-rate hint) are both
+    included when those query params are set.
+
+    ``template_sections`` is always returned so clients can group the grid by
+    ``goal_class`` without duplicating product copy.
     """
     headline = _annual_inflation_pct(session, "CPI_GENERAL")
 
@@ -206,24 +316,29 @@ def build_goal_templates_response(
             t_amt = float(target_amount)  # type: ignore[arg-type]
             t_y = float(years)  # type: ignore[arg-type]
             if math.isfinite(t_amt) and math.isfinite(t_y) and t_amt > 0 and t_y > 0:
-                fv = _future_value_today_denominated(t_amt, infl_pct, t_y)
-                enriched["preview"] = {
-                    "target_today_in_inr": t_amt,
-                    "horizon_years": t_y,
-                    "inflation_annual_percent_used": infl_pct,
-                    "inflation_fv_inr": round(fv, 2),
-                    "copy": (
-                        f"Target: ₹{t_amt:,.0f} in today's rupees — "
-                        f"inflation-adjusted ≈ ₹{fv:,.0f} in ~{t_y:.1f}y "
-                        f"at {infl_pct:.1f}%/yr ({lbl})."
-                    ),
-                }
+                gc = str(row.get("goal_class") or "POINT_IN_TIME")
+                if gc == "RECURRING_CASH_FLOW":
+                    enriched["preview"] = _recurring_template_preview(
+                        t_amt,
+                        t_y,
+                        goal_subtype=gsubtype,
+                        recurrence_frequency=str(
+                            row.get("recurrence_frequency") or "ANNUAL"
+                        ),
+                        infl_pct=infl_pct,
+                        lbl=lbl,
+                    )
+                else:
+                    enriched["preview"] = _pit_template_preview(
+                        t_amt, t_y, infl_pct=infl_pct, lbl=lbl
+                    )
 
         out_templates.append(enriched)
 
     extra: dict[str, Any] = {
         "headline_cpi_annual_percent": round(headline, 2),
         "templates": out_templates,
+        "template_sections": [dict(s) for s in TEMPLATE_LIST_SECTIONS],
     }
     if (
         target_amount is not None
@@ -239,9 +354,23 @@ def build_goal_templates_response(
                 "horizon_years": t_y,
                 "inflation_annual_percent_used": headline,
                 "inflation_fv_inr": round(fv, 2),
+                "preview_mechanism": "POINT_IN_TIME",
                 "copy": (
-                    f"Headline India CPI: ₹{t_amt:,.0f} * (1+{headline/100.0:.4f})^{t_y:.1f} "
-                    f"≈ ₹{fv:,.0f} (display only)."
+                    "One-time goals: today's rupees grown with headline India CPI — "
+                    f"₹{t_amt:,.0f} → about ₹{fv:,.0f} over ~{t_y:.1f}y "
+                    f"(display only; pick a template below for category-specific hints)."
+                ),
+            }
+            extra["headline_preview_recurring"] = {
+                "target_today_in_inr": t_amt,
+                "horizon_years": t_y,
+                "inflation_annual_percent_used": headline,
+                "inflation_fv_inr": round(t_amt, 2),
+                "preview_mechanism": "RECURRING_CASH_FLOW",
+                "copy": (
+                    "Recurring goals: use the amount as a per-month or per-year run-rate "
+                    f"(here ₹{t_amt:,.0f}) over ~{t_y:.1f}y — open a recurring template for "
+                    "wording that matches EMI vs annual vacation."
                 ),
             }
     return extra

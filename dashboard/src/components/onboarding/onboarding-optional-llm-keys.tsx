@@ -40,6 +40,11 @@ import {
   getUserFacingErrorMessage,
   userMessageFromApiResponseBody,
 } from "@/lib/user-facing-api-error";
+import {
+  describeApiKeySanitiseFailure,
+  guardApiKeyInput,
+  ONBOARDING_INPUT_LIMITS,
+} from "@/lib/onboarding-input-validation";
 import { cn } from "@/lib/utils";
 
 /** Partial POST body: only sent keys are merged; empty string clears that provider. */
@@ -141,9 +146,19 @@ export function OnboardingOptionalLlmKeys() {
       anthropic_api_key?: string;
       google_api_key?: string;
     } = {};
-    const o = openai.trim();
-    const a = anthropic.trim();
-    const g = google.trim();
+    const o = guardApiKeyInput(openai, ONBOARDING_INPUT_LIMITS.llmApiKeyChars);
+    const a = guardApiKeyInput(anthropic, ONBOARDING_INPUT_LIMITS.llmApiKeyChars);
+    const g = guardApiKeyInput(google, ONBOARDING_INPUT_LIMITS.llmApiKeyChars);
+
+    const sanitiseErr =
+      describeApiKeySanitiseFailure(openai, o) ||
+      describeApiKeySanitiseFailure(anthropic, a) ||
+      describeApiKeySanitiseFailure(google, g);
+    if (sanitiseErr) {
+      setErr(sanitiseErr);
+      return;
+    }
+
     if (o) body.openai_api_key = o;
     if (a) body.anthropic_api_key = a;
     if (g) body.google_api_key = g;
@@ -388,14 +403,29 @@ export function OnboardingOptionalLlmKeys() {
                   </div>
                   <p className="text-xs text-muted-foreground">{hint}</p>
                   {addExpanded === field && !hasKey && (
-                    <Input
-                      id={inputId}
-                      type="password"
-                      autoComplete="off"
-                      value={inputValue}
-                      onChange={(e) => setInput(e.target.value)}
-                      placeholder={placeholder}
-                    />
+                    <div className="grid gap-1">
+                      <Input
+                        id={inputId}
+                        type="password"
+                        autoComplete="off"
+                        maxLength={ONBOARDING_INPUT_LIMITS.llmApiKeyChars}
+                        value={inputValue}
+                        aria-describedby={`${inputId}-paste-hint`}
+                        onChange={(e) =>
+                          setInput(
+                            guardApiKeyInput(
+                              e.target.value,
+                              ONBOARDING_INPUT_LIMITS.llmApiKeyChars,
+                            ),
+                          )
+                        }
+                        placeholder={placeholder}
+                      />
+                      <p id={`${inputId}-paste-hint`} className="text-xs text-muted-foreground">
+                        Paste one line only — spaces and control characters are removed automatically (max{" "}
+                        {ONBOARDING_INPUT_LIMITS.llmApiKeyChars.toLocaleString("en-IN")} characters).
+                      </p>
+                    </div>
                   )}
                 </div>
               );

@@ -1308,6 +1308,15 @@ export interface OnboardingTemplatePreview {
   inflation_annual_percent_used: number;
   inflation_fv_inr: number;
   copy: string;
+  /** Present on onboarding goal-template previews — lump sum vs recurring wording. */
+  preview_mechanism?: "POINT_IN_TIME" | "RECURRING_CASH_FLOW" | string;
+}
+
+/** Grouping hints for the onboarding template grid (mirrors API ``template_sections``). */
+export interface OnboardingGoalTemplateSection {
+  goal_class: string;
+  title: string;
+  description: string;
 }
 
 export interface OnboardingGoalTemplate {
@@ -1337,6 +1346,10 @@ export interface OnboardingGoalTemplatesResponse {
   headline_cpi_annual_percent: number;
   templates: OnboardingGoalTemplate[];
   headline_preview?: OnboardingTemplatePreview;
+  /** Shown before a template is picked — explains run-rate vs one-time FV. */
+  headline_preview_recurring?: OnboardingTemplatePreview;
+  /** Order matches suggested UX: one-time block first, then recurring. */
+  template_sections?: OnboardingGoalTemplateSection[];
 }
 
 /** GET /api/onboarding/state — persisted wizard snapshot. */

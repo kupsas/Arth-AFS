@@ -23,6 +23,9 @@ export function useOnboardingGoalTemplates(
     queryKey: makeGoalTemplatesKey(params),
     queryFn: () => fetchOnboardingGoalTemplates(params),
     staleTime: 60_000,
+    // Amount / horizon drive the query key; without this, each keystroke clears `data` until
+    // the new fetch finishes → template list + detail card unmount → layout collapse + scroll jump.
+    placeholderData: (previousData) => previousData,
     ...options,
   })
 }

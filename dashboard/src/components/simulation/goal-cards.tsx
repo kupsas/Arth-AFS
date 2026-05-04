@@ -28,6 +28,15 @@ import {
 } from "@/components/ui/select";
 import { SimulationGoalTargetMoneyHint } from "@/components/goal-target-money-hint";
 import { recurrenceAmountToMonthlyInr } from "@/lib/goal-target-money";
+import {
+  clampSimulationMoneyValue,
+  clampSimulationPercentValue,
+  guardIsoDateInput,
+  guardSimulationGoalName,
+  parseGoalDecimalString,
+  SIMULATION_INPUT_LIMITS,
+  SIMULATION_INVALID_DECIMAL_MESSAGE,
+} from "@/lib/onboarding-input-validation";
 import { newSimulationClientRowId } from "@/lib/simulation-goal-identity";
 import { formatCurrency } from "@/lib/utils";
 import type { GoalProjection, SimulationGoal, SimulationGoalClass } from "@/lib/types";
@@ -178,6 +187,11 @@ function GoalCardRow({
   canDown: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
+  const [inputError, setInputError] = React.useState<string | null>(null);
+
+  const rejectNumber = React.useCallback(() => {
+    setInputError(SIMULATION_INVALID_DECIMAL_MESSAGE);
+  }, []);
 
   const gc = normalizedGoalClass(goal);
   const isRecurring = gc === "RECURRING_CASH_FLOW";
@@ -269,6 +283,11 @@ function GoalCardRow({
 
       {open && (
         <div className="space-y-3 border-t border-border p-3 pt-2">
+          {inputError ? (
+            <p className="text-xs text-destructive" role="alert">
+              {inputError}
+            </p>
+          ) : null}
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
@@ -313,8 +332,13 @@ function GoalCardRow({
             <div className="space-y-1">
               <Label className="text-xs">Name</Label>
               <Input
+                maxLength={SIMULATION_INPUT_LIMITS.goalNameChars}
                 value={goal.name}
-                onChange={(e) => onUpdate({ name: e.target.value })}
+                aria-invalid={!goal.name.trim()}
+                onChange={(e) => {
+                  setInputError(null);
+                  onUpdate({ name: guardSimulationGoalName(e.target.value) });
+                }}
               />
             </div>
             <div className="space-y-1">
@@ -325,7 +349,10 @@ function GoalCardRow({
                     ? gc
                     : "POINT_IN_TIME"
                 }
-                onValueChange={(v) => onUpdate({ goal_class: v as SimulationGoalClass })}
+                onValueChange={(v) => {
+                  setInputError(null);
+                  onUpdate({ goal_class: v as SimulationGoalClass });
+                }}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -357,12 +384,21 @@ function GoalCardRow({
                   <Input
                     type="number"
                     value={goal.recurrence_amount ?? ""}
-                    onChange={(e) =>
-                      onUpdate({
-                        recurrence_amount:
-                          e.target.value === "" ? null : Number(e.target.value),
-                      })
-                    }
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw.trim() === "") {
+                        setInputError(null);
+                        onUpdate({ recurrence_amount: null });
+                        return;
+                      }
+                      const n = parseGoalDecimalString(raw);
+                      if (n === null) {
+                        rejectNumber();
+                        return;
+                      }
+                      setInputError(null);
+                      onUpdate({ recurrence_amount: clampSimulationMoneyValue(n) });
+                    }}
                   />
                 </div>
                 <div className="space-y-1">
@@ -375,9 +411,10 @@ function GoalCardRow({
                         ? freq
                         : "MONTHLY"
                     }
-                    onValueChange={(v) =>
-                      onUpdate({ recurrence_frequency: v })
-                    }
+                    onValueChange={(v) => {
+                      setInputError(null);
+                      onUpdate({ recurrence_frequency: v });
+                    }}
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -396,9 +433,10 @@ function GoalCardRow({
                   <Input
                     type="date"
                     value={goal.recurrence_start ?? ""}
-                    onChange={(e) =>
-                      onUpdate({ recurrence_start: e.target.value || null })
-                    }
+                    onChange={(e) => {
+                      setInputError(null);
+                      onUpdate({ recurrence_start: guardIsoDateInput(e.target.value) });
+                    }}
                   />
                 </div>
                 <div className="space-y-1">
@@ -406,9 +444,10 @@ function GoalCardRow({
                   <Input
                     type="date"
                     value={goal.recurrence_end ?? ""}
-                    onChange={(e) =>
-                      onUpdate({ recurrence_end: e.target.value || null })
-                    }
+                    onChange={(e) => {
+                      setInputError(null);
+                      onUpdate({ recurrence_end: guardIsoDateInput(e.target.value) });
+                    }}
                   />
                 </div>
                 <div className="space-y-1">
@@ -420,12 +459,21 @@ function GoalCardRow({
                     step="0.1"
                     placeholder="headline"
                     value={goal.inflation_rate ?? ""}
-                    onChange={(e) =>
-                      onUpdate({
-                        inflation_rate:
-                          e.target.value === "" ? null : Number(e.target.value),
-                      })
-                    }
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw.trim() === "") {
+                        setInputError(null);
+                        onUpdate({ inflation_rate: null });
+                        return;
+                      }
+                      const n = parseGoalDecimalString(raw);
+                      if (n === null) {
+                        rejectNumber();
+                        return;
+                      }
+                      setInputError(null);
+                      onUpdate({ inflation_rate: clampSimulationPercentValue(n) });
+                    }}
                   />
                 </div>
                 <div className="space-y-1">
@@ -436,9 +484,21 @@ function GoalCardRow({
                     type="number"
                     step="0.1"
                     value={goal.expected_return_rate ?? 10}
-                    onChange={(e) =>
-                      onUpdate({ expected_return_rate: Number(e.target.value) })
-                    }
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw.trim() === "") {
+                        setInputError(null);
+                        onUpdate({ expected_return_rate: 10 });
+                        return;
+                      }
+                      const n = parseGoalDecimalString(raw);
+                      if (n === null) {
+                        rejectNumber();
+                        return;
+                      }
+                      setInputError(null);
+                      onUpdate({ expected_return_rate: clampSimulationPercentValue(n) });
+                    }}
                   />
                 </div>
               </>
@@ -452,11 +512,21 @@ function GoalCardRow({
                   <Input
                     type="number"
                     value={goal.target_amount ?? ""}
-                    onChange={(e) =>
-                      onUpdate({
-                        target_amount: e.target.value === "" ? null : Number(e.target.value),
-                      })
-                    }
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw.trim() === "") {
+                        setInputError(null);
+                        onUpdate({ target_amount: null });
+                        return;
+                      }
+                      const n = parseGoalDecimalString(raw);
+                      if (n === null) {
+                        rejectNumber();
+                        return;
+                      }
+                      setInputError(null);
+                      onUpdate({ target_amount: clampSimulationMoneyValue(n) });
+                    }}
                   />
                 </div>
                 <div className="space-y-1">
@@ -464,9 +534,10 @@ function GoalCardRow({
                   <Input
                     type="date"
                     value={goal.target_date ?? ""}
-                    onChange={(e) =>
-                      onUpdate({ target_date: e.target.value || null })
-                    }
+                    onChange={(e) => {
+                      setInputError(null);
+                      onUpdate({ target_date: guardIsoDateInput(e.target.value) });
+                    }}
                   />
                 </div>
                 <div className="space-y-1">
@@ -474,9 +545,21 @@ function GoalCardRow({
                   <Input
                     type="number"
                     value={goal.starting_balance ?? 0}
-                    onChange={(e) =>
-                      onUpdate({ starting_balance: Number(e.target.value) })
-                    }
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw.trim() === "") {
+                        setInputError(null);
+                        onUpdate({ starting_balance: 0 });
+                        return;
+                      }
+                      const n = parseGoalDecimalString(raw);
+                      if (n === null) {
+                        rejectNumber();
+                        return;
+                      }
+                      setInputError(null);
+                      onUpdate({ starting_balance: clampSimulationMoneyValue(n) });
+                    }}
                   />
                 </div>
                 <div className="space-y-1">
@@ -485,9 +568,21 @@ function GoalCardRow({
                     type="number"
                     step="0.1"
                     value={goal.expected_return_rate ?? 10}
-                    onChange={(e) =>
-                      onUpdate({ expected_return_rate: Number(e.target.value) })
-                    }
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw.trim() === "") {
+                        setInputError(null);
+                        onUpdate({ expected_return_rate: 10 });
+                        return;
+                      }
+                      const n = parseGoalDecimalString(raw);
+                      if (n === null) {
+                        rejectNumber();
+                        return;
+                      }
+                      setInputError(null);
+                      onUpdate({ expected_return_rate: clampSimulationPercentValue(n) });
+                    }}
                   />
                 </div>
                 <div className="space-y-1">
@@ -497,12 +592,21 @@ function GoalCardRow({
                     step="0.1"
                     placeholder="headline"
                     value={goal.inflation_rate ?? ""}
-                    onChange={(e) =>
-                      onUpdate({
-                        inflation_rate:
-                          e.target.value === "" ? null : Number(e.target.value),
-                      })
-                    }
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw.trim() === "") {
+                        setInputError(null);
+                        onUpdate({ inflation_rate: null });
+                        return;
+                      }
+                      const n = parseGoalDecimalString(raw);
+                      if (n === null) {
+                        rejectNumber();
+                        return;
+                      }
+                      setInputError(null);
+                      onUpdate({ inflation_rate: clampSimulationPercentValue(n) });
+                    }}
                   />
                 </div>
               </>
@@ -516,11 +620,21 @@ function GoalCardRow({
                   <Input
                     type="number"
                     value={goal.target_amount ?? ""}
-                    onChange={(e) =>
-                      onUpdate({
-                        target_amount: e.target.value === "" ? null : Number(e.target.value),
-                      })
-                    }
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw.trim() === "") {
+                        setInputError(null);
+                        onUpdate({ target_amount: null });
+                        return;
+                      }
+                      const n = parseGoalDecimalString(raw);
+                      if (n === null) {
+                        rejectNumber();
+                        return;
+                      }
+                      setInputError(null);
+                      onUpdate({ target_amount: clampSimulationMoneyValue(n) });
+                    }}
                   />
                 </div>
                 <div className="space-y-1">
@@ -528,9 +642,10 @@ function GoalCardRow({
                   <Input
                     type="date"
                     value={goal.target_date ?? ""}
-                    onChange={(e) =>
-                      onUpdate({ target_date: e.target.value || null })
-                    }
+                    onChange={(e) => {
+                      setInputError(null);
+                      onUpdate({ target_date: guardIsoDateInput(e.target.value) });
+                    }}
                   />
                 </div>
                 <div className="space-y-1">
@@ -538,9 +653,21 @@ function GoalCardRow({
                   <Input
                     type="number"
                     value={goal.starting_balance ?? 0}
-                    onChange={(e) =>
-                      onUpdate({ starting_balance: Number(e.target.value) })
-                    }
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw.trim() === "") {
+                        setInputError(null);
+                        onUpdate({ starting_balance: 0 });
+                        return;
+                      }
+                      const n = parseGoalDecimalString(raw);
+                      if (n === null) {
+                        rejectNumber();
+                        return;
+                      }
+                      setInputError(null);
+                      onUpdate({ starting_balance: clampSimulationMoneyValue(n) });
+                    }}
                   />
                 </div>
                 <div className="space-y-1">
@@ -549,9 +676,21 @@ function GoalCardRow({
                     type="number"
                     step="0.1"
                     value={goal.expected_return_rate ?? 10}
-                    onChange={(e) =>
-                      onUpdate({ expected_return_rate: Number(e.target.value) })
-                    }
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw.trim() === "") {
+                        setInputError(null);
+                        onUpdate({ expected_return_rate: 10 });
+                        return;
+                      }
+                      const n = parseGoalDecimalString(raw);
+                      if (n === null) {
+                        rejectNumber();
+                        return;
+                      }
+                      setInputError(null);
+                      onUpdate({ expected_return_rate: clampSimulationPercentValue(n) });
+                    }}
                   />
                 </div>
                 <div className="space-y-1">
@@ -561,12 +700,21 @@ function GoalCardRow({
                     step="0.1"
                     placeholder="headline"
                     value={goal.inflation_rate ?? ""}
-                    onChange={(e) =>
-                      onUpdate({
-                        inflation_rate:
-                          e.target.value === "" ? null : Number(e.target.value),
-                      })
-                    }
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw.trim() === "") {
+                        setInputError(null);
+                        onUpdate({ inflation_rate: null });
+                        return;
+                      }
+                      const n = parseGoalDecimalString(raw);
+                      if (n === null) {
+                        rejectNumber();
+                        return;
+                      }
+                      setInputError(null);
+                      onUpdate({ inflation_rate: clampSimulationPercentValue(n) });
+                    }}
                   />
                 </div>
               </>

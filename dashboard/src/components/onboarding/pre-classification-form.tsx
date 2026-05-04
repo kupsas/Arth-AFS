@@ -41,6 +41,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { useFormDraft } from "@/hooks/use-form-draft";
 import { buildApiUrl } from "@/lib/api-base";
 import { fetchOnboardingPreclassificationSaved } from "@/lib/api";
+import {
+  guardMultilineText,
+  guardSingleLineText,
+  normalizePreclassificationDraft,
+  ONBOARDING_INPUT_LIMITS,
+} from "@/lib/onboarding-input-validation";
 import { getUserFacingErrorMessage, userMessageFromApiResponseBody } from "@/lib/user-facing-api-error";
 import { ChevronDown } from "lucide-react";
 
@@ -142,6 +148,29 @@ export function PreClassificationForm() {
   const [message, setMessage] = React.useState<string | null>(null);
   const [saveError, setSaveError] = React.useState<string | null>(null);
 
+  /** Normalise localStorage / bad merges once so types and length are always safe for React + API. */
+  React.useEffect(() => {
+    setD((prev) => {
+      const n = normalizePreclassificationDraft(prev);
+      if (
+        n.firstName === prev.firstName &&
+        n.lastName === prev.lastName &&
+        n.extrasRaw === prev.extrasRaw &&
+        n.familyNamesRaw === prev.familyNamesRaw &&
+        n.friendNamesRaw === prev.friendNamesRaw &&
+        n.accountFragmentsRaw === prev.accountFragmentsRaw &&
+        n.upiIdsRaw === prev.upiIdsRaw
+      ) {
+        return prev;
+      }
+      return n;
+    });
+  }, [setD]);
+
+  const firstNameInvalid = !d.firstName.trim();
+  const firstNameLen = d.firstName.length;
+  const lastNameLen = d.lastName.length;
+
   // Same splitting rules as save — keeps preview in sync with POST /preclassification.
   const extrasList = React.useMemo(() => splitHintLines(d.extrasRaw), [d.extrasRaw]);
 
@@ -224,11 +253,15 @@ export function PreClassificationForm() {
   async function onSave() {
     setMessage(null);
     setSaveError(null);
+    if (!d.firstName.trim()) {
+      setSaveError("First name is required — add how your bank usually prints your given name(s).");
+      return;
+    }
     setSaving(true);
     try {
       await savePreclassification({
-        first_name: d.firstName.trim(),
-        last_name: d.lastName.trim(),
+        first_name: guardSingleLineText(d.firstName.trim(), ONBOARDING_INPUT_LIMITS.preclassFirstLastChars),
+        last_name: guardSingleLineText(d.lastName.trim(), ONBOARDING_INPUT_LIMITS.preclassFirstLastChars),
         extra_aliases: extrasList,
         account_hints: accountHintsForSave,
         family_names: familyLines,
@@ -260,22 +293,55 @@ export function PreClassificationForm() {
           <Input
             id="pc-first"
             placeholder='e.g. "Sai Sashank"'
+            maxLength={ONBOARDING_INPUT_LIMITS.preclassFirstLastChars}
             value={d.firstName}
-            onChange={(e) => setD((p) => ({ ...p, firstName: e.target.value }))}
+            aria-invalid={firstNameInvalid}
+            aria-describedby={firstNameInvalid ? "pc-first-hint pc-first-err" : "pc-first-hint"}
+            onChange={(e) =>
+              setD((p) => ({
+                ...p,
+                firstName: guardSingleLineText(
+                  e.target.value,
+                  ONBOARDING_INPUT_LIMITS.preclassFirstLastChars,
+                ),
+              }))
+            }
             autoComplete="given-name"
           />
+          <p id="pc-first-hint" className="text-xs text-muted-foreground">
+            Max {ONBOARDING_INPUT_LIMITS.preclassFirstLastChars} characters ({firstNameLen}/
+            {ONBOARDING_INPUT_LIMITS.preclassFirstLastChars}). Control characters and line breaks are
+            stripped automatically.
+          </p>
+          {firstNameInvalid && (
+            <p id="pc-first-err" className="text-xs text-destructive" role="alert">
+              First name is required to save — we use it to build safe bank-text aliases.
+            </p>
+          )}
         </div>
         <div className="grid gap-2">
           <Label htmlFor="pc-last">Last name / surname</Label>
           <Input
             id="pc-last"
             placeholder='e.g. "Kuppa"'
+            maxLength={ONBOARDING_INPUT_LIMITS.preclassFirstLastChars}
             value={d.lastName}
-            onChange={(e) => setD((p) => ({ ...p, lastName: e.target.value }))}
+            aria-describedby="pc-last-hint"
+            onChange={(e) =>
+              setD((p) => ({
+                ...p,
+                lastName: guardSingleLineText(
+                  e.target.value,
+                  ONBOARDING_INPUT_LIMITS.preclassFirstLastChars,
+                ),
+              }))
+            }
             autoComplete="family-name"
           />
-          <p className="text-xs text-muted-foreground">
-            Do not worry about your last name matching your family. We handle it.
+          <p id="pc-last-hint" className="text-xs text-muted-foreground">
+            Optional. Max {ONBOARDING_INPUT_LIMITS.preclassFirstLastChars} characters (
+            {lastNameLen}/{ONBOARDING_INPUT_LIMITS.preclassFirstLastChars}). Do not worry about your
+            last name matching your family — we handle it.
           </p>
         </div>
         <div className="grid gap-2">
@@ -283,10 +349,24 @@ export function PreClassificationForm() {
           <Textarea
             id="pc-extras"
             placeholder={"One nickname per line, or comma-separated.\ne.g. SK KUPPA"}
+            maxLength={ONBOARDING_INPUT_LIMITS.preclassTextareaChars}
             value={d.extrasRaw}
-            onChange={(e) => setD((p) => ({ ...p, extrasRaw: e.target.value }))}
+            aria-describedby="pc-extras-hint"
+            onChange={(e) =>
+              setD((p) => ({
+                ...p,
+                extrasRaw: guardMultilineText(
+                  e.target.value,
+                  ONBOARDING_INPUT_LIMITS.preclassTextareaChars,
+                ),
+              }))
+            }
             rows={3}
           />
+          <p id="pc-extras-hint" className="text-xs text-muted-foreground">
+            Max {ONBOARDING_INPUT_LIMITS.preclassTextareaChars.toLocaleString("en-IN")} characters;
+            unusual control characters are stripped.
+          </p>
         </div>
         <details
           id="pc-family-friend-how"
@@ -323,27 +403,53 @@ export function PreClassificationForm() {
           <Label htmlFor="pc-family">Family names (optional)</Label>
           <Textarea
             id="pc-family"
-            aria-describedby="pc-family-friend-how"
+            aria-describedby="pc-family-friend-how pc-family-hint"
             placeholder={
               "One person per line or comma-separated — use what actually appears in bank/UPI text.\ne.g. Mom\nRahul Verma\nRahul Singh Shekhawat"
             }
+            maxLength={ONBOARDING_INPUT_LIMITS.preclassTextareaChars}
             value={d.familyNamesRaw}
-            onChange={(e) => setD((p) => ({ ...p, familyNamesRaw: e.target.value }))}
+            onChange={(e) =>
+              setD((p) => ({
+                ...p,
+                familyNamesRaw: guardMultilineText(
+                  e.target.value,
+                  ONBOARDING_INPUT_LIMITS.preclassTextareaChars,
+                ),
+              }))
+            }
             rows={3}
           />
+          <p id="pc-family-hint" className="text-xs text-muted-foreground">
+            Max {ONBOARDING_INPUT_LIMITS.preclassTextareaChars.toLocaleString("en-IN")} characters per
+            box.
+          </p>
         </div>
         <div className="grid gap-2">
           <Label htmlFor="pc-friends">Friend names (optional)</Label>
           <Textarea
             id="pc-friends"
-            aria-describedby="pc-family-friend-how"
+            aria-describedby="pc-family-friend-how pc-friends-hint"
             placeholder={
               "Same format as family. Add an extra line if the app uses a different spelling or order than above."
             }
+            maxLength={ONBOARDING_INPUT_LIMITS.preclassTextareaChars}
             value={d.friendNamesRaw}
-            onChange={(e) => setD((p) => ({ ...p, friendNamesRaw: e.target.value }))}
+            onChange={(e) =>
+              setD((p) => ({
+                ...p,
+                friendNamesRaw: guardMultilineText(
+                  e.target.value,
+                  ONBOARDING_INPUT_LIMITS.preclassTextareaChars,
+                ),
+              }))
+            }
             rows={3}
           />
+          <p id="pc-friends-hint" className="text-xs text-muted-foreground">
+            Max {ONBOARDING_INPUT_LIMITS.preclassTextareaChars.toLocaleString("en-IN")} characters per
+            box.
+          </p>
         </div>
         <div className="grid gap-2">
           <Label htmlFor="pc-account-hints">Account &amp; card number fragments (optional)</Label>
@@ -352,12 +458,24 @@ export function PreClassificationForm() {
             placeholder={
               "One per line or comma-separated — first four/last four numbers (ignore the zeroes)."
             }
+            maxLength={ONBOARDING_INPUT_LIMITS.preclassTextareaChars}
             value={d.accountFragmentsRaw}
-            onChange={(e) => setD((p) => ({ ...p, accountFragmentsRaw: e.target.value }))}
+            aria-describedby="pc-account-hint"
+            onChange={(e) =>
+              setD((p) => ({
+                ...p,
+                accountFragmentsRaw: guardMultilineText(
+                  e.target.value,
+                  ONBOARDING_INPUT_LIMITS.preclassTextareaChars,
+                ),
+              }))
+            }
             rows={3}
           />
-          <p className="text-xs text-muted-foreground">
-            This helps catch transfers your name/alias does not appear on.
+          <p id="pc-account-hint" className="text-xs text-muted-foreground">
+            This helps catch transfers your name/alias does not appear on. Max{" "}
+            {ONBOARDING_INPUT_LIMITS.preclassTextareaChars.toLocaleString("en-IN")} characters; control
+            characters stripped.
           </p>
         </div>
         <div className="grid gap-2">
@@ -365,12 +483,23 @@ export function PreClassificationForm() {
           <Textarea
             id="pc-upi-ids"
             placeholder={"One per line or comma-separated.\ne.g. yourname@okicici"}
+            maxLength={ONBOARDING_INPUT_LIMITS.preclassTextareaChars}
             value={d.upiIdsRaw}
-            onChange={(e) => setD((p) => ({ ...p, upiIdsRaw: e.target.value }))}
+            aria-describedby="pc-upi-hint"
+            onChange={(e) =>
+              setD((p) => ({
+                ...p,
+                upiIdsRaw: guardMultilineText(
+                  e.target.value,
+                  ONBOARDING_INPUT_LIMITS.preclassTextareaChars,
+                ),
+              }))
+            }
             rows={2}
           />
-          <p className="text-xs text-muted-foreground">
-            This helps identify self-transfers and prevent double counting in expenses.
+          <p id="pc-upi-hint" className="text-xs text-muted-foreground">
+            This helps identify self-transfers and prevent double counting in expenses. Max{" "}
+            {ONBOARDING_INPUT_LIMITS.preclassTextareaChars.toLocaleString("en-IN")} characters.
           </p>
         </div>
         {displayPreview && (

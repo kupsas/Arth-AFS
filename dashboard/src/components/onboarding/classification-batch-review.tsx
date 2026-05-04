@@ -55,6 +55,10 @@ import {
   type OnboardingUnknownTxnBrief,
 } from "@/lib/api";
 import { COUNTERPARTY_CATEGORY_OPTIONS } from "@/lib/counterparty-categories";
+import {
+  guardSingleLineText,
+  ONBOARDING_INPUT_LIMITS,
+} from "@/lib/onboarding-input-validation";
 import { humanizeSourceKey } from "@/lib/source-label";
 import { getUserFacingErrorMessage } from "@/lib/user-facing-api-error";
 import type { CounterpartyCategory } from "@/lib/types";
@@ -202,7 +206,10 @@ export function ClassificationBatchReview({
       const next = { ...prev };
       for (const t of txns) {
         if (next[t.id] === undefined) {
-          next[t.id] = defaultCounterpartyLabel(t);
+          next[t.id] = guardSingleLineText(
+            defaultCounterpartyLabel(t),
+            ONBOARDING_INPUT_LIMITS.counterpartyLabelChars,
+          );
         }
       }
       return next;
@@ -322,7 +329,8 @@ export function ClassificationBatchReview({
   function buildItem(txnId: number, category: string): OnboardingClassifyItem | null {
     const cat = category.trim();
     if (!cat) return null;
-    const cp = (counterpartyById[txnId] ?? "").trim();
+    const raw = (counterpartyById[txnId] ?? "").trim();
+    const cp = guardSingleLineText(raw, ONBOARDING_INPUT_LIMITS.counterpartyLabelChars).trim();
     if (!cp) return null;
     return {
       txn_id: txnId,
@@ -652,8 +660,19 @@ export function ClassificationBatchReview({
               {rows.map((t) => {
                 const checked = selectedIds.has(t.id);
                 const cat = categoryById[t.id] ?? "";
-                const cp = counterpartyById[t.id] ?? defaultCounterpartyLabel(t);
+                const cpFallback = guardSingleLineText(
+                  defaultCounterpartyLabel(t),
+                  ONBOARDING_INPUT_LIMITS.counterpartyLabelChars,
+                );
+                const cp = guardSingleLineText(
+                  counterpartyById[t.id] ?? cpFallback,
+                  ONBOARDING_INPUT_LIMITS.counterpartyLabelChars,
+                );
                 const sk = t.source_statement ?? sourceById[t.id] ?? "";
+                const amountNum = Number(t.amount);
+                const amountDisplay = Number.isFinite(amountNum)
+                  ? amountNum.toLocaleString("en-IN", { minimumFractionDigits: 2 })
+                  : "—";
                 return (
                   <div
                     key={t.id}
@@ -673,18 +692,44 @@ export function ClassificationBatchReview({
                       />
                       <div className="min-w-0 flex-1">
                         {editingCpId === t.id ? (
-                          <Input
-                            className="h-7 text-sm"
-                            value={cp}
-                            autoFocus
-                            onChange={(e) =>
-                              setCounterpartyById((prev) => ({ ...prev, [t.id]: e.target.value }))
-                            }
-                            onBlur={() => setEditingCpId(null)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") setEditingCpId(null);
-                            }}
-                          />
+                          <div className="min-w-0 flex flex-col gap-1">
+                            <Input
+                              className="h-7 text-sm"
+                              value={cp}
+                              maxLength={ONBOARDING_INPUT_LIMITS.counterpartyLabelChars}
+                              autoFocus
+                              aria-invalid={!cp.trim()}
+                              aria-describedby={`cp-edit-hint-${t.id}`}
+                              onChange={(e) =>
+                                setCounterpartyById((prev) => ({
+                                  ...prev,
+                                  [t.id]: guardSingleLineText(
+                                    e.target.value,
+                                    ONBOARDING_INPUT_LIMITS.counterpartyLabelChars,
+                                  ),
+                                }))
+                              }
+                              onBlur={() => {
+                                setCounterpartyById((prev) => {
+                                  const cur = guardSingleLineText(
+                                    prev[t.id] ?? cpFallback,
+                                    ONBOARDING_INPUT_LIMITS.counterpartyLabelChars,
+                                  ).trim();
+                                  return { ...prev, [t.id]: cur || cpFallback };
+                                });
+                                setEditingCpId(null);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  (e.target as HTMLInputElement).blur();
+                                }
+                              }}
+                            />
+                            <span id={`cp-edit-hint-${t.id}`} className="sr-only">
+                              Counterparty label, max {ONBOARDING_INPUT_LIMITS.counterpartyLabelChars}{" "}
+                              characters. Empty saves as the suggested bank label.
+                            </span>
+                          </div>
                         ) : (
                           <button
                             type="button"
@@ -697,7 +742,7 @@ export function ClassificationBatchReview({
                         )}
                       </div>
                       <span className="shrink-0 tabular-nums font-medium">
-                        ₹{Number(t.amount).toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                        ₹{amountDisplay}
                       </span>
                       <Button
                         type="button"

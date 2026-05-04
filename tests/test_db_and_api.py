@@ -613,6 +613,60 @@ class TestNegativeSurplusMonths:
         assert data["months_with_deficit"] == 1
 
 
+class TestOnboardingGoalTemplates:
+    """GET /api/onboarding/goal-templates — PIT vs recurring listing + previews."""
+
+    def test_lists_template_sections_and_loan_emi(self, client: TestClient):
+        resp = client.get("/api/onboarding/goal-templates")
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert "template_sections" in payload
+        sec_classes = [s["goal_class"] for s in payload["template_sections"]]
+        assert "POINT_IN_TIME" in sec_classes
+        assert "RECURRING_CASH_FLOW" in sec_classes
+        ids = {t["id"] for t in payload["templates"]}
+        assert "loan_emi" in ids
+        assert "travel" in ids
+        n_pit = sum(1 for t in payload["templates"] if t["goal_class"] == "POINT_IN_TIME")
+        n_rec = sum(1 for t in payload["templates"] if t["goal_class"] == "RECURRING_CASH_FLOW")
+        assert n_pit >= 1
+        assert n_rec >= 2
+
+    def test_recurring_preview_uses_emi_copy_for_loan(self, client: TestClient):
+        r = client.get(
+            "/api/onboarding/goal-templates",
+            params={"target_amount": 50_000, "years": 5, "template_id": "loan_emi"},
+        )
+        assert r.status_code == 200
+        loan = next(t for t in r.json()["templates"] if t["id"] == "loan_emi")
+        assert loan.get("preview")
+        assert loan["preview"]["preview_mechanism"] == "RECURRING_CASH_FLOW"
+        assert "EMI" in loan["preview"]["copy"]
+
+    def test_pit_preview_for_house(self, client: TestClient):
+        r = client.get(
+            "/api/onboarding/goal-templates",
+            params={"target_amount": 5_000_000, "years": 8, "template_id": "house"},
+        )
+        assert r.status_code == 200
+        house = next(t for t in r.json()["templates"] if t["id"] == "house")
+        assert house.get("preview")
+        assert house["preview"]["preview_mechanism"] == "POINT_IN_TIME"
+        assert "Target" in house["preview"]["copy"]
+
+    def test_headline_previews_when_no_template_selected(self, client: TestClient):
+        r = client.get(
+            "/api/onboarding/goal-templates",
+            params={"target_amount": 1_000_000, "years": 4},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert "headline_preview" in body
+        assert "headline_preview_recurring" in body
+        assert body["headline_preview"]["preview_mechanism"] == "POINT_IN_TIME"
+        assert body["headline_preview_recurring"]["preview_mechanism"] == "RECURRING_CASH_FLOW"
+
+
 # ───────────────────────────────────────────────────────────────────────────
 # Auth tests — uses a raw TestClient with NO dependency overrides so we
 # exercise the real authentication code path.
