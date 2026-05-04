@@ -10,7 +10,7 @@ pytest>=8.0
 pdfplumber>=0.11
 pikepdf>=9.0
 sqlmodel>=0.0.22
-fastapi>=0.115
+fastapi>=0.136.1
 uvicorn[standard]>=0.34
 # litellm 1.83.x pins httpx==0.28.1; a bare >=0.27 lets pip pick 0.28.0 and the solver fails.
 httpx==0.28.1
