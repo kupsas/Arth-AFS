@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from scraper.config import BANK_SENDERS
+from tests.email_parser_test_accounts import ICICI_STATEMENT_ACCOUNTS
 from scraper.email_parsers.icici_statement import ICICIStatementEmailParser
 
 
 @pytest.fixture
 def parser() -> ICICIStatementEmailParser:
-    accounts = BANK_SENDERS["estatement@icicibank.com"]["accounts"]
+    accounts = ICICI_STATEMENT_ACCOUNTS
     return ICICIStatementEmailParser(accounts)
 
 

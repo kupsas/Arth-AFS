@@ -13,11 +13,13 @@ import * as React from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  parseGoalDecimalString,
+  SIMULATION_INVALID_DECIMAL_MESSAGE,
+  SIMULATION_MONTHLY_SURPLUS_MAX_INR,
+} from "@/lib/onboarding-input-validation";
 import { simulationHorizonEndYearLabel } from "@/lib/simulation-horizon";
 import type { SimulationParams } from "@/lib/types";
-
-/** Upper bound for monthly surplus (10 lakh INR / month). */
-const MONTHLY_SURPLUS_MAX_INR = 1_000_000;
 
 /** Default salary growth when the server omits the field (matches API SimulationParams default). */
 const DEFAULT_SALARY_GROWTH_PCT = 5;
@@ -71,10 +73,20 @@ function MacroParamBlock({
   inputSuffix?: string;
   inputMode?: "decimal" | "numeric";
 }) {
+  const [parseErr, setParseErr] = React.useState<string | null>(null);
+
   const handleInputChange = (raw: string) => {
-    if (raw === "" || raw === "-") return;
-    const parsed = Number.parseFloat(raw);
-    if (Number.isNaN(parsed)) return;
+    const t = raw.trim();
+    if (t === "" || t === "-") {
+      setParseErr(null);
+      return;
+    }
+    const parsed = parseGoalDecimalString(raw);
+    if (parsed === null) {
+      setParseErr(SIMULATION_INVALID_DECIMAL_MESSAGE);
+      return;
+    }
+    setParseErr(null);
     onCommit(clamp(snapToStep(parsed, step), min, max));
   };
 
@@ -92,7 +104,10 @@ function MacroParamBlock({
           step={step}
           inputMode={inputMode}
           value={Number.isFinite(value) ? value : min}
+          aria-invalid={!!parseErr}
+          aria-describedby={parseErr ? `${inputId}-err ${inputId}-range` : `${inputId}-range`}
           onChange={(e) => handleInputChange(e.target.value)}
+          onBlur={() => setParseErr(null)}
           className="h-8 pr-9 text-right font-mono text-sm tabular-nums"
         />
         {inputSuffix ? (
@@ -101,7 +116,12 @@ function MacroParamBlock({
           </span>
         ) : null}
       </div>
-      <p className="text-[10px] leading-tight text-muted-foreground">
+      {parseErr ? (
+        <p id={`${inputId}-err`} className="text-[10px] leading-tight text-destructive" role="alert">
+          {parseErr}
+        </p>
+      ) : null}
+      <p id={`${inputId}-range`} className="text-[10px] leading-tight text-muted-foreground">
         Min {formatRangeMin()} · Max {formatRangeMax()}
       </p>
     </div>
@@ -117,8 +137,8 @@ export function SliderPanel({
 }) {
   // Keep surplus inside allowed bounds (e.g. server can return more than ₹10L/mo).
   React.useEffect(() => {
-    if (draft.monthly_surplus > MONTHLY_SURPLUS_MAX_INR) {
-      onChange("monthly_surplus", MONTHLY_SURPLUS_MAX_INR);
+    if (draft.monthly_surplus > SIMULATION_MONTHLY_SURPLUS_MAX_INR) {
+      onChange("monthly_surplus", SIMULATION_MONTHLY_SURPLUS_MAX_INR);
     } else if (draft.monthly_surplus < 0) {
       onChange("monthly_surplus", 0);
     }
@@ -154,14 +174,14 @@ export function SliderPanel({
             label="Monthly surplus"
             value={draft.monthly_surplus}
             min={0}
-            max={MONTHLY_SURPLUS_MAX_INR}
+            max={SIMULATION_MONTHLY_SURPLUS_MAX_INR}
             step={1000}
             inputId="sim-monthly-surplus"
             inputSuffix="/ mo"
             inputMode="numeric"
             formatRangeMin={() => "₹0 / mo"}
             formatRangeMax={() =>
-              `₹${(MONTHLY_SURPLUS_MAX_INR / 100_000).toLocaleString("en-IN", { maximumFractionDigits: 0 })} lakh / mo`
+              `₹${(SIMULATION_MONTHLY_SURPLUS_MAX_INR / 100_000).toLocaleString("en-IN", { maximumFractionDigits: 0 })} lakh / mo`
             }
             onCommit={(v) => onChange("monthly_surplus", v)}
           />

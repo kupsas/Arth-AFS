@@ -164,7 +164,7 @@ async def scraper_backfill(
     if not GMAIL_TOKEN_PATH.exists():
         raise HTTPException(
             status_code=503,
-            detail="Gmail is not authenticated. Complete OAuth first via POST /api/scraper/oauth/init.",
+            detail="Gmail is not connected on this device. Open the setup flow and use “Connect Gmail” first.",
         )
 
     if body.gmail_query and body.sender_emails:
@@ -214,7 +214,7 @@ def start_scraper():
     if not GMAIL_TOKEN_PATH.exists():
         raise HTTPException(
             status_code=503,
-            detail="Gmail is not authenticated. Complete OAuth first via POST /api/scraper/oauth/init.",
+            detail="Gmail is not connected on this device. Use “Connect Gmail” in setup before starting the email reader.",
         )
     resume_scheduler()
     return {"status": "started", **get_status()}
@@ -329,7 +329,7 @@ def oauth_init():
     if GMAIL_TOKEN_PATH.exists():
         return {
             "status": "already_authenticated",
-            "message": "Gmail is already authenticated. No action needed.",
+            "message": "Gmail is already connected on this device. You can continue in the setup steps.",
         }
 
     def _run_oauth_flow() -> None:
@@ -357,9 +357,8 @@ def oauth_init():
     return {
         "status": "oauth_started",
         "message": (
-            "A browser window will open shortly with the Google consent screen. "
-            "Click 'Allow' to grant access. "
-            "Check GET /api/scraper/oauth/status to confirm when done."
+            "A browser window will open shortly with Google’s sign-in. After you tap "
+            "“Allow,” come back to this app — the next step will look for your bank emails."
         ),
     }
 
@@ -384,10 +383,10 @@ def oauth_status():
         "is_authenticated": authenticated,
         "token_path": str(GMAIL_TOKEN_PATH),
         "message": (
-            "Gmail is authenticated. The scheduler will start polling automatically."
+            "Gmail is connected. Arth can read new bank alert emails in the background when you are set up."
             if authenticated
             else
-            "Gmail is not authenticated. Call POST /api/scraper/oauth/init to begin the OAuth flow."
+            "Gmail is not connected yet. In Arth, use “Connect Gmail” to sign in with Google on this device."
         ),
     }
 

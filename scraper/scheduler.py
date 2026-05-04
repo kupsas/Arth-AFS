@@ -3,7 +3,8 @@ Email scraper + daily price refresh — APScheduler integrated with FastAPI.
 
 Responsibilities:
   - Run ``scrape_new_emails()`` on a configurable interval (default: 15 min)
-    when ``gmail_token.json`` exists (optional job).
+    when ``gmail_token.json`` exists **and** at least one user has completed first-run
+    setup (``setup_completed_at``). Skipped when ``APP_ENV=onboarding_test``.
   - Run **daily price refresh** at **18:30 Asia/Kolkata** (after Indian cash
     market close): NSE/AMFI/yfinance via ``refresh_all_prices`` (Phase A.4.1).
     This job is **always** scheduled so portfolio marks work without Gmail.
@@ -42,11 +43,12 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from api.database import get_engine
+from api.models import AppUser
 from api.services.inflation_service import sync_imf_cpi_history
-from pipeline.config import LLM_MODEL  # noqa: F401 — imported for context; not used directly here
+from pipeline.config import APP_ENV, LLM_MODEL  # noqa: F401 — LLM_MODEL for context; not used directly here
 from scraper.config import GMAIL_TOKEN_PATH, POLL_INTERVAL_MINUTES
 from scraper.gmail_client import GmailClient, GmailReauthRequiredError
 from api.services.liquidity_service import refresh_all_users_liquidity_dates
@@ -340,12 +342,38 @@ def _run_inflation_sync_job() -> None:
         logger.exception("Scheduled inflation sync failed")
 
 
+def _email_scrape_job_skip_reason() -> str | None:
+    """If non-None, do not register the background Gmail poll job.
+
+    Polling is deferred until at least one user has ``setup_completed_at`` so a
+    fresh onboarding DB (or wizard in progress) is not filled by the scheduler.
+    ``APP_ENV=onboarding_test`` always skips polling for QA against a separate DB.
+    """
+    if (APP_ENV or "").strip().lower() == "onboarding_test":
+        return "APP_ENV=onboarding_test (email poll disabled for onboarding QA)"
+    if not GMAIL_TOKEN_PATH.exists():
+        return f"Gmail token not found at {GMAIL_TOKEN_PATH}"
+    try:
+        with Session(get_engine()) as session:
+            users = session.exec(select(AppUser)).all()
+            if not any(u.setup_completed_at is not None for u in users):
+                return "first-run setup not completed yet (wizard or /api/setup/complete)"
+    except Exception:
+        logger.exception(
+            "Could not read app_users.setup_completed_at — omitting email scraper job"
+        )
+        return "could not verify setup completion"
+    return None
+
+
 def _ensure_email_scrape_job() -> None:
-    """Register Gmail polling if the token file exists and the job is not yet present."""
+    """Register Gmail polling if token exists, setup is done, and the job is not yet present."""
     global _scheduler
     if _scheduler is None or not _scheduler.running:
         return
-    if not GMAIL_TOKEN_PATH.exists():
+    skip = _email_scrape_job_skip_reason()
+    if skip is not None:
+        logger.debug("Email scraper not registered: %s", skip)
         return
     if _scheduler.get_job("email_scraper") is not None:
         return
@@ -409,7 +437,8 @@ def start_scheduler(interval_minutes: int = POLL_INTERVAL_MINUTES) -> None:
         coalesce=True,
     )
 
-    if GMAIL_TOKEN_PATH.exists():
+    email_skip = _email_scrape_job_skip_reason()
+    if email_skip is None:
         _scheduler.add_job(
             _run_scrape_job,
             trigger="interval",
@@ -421,9 +450,8 @@ def start_scheduler(interval_minutes: int = POLL_INTERVAL_MINUTES) -> None:
         )
     else:
         logger.info(
-            "Gmail token not found at %s — email scraper job omitted; "
-            "daily price job active. Visit /api/scraper/oauth/init to add email polling.",
-            GMAIL_TOKEN_PATH,
+            "Email scraper job omitted — %s; daily/weekly price jobs still active.",
+            email_skip,
         )
 
     _scheduler.start()
@@ -431,7 +459,7 @@ def start_scheduler(interval_minutes: int = POLL_INTERVAL_MINUTES) -> None:
         "Scheduler started — daily prices 18:30 IST; weekly inflation Sun 07:00 IST; "
         "weekly market cache Sun 19:15 IST; email poll every %d min (%s)",
         interval_minutes,
-        "on" if GMAIL_TOKEN_PATH.exists() else "off until OAuth",
+        "on" if email_skip is None else f"off ({email_skip})",
     )
 
 

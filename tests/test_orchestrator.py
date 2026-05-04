@@ -29,12 +29,44 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from api.models import ProcessedEmail, Transaction
 from scraper.gmail_client import GmailMessage
 from scraper.orchestrator import scrape_new_emails
+from tests.email_parser_test_accounts import HDFC_ALERT_ACCOUNTS, ICICI_INSTA_ACCOUNTS
 
 FIXTURES = Path(__file__).parent / "fixtures" / "email_samples"
 
 # Sender addresses that appear in ALL_SENDERS (scraper/config.py)
 HDFC_SENDER  = "alerts@hdfcbank.net"
 ICICI_SENDER = "customernotification@icici.bank.in"
+
+# ``scraper.config.BANK_SENDERS`` no longer embeds account maps — tests patch the merged config.
+_BANK_ORCH_TEST: dict = {
+    HDFC_SENDER: {
+        "parser_key": "hdfc_bank",
+        "accounts": dict(HDFC_ALERT_ACCOUNTS),
+        "display_name": "HDFC InstaAlerts",
+        "source_type": "savings",
+        "expected_cadence": "per_transaction",
+    },
+    "alerts@hdfcbank.bank.in": {
+        "parser_key": "hdfc_bank",
+        "accounts": dict(HDFC_ALERT_ACCOUNTS),
+        "display_name": "HDFC InstaAlerts",
+        "source_type": "savings",
+        "expected_cadence": "per_transaction",
+    },
+    ICICI_SENDER: {
+        "parser_key": "icici_bank",
+        "accounts": dict(ICICI_INSTA_ACCOUNTS),
+        "display_name": "ICICI InstaAlerts",
+        "source_type": "savings",
+        "expected_cadence": "per_transaction",
+    },
+}
+
+
+@pytest.fixture(autouse=True)
+def _patch_get_bank_senders_config_for_orchestrator_tests():
+    with patch("scraper.orchestrator.get_bank_senders_config", return_value=_BANK_ORCH_TEST):
+        yield
 
 
 # ─── DB fixtures ──────────────────────────────────────────────────────────────

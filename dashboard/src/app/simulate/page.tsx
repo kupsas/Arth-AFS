@@ -40,7 +40,6 @@ export default function SimulatePage() {
     baseParams,
     baseResult,
     draftParams,
-    meta,
     result,
     isLoading,
     isSimulating,

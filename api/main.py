@@ -40,6 +40,7 @@ from api.routes.inflation import router as inflation_router
 from api.routes.simulate import router as simulate_router
 from api.routes.scraper import router as scraper_router
 from api.routes.scraper_config import router as scraper_config_router
+from api.routes.onboarding import router as onboarding_router
 from api.routes.setup import router as setup_router
 from pipeline.logging_config import setup_logging
 from scraper.scheduler import shutdown_scheduler, start_scheduler
@@ -48,12 +49,19 @@ from sqlmodel import Session
 logger = logging.getLogger(__name__)
 
 
-async def _run_startup_prices_in_thread() -> None:
-    """NSE/AMFI/yfinance work — must not block ASGI startup (see lifespan)."""
+async def _run_startup_db_maintenance_in_thread() -> None:
+    """Run price backfill/refresh, then IMF inflation sync — both off the event loop.
 
-    # One line on stdout right away — the heavy work has no per-request INFO (NSE misses are DEBUG).
+    SQLite allows only **one writer at a time** (WAL helps readers, not concurrent writers).
+    We used to start price sync and inflation sync as **two** asyncio tasks; both opened a
+    session immediately and could flush INSERTs at once → ``database is locked``.
+    Running them **one after another** keeps startup non-blocking for Uvicorn while
+    avoiding that race.
+    """
+
     logger.info(
-        "Startup price sync: background job started (NSE bhavcopy / AMFI / yfinance as needed)"
+        "Startup DB maintenance: beginning price sync (NSE/AMFI/yfinance), "
+        "then inflation (IMF CPI) — sequential to avoid SQLite writer contention"
     )
 
     def _sync_startup_prices() -> None:
@@ -63,19 +71,6 @@ async def _run_startup_prices_in_thread() -> None:
                 session.commit()
         except Exception:
             logger.exception("Startup price backfill/refresh failed — will retry at next scheduled run")
-
-    try:
-        await asyncio.to_thread(_sync_startup_prices)
-    except asyncio.CancelledError:
-        raise
-
-
-async def _run_startup_inflation_in_thread() -> None:
-    """IMF CPI fetch can be slow — keep it off the event loop like price sync."""
-
-    logger.info(
-        "Startup inflation sync: background job started (IMF monthly CPI YoY → DB)"
-    )
 
     def _sync_inflation() -> None:
         try:
@@ -94,6 +89,7 @@ async def _run_startup_inflation_in_thread() -> None:
             )
 
     try:
+        await asyncio.to_thread(_sync_startup_prices)
         await asyncio.to_thread(_sync_inflation)
     except asyncio.CancelledError:
         raise
@@ -113,8 +109,8 @@ async def lifespan(app: FastAPI):
          then refresh marks **in the background**. Uvicorn used to await this before
          ``yield``, which left "Waiting for application startup" for minutes when NSE
          or AMFI was slow or unreachable.
-      5. Sub-Plan F — IMF India CPI monthly YoY history sync **in the background**
-         (weekly job also scheduled in ``scraper.scheduler``).
+      5. Sub-Plan F — IMF India CPI monthly YoY history sync **after** price sync in the
+         same background task (weekly job also scheduled in ``scraper.scheduler``).
 
     Shutdown:
       6. Clean up the APScheduler background thread so the process exits cleanly.
@@ -123,13 +119,12 @@ async def lifespan(app: FastAPI):
     logger.info("Arth API starting up...")
     init_db()
     start_scheduler()
-    # Schedule price sync without awaiting — server becomes ready immediately.
+    # Schedule maintenance without awaiting — server becomes ready immediately.
     # Keep a reference on app.state so the task is not GC'd before it runs (asyncio footgun).
-    app.state.startup_price_sync_task = asyncio.create_task(_run_startup_prices_in_thread())
-    app.state.startup_inflation_sync_task = asyncio.create_task(
-        _run_startup_inflation_in_thread()
+    app.state.startup_db_maintenance_task = asyncio.create_task(
+        _run_startup_db_maintenance_in_thread()
     )
-    logger.info("Arth API ready (startup price + inflation sync run in background)")
+    logger.info("Arth API ready (startup DB maintenance runs in background)")
     yield
     logger.info("Arth API shutting down...")
     shutdown_scheduler()
@@ -202,6 +197,12 @@ app.include_router(
     user_config.router,
     prefix="/api/user",
     tags=["User classification"],
+    dependencies=_auth,
+)
+app.include_router(
+    onboarding_router,
+    prefix="/api/onboarding",
+    tags=["Onboarding"],
     dependencies=_auth,
 )
 app.include_router(holdings_router,           prefix="/api/holdings",                  tags=["Holdings"],                  dependencies=_auth)

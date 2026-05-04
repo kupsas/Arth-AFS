@@ -82,3 +82,5 @@ Key contributors:
 - `benchmark_20.json` — the 20-transaction test fixture with ground truth
 - `benchmark_results.json` — raw results from all 18 benchmark runs (per-field scores, token counts, costs, per-transaction details)
 - `test_api_keys.py` — smoke test script that verified all API keys and model names
+
+After you regenerate `benchmark_results.json`, run `python3 scripts/print_benchmark_chain_summary.py` from the repo root and update `ONBOARDING_PRIMARY_COST_USD_PER_100` in `dashboard/src/data/classification-llm-education.ts` if the primary model’s `cost_usd` changed.

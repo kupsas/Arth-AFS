@@ -2,6 +2,7 @@
 CLI entry point for the raw-to-canonical pipeline.
 
 Usage:
+    export ARTH_USER_ID=sashank   # same username as dashboard login (owns DB rows)
     python3 -m pipeline.run                                # default source, write to DB
     python3 -m pipeline.run --source hdfc_savings           # explicit source
     python3 -m pipeline.run --all-sources                   # run all 4 sources sequentially
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import time
 
@@ -33,6 +35,18 @@ from pipeline.transformer import transform
 from pipeline.writer import write_csv
 
 logger = logging.getLogger(__name__)
+
+
+def _pipeline_cli_user_id() -> str:
+    """Pipeline CLI must know which Arth user owns ``user_pipeline_sources`` rows."""
+    uid = os.environ.get("ARTH_USER_ID", "").strip()
+    if not uid:
+        logger.error(
+            "ARTH_USER_ID is not set. Export your Arth username, e.g. "
+            "export ARTH_USER_ID=sashank (same string as dashboard login)."
+        )
+        sys.exit(1)
+    return uid
 
 
 def _run_single_source(
@@ -50,7 +64,23 @@ def _run_single_source(
         logger.error("Unknown source: %r  Available: %s", source_key, list(PARSER_REGISTRY))
         sys.exit(1)
 
-    source_cfg = config.SOURCE_CONFIGS[source_key]
+    user_id = _pipeline_cli_user_id()
+    from api.database import get_engine, init_db
+    from sqlmodel import Session
+
+    init_db()
+    with Session(get_engine()) as _cfg_session:
+        source_cfgs = config.get_source_configs(user_id, _cfg_session)
+    if source_key not in source_cfgs:
+        logger.error(
+            "No DB pipeline source for user_id=%r, source_key=%r. "
+            "Configured keys for this user: %s",
+            user_id,
+            source_key,
+            sorted(source_cfgs),
+        )
+        sys.exit(1)
+    source_cfg = source_cfgs[source_key]
     parser_cls = PARSER_REGISTRY[source_key]
     parser = parser_cls()
 
@@ -81,11 +111,10 @@ def _run_single_source(
 
         _ucfg = default_user_classification_config()
     else:
-        from api.database import get_engine, init_db
+        from api.database import get_engine
         from api.services.user_classification import pipeline_config_for_account_owner
         from sqlmodel import Session
 
-        init_db()
         with Session(get_engine()) as _session:
             _ucfg = pipeline_config_for_account_owner(_session, source_cfg["account_id"])
     classify_rules(canonical, _ucfg)
@@ -142,10 +171,17 @@ def main(argv: list[str] | None = None) -> None:
     write_to_csv = args.csv
 
     if args.all_sources:
-        logger.info("Running all %d sources...", len(config.SOURCE_CONFIGS))
-        for i, source_key in enumerate(config.SOURCE_CONFIGS, 1):
+        user_id = _pipeline_cli_user_id()
+        from api.database import get_engine, init_db
+        from sqlmodel import Session
+
+        init_db()
+        with Session(get_engine()) as _s:
+            all_keys = sorted(config.get_source_configs(user_id, _s).keys())
+        logger.info("Running all %d sources...", len(all_keys))
+        for i, source_key in enumerate(all_keys, 1):
             logger.info("=" * 60)
-            logger.info("Source %d/%d: %s", i, len(config.SOURCE_CONFIGS), source_key)
+            logger.info("Source %d/%d: %s", i, len(all_keys), source_key)
             logger.info("=" * 60)
             _run_single_source(source_key, write_to_csv=write_to_csv)
     else:
@@ -175,7 +211,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p.add_argument(
         "--all-sources", action="store_true",
-        help="Run all sources in SOURCE_CONFIGS sequentially",
+        help="Run all sources from user_pipeline_sources for ARTH_USER_ID sequentially",
     )
     p.add_argument(
         "--input", type=str, default=None,

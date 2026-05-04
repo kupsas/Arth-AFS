@@ -19,6 +19,9 @@ Tables:
   - Liability         — loans and recurring obligations (Phase A.0)
   - Price             — daily close/NAV per symbol (Phase A.0)
   - ChatSession / ChatMessage — dashboard agent chat history (Sub-Plan 5)
+  - FamilyMember       — household owner for scraper account mappings (Track 2 onboarding)
+  - OnboardingState    — persisted wizard step + JSON payloads (Track 2 onboarding)
+  - UserPipelineSource — per-user file pipeline: source_key → account_id + statement folder
 
 Design notes:
   - Enum fields are stored as VARCHAR (SQLite has no native enum type anyway).
@@ -787,6 +790,8 @@ class UserContact(SQLModel, table=True):
     aliases_json: str = Field(default="[]")
     # SELF | FAMILY | FRIEND | ACQUAINTANCE
     relationship: str = Field(index=True)
+    # USER = Settings / API; ONBOARDING = seeded from pre-classification wizard (replaceable).
+    contact_source: str = Field(default="USER")
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )
@@ -874,6 +879,46 @@ class UserSecrets(SQLModel, table=True):
     )
 
 
+class FamilyMember(SQLModel, table=True):
+    """Household member for **account ownership** (which person owns a linked bank source).
+
+    Not the same as :class:`UserContact` (used for UPI / classification hints).
+    """
+
+    __tablename__ = "family_members"
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: str = Field(index=True)
+    name: str = Field(sa_column=Column(String(128)))
+    # e.g. SELF, SPOUSE, CHILD, PARENT, OTHER — free-form labels for the wizard UI.
+    relationship: str = Field(sa_column=Column(String(64)))
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+class OnboardingState(SQLModel, table=True):
+    """Persisted wizard position + intermediate payloads (refresh-safe onboarding)."""
+
+    __tablename__ = "onboarding_states"
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: str = Field(unique=True, index=True)
+    # Machine-readable step id (e.g. welcome, discovery, backfill_savings).
+    current_step: str = Field(default="welcome", sa_column=Column(String(64)))
+    completed_steps_json: str = Field(default="[]", sa_column=Column(Text))
+    discovery_results_json: str = Field(default="{}", sa_column=Column(Text))
+    backfill_progress_json: str = Field(default="{}", sa_column=Column(Text))
+    # Raw pre-classification form inputs (first/last/aliases/hints) for wizard resume — see GET /preclassification.
+    preclassification_raw_json: str = Field(default="{}", sa_column=Column(Text))
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+    updated_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
 class ScraperBankSender(SQLModel, table=True):
     """One row per Gmail From address the scraper should poll for a user."""
 
@@ -890,6 +935,15 @@ class ScraperBankSender(SQLModel, table=True):
     parser_key: str | None = None
     first_run_lookback_days: int | None = None
     enabled: bool = Field(default=True)
+    # Auto-discovery / onboarding metadata (mirrors ``scraper.config.BANK_SENDERS``).
+    display_name: str | None = Field(default=None, sa_column=Column(String(256), nullable=True))
+    # High-level source bucket: savings | credit_card | broker (see scraper.config).
+    source_type: str | None = Field(default=None, sa_column=Column(String(32), nullable=True))
+    discovery_subject_patterns_json: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+    )
+    expected_cadence: str | None = Field(default=None, sa_column=Column(String(32), nullable=True))
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )
@@ -916,6 +970,37 @@ class ScraperAccountMapping(SQLModel, table=True):
     last_4_digits: str = Field(index=True)
     account_id: str = Field(index=True)
     source_key: str
+    # Which household member owns this account mapping (defaults to Self — see patches).
+    member_id: int | None = Field(default=None, foreign_key="family_members.id")
+    created_at: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+    )
+
+
+class UserPipelineSource(SQLModel, table=True):
+    """Per-user file-based pipeline source: parser ``source_key`` → account + statement folder.
+
+    Replaces hardcoded ``SOURCE_CONFIGS`` in ``pipeline/config.py`` so account IDs and
+    on-disk statement directory names live in SQLite (one row per user per source_key).
+    """
+
+    __tablename__ = "user_pipeline_sources"
+    __table_args__ = (
+        Index(
+            "uq_user_pipeline_sources_user_source",
+            "user_id",
+            "source_key",
+            unique=True,
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    user_id: str = Field(index=True)
+    source_key: str = Field(sa_column=Column(String(64)))
+    account_id: str = Field(sa_column=Column(String(64)))
+    currency: str = Field(default="INR", sa_column=Column(String(8)))
+    # Subdirectory name under ``pipeline.config.DATA_DIR`` (e.g. ``HDFC_Savings``).
+    statement_folder: str | None = Field(default=None, sa_column=Column(String(256), nullable=True))
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.UTC),
     )

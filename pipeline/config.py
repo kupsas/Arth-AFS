@@ -9,16 +9,56 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from dotenv import load_dotenv
+
+if TYPE_CHECKING:
+    from sqlmodel import Session
 
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Environment — controls which DB file is used (prod vs test)
+# Environment — controls which DB file is used (prod vs test vs onboarding QA)
 # pytest overrides this via in-memory SQLite, so it doesn't use either file.
 # ---------------------------------------------------------------------------
 APP_ENV: str = os.getenv("APP_ENV", "prod")
+
+
+def resolve_db_path(
+    repo_root: Path,
+    app_env: str,
+    arth_db_name: str | None,
+    arth_db_path: str | None,
+) -> Path:
+    """Pick the SQLite file used by the API and CLI.
+
+    Precedence (highest first):
+    1. ``ARTH_DB_PATH`` — absolute or ``~`` path to the database file (any location).
+    2. ``ARTH_DB_NAME`` — **basename only** (slashes stripped); file lives under
+       ``<repo_root>/data/`` — e.g. ``ARTH_DB_NAME=arth_onboarding.db``.
+    3. ``APP_ENV=test`` → ``data/arth_test.db``.
+    4. ``APP_ENV=onboarding_test`` → ``data/arth_onboarding.db`` (fresh onboarding runs).
+    5. Otherwise → ``data/arth.db``.
+
+    Parameters ``arth_db_name`` / ``arth_db_path`` are the raw env string or ``None``
+    when unset, so unit tests can call this without mutating the environment.
+    """
+    data_dir = repo_root / "data"
+    if arth_db_path:
+        return Path(arth_db_path).expanduser().resolve()
+    if arth_db_name:
+        # Only the basename is honoured so ARTH_DB_NAME cannot escape ``data/``.
+        safe = Path(arth_db_name.strip()).name
+        if not safe:
+            raise ValueError("ARTH_DB_NAME must not be empty after stripping")
+        return (data_dir / safe).resolve()
+    if app_env == "test":
+        return (data_dir / "arth_test.db").resolve()
+    if app_env == "onboarding_test":
+        return (data_dir / "arth_onboarding.db").resolve()
+    return (data_dir / "arth.db").resolve()
+
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -26,40 +66,49 @@ APP_ENV: str = os.getenv("APP_ENV", "prod")
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "docs" / "personal-data"
 OUTPUT_DIR = REPO_ROOT / "data" / "output"
-DB_PATH: Path = REPO_ROOT / "data" / ("arth_test.db" if APP_ENV == "test" else "arth.db")
+# Env overrides for onboarding QA (see ``resolve_db_path``).
+_ARTH_DB_NAME_ENV: str | None = os.getenv("ARTH_DB_NAME", "").strip() or None
+_ARTH_DB_PATH_ENV: str | None = os.getenv("ARTH_DB_PATH", "").strip() or None
+DB_PATH: Path = resolve_db_path(REPO_ROOT, APP_ENV, _ARTH_DB_NAME_ENV, _ARTH_DB_PATH_ENV)
 
 # Source files — add new statements here as they arrive
 GSHEET_BENCHMARK_FILE = DATA_DIR / "GSheet_Transactions_modifiedForLLMTraining.csv"
 
 # ---------------------------------------------------------------------------
 # Source configs  (parser_key -> metadata used by transformer / classifier)
-# To add a new source: add an entry here and a parser in parsers/__init__.py
+# Per-user rows live in SQLite ``user_pipeline_sources``; use
+# :func:`get_source_configs` with a ``Session`` and ``ARTH_USER_ID`` (CLI) or
+# the logged-in username (API). This dict stays empty so imports remain valid.
+# To add a new source for a user: insert a row (see ``scripts/migrate_sashank_config_to_db.py``)
+# and register a parser in ``parsers/__init__.py``.
 # ---------------------------------------------------------------------------
-SOURCE_CONFIGS: dict[str, dict] = {
-    "hdfc_savings": {
-        "account_id": "HDFC_SAL_3703",
-        "currency": "INR",
-        "source_statement": "HDFC_Savings",   # directory of yearly .txt files
-    },
-    # HDFC credit cards — each key points at a directory of 12 monthly CSVs.
-    # The HDFCCreditCardParser.parse() accepts either a file or a directory.
-    "hdfc_cc_1905": {
-        "account_id": "HDFC_CC_1905",
-        "currency": "INR",
-        "source_statement": "1905_CC",   # directory of monthly CSVs
-    },
-    "hdfc_cc_5778": {
-        "account_id": "HDFC_CC_5778",
-        "currency": "INR",
-        "source_statement": "5778_CC",   # directory of monthly CSVs
-    },
-    # ICICI savings account — directory of yearly PDFs
-    "icici_savings": {
-        "account_id": "ICICI_SAV_6118",
-        "currency": "INR",
-        "source_statement": "ICICI_Savings",   # directory of yearly .pdf files
-    },
-}
+SOURCE_CONFIGS: dict[str, dict] = {}
+
+
+def get_source_configs(user_id: str, session: Session) -> dict[str, dict]:
+    """Load file-pipeline source metadata for *user_id* from ``UserPipelineSource``.
+
+    Returns the same shape historically stored in ``SOURCE_CONFIGS``:
+    ``{ source_key: { "account_id", "currency", "source_statement" } }`` where
+    ``source_statement`` is the folder name under :data:`DATA_DIR` (DB column
+    ``statement_folder``).
+    """
+    from sqlmodel import select
+
+    from api.models import UserPipelineSource
+
+    rows = session.exec(
+        select(UserPipelineSource).where(UserPipelineSource.user_id == user_id)
+    ).all()
+    out: dict[str, dict] = {}
+    for r in rows:
+        folder = (r.statement_folder or "").strip() or r.source_key
+        out[r.source_key] = {
+            "account_id": r.account_id,
+            "currency": r.currency or "INR",
+            "source_statement": folder,
+        }
+    return out
 
 # ---------------------------------------------------------------------------
 # LLM model selection
@@ -117,6 +166,9 @@ MODEL_PRICING: dict[str, dict[str, float]] = {
 
 # API keys — transaction **classification** pipeline only (separate from conversational agent).
 # Prefer *_FOR_CLASSIFIER so usage is trackable per product; fall back to legacy names for CI/scripts.
+# During Gmail ingest, :func:`api.services.classifier_runtime.user_classifier_runtime` may
+# temporarily overlay these module attributes with per-user values from encrypted
+# ``UserSecrets`` (see ``POST /api/onboarding/api-key``).
 OPENAI_API_KEY: str = (
     os.getenv("OPENAI_API_KEY_FOR_CLASSIFIER", "").strip()
     or os.getenv("OPENAI_API_KEY", "").strip()

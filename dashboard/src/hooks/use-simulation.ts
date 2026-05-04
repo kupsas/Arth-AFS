@@ -17,6 +17,7 @@ import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { fetchSimulateFromCurrent, runSimulation } from "@/lib/api";
+import { sanitizeSimulationParams } from "@/lib/onboarding-input-validation";
 import { goalKeys, lifeEventKeys } from "@/hooks/use-goals";
 import { newSimulationClientRowId } from "@/lib/simulation-goal-identity";
 import { computeSimulationHorizonMonths } from "@/lib/simulation-horizon";
@@ -137,7 +138,9 @@ export function useSimulation() {
             : g,
         ),
       };
-      const merged = applyDerivedSimulationFields(withRowIds);
+      const merged = applyDerivedSimulationFields(
+        sanitizeSimulationParams(withRowIds as SimulationParams),
+      );
       setDraftParams(merged);
       void runSimulation(merged)
         .then(setResult)

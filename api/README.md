@@ -150,7 +150,7 @@ All metrics endpoints accept `date_from` and `date_to` query params (both defaul
   "llm_model": "auto"
 }
 ```
-`source_key` accepts any key from `SOURCE_CONFIGS` in `pipeline/config.py`, or `"all"` to run all sources sequentially.
+`source_key` accepts any key present in `user_pipeline_sources` for the logged-in user, or `"all"` to run all configured sources sequentially.
 
 ---
 

@@ -19,7 +19,7 @@ from sqlmodel import Session, SQLModel, create_engine
 from api.auth import get_current_user
 from api.main import app
 from api.database import get_session
-from api.models import PipelineRun, Transaction
+from api.models import PipelineRun, Transaction, UserPipelineSource
 from pipeline.db_writer import compute_content_hash, write_to_db
 from pipeline.models import (
     CanonicalTransaction,
@@ -79,16 +79,23 @@ def api_client(engine):
     # Must match seeded Transaction.user_id and default account→user mapping.
     app.dependency_overrides[get_current_user] = lambda: "sashank"
 
-    # Temporarily neuter init_db() so the lifespan doesn't try to create
-    # tables on the production engine (which would touch a real DB file).
+    # Neuter init_db so the lifespan doesn't touch the production SQLite file.
+    # The scheduler and startup maintenance are handled by the autouse fixture
+    # _neuter_lifespan_side_effects in conftest.py.
     import api.database as _db_mod
-    _original_init = _db_mod.init_db
+    import api.main as _main_mod
+
+    _orig_db_init = _db_mod.init_db
+    _orig_main_init = _main_mod.init_db
+
     _db_mod.init_db = lambda: None
+    _main_mod.init_db = lambda: None
 
     with TestClient(app) as c:
         yield c
 
-    _db_mod.init_db = _original_init
+    _db_mod.init_db = _orig_db_init
+    _main_mod.init_db = _orig_main_init
     app.dependency_overrides.clear()
 
 
@@ -461,10 +468,21 @@ class TestPipelineTrigger:
         resp = client.post("/api/pipeline/run", json={"source_key": "nope"})
         assert resp.status_code == 400
 
-    def test_valid_source_returns_run_ids(self, client: TestClient):
+    def test_valid_source_returns_run_ids(self, client: TestClient, session: Session):
         """Triggering a valid source returns run IDs (the background thread
         will fail because we don't have real data files, but the API response
         itself should be immediate and correct)."""
+        # Source configs are now DB-driven; seed one so the route can validate
+        # the requested source_key and return 200 before the background job runs.
+        session.add(UserPipelineSource(
+            user_id="sashank",
+            source_key="hdfc_savings",
+            account_id="HDFC_SAL_3703",
+            currency="INR",
+            statement_folder="HDFC_Savings",
+        ))
+        session.commit()
+
         resp = client.post("/api/pipeline/run", json={
             "source_key": "hdfc_savings",
             "llm_model": "none",
@@ -595,6 +613,60 @@ class TestNegativeSurplusMonths:
         assert data["months_with_deficit"] == 1
 
 
+class TestOnboardingGoalTemplates:
+    """GET /api/onboarding/goal-templates — PIT vs recurring listing + previews."""
+
+    def test_lists_template_sections_and_loan_emi(self, client: TestClient):
+        resp = client.get("/api/onboarding/goal-templates")
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert "template_sections" in payload
+        sec_classes = [s["goal_class"] for s in payload["template_sections"]]
+        assert "POINT_IN_TIME" in sec_classes
+        assert "RECURRING_CASH_FLOW" in sec_classes
+        ids = {t["id"] for t in payload["templates"]}
+        assert "loan_emi" in ids
+        assert "travel" in ids
+        n_pit = sum(1 for t in payload["templates"] if t["goal_class"] == "POINT_IN_TIME")
+        n_rec = sum(1 for t in payload["templates"] if t["goal_class"] == "RECURRING_CASH_FLOW")
+        assert n_pit >= 1
+        assert n_rec >= 2
+
+    def test_recurring_preview_uses_emi_copy_for_loan(self, client: TestClient):
+        r = client.get(
+            "/api/onboarding/goal-templates",
+            params={"target_amount": 50_000, "years": 5, "template_id": "loan_emi"},
+        )
+        assert r.status_code == 200
+        loan = next(t for t in r.json()["templates"] if t["id"] == "loan_emi")
+        assert loan.get("preview")
+        assert loan["preview"]["preview_mechanism"] == "RECURRING_CASH_FLOW"
+        assert "EMI" in loan["preview"]["copy"]
+
+    def test_pit_preview_for_house(self, client: TestClient):
+        r = client.get(
+            "/api/onboarding/goal-templates",
+            params={"target_amount": 5_000_000, "years": 8, "template_id": "house"},
+        )
+        assert r.status_code == 200
+        house = next(t for t in r.json()["templates"] if t["id"] == "house")
+        assert house.get("preview")
+        assert house["preview"]["preview_mechanism"] == "POINT_IN_TIME"
+        assert "Target" in house["preview"]["copy"]
+
+    def test_headline_previews_when_no_template_selected(self, client: TestClient):
+        r = client.get(
+            "/api/onboarding/goal-templates",
+            params={"target_amount": 1_000_000, "years": 4},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert "headline_preview" in body
+        assert "headline_preview_recurring" in body
+        assert body["headline_preview"]["preview_mechanism"] == "POINT_IN_TIME"
+        assert body["headline_preview_recurring"]["preview_mechanism"] == "RECURRING_CASH_FLOW"
+
+
 # ───────────────────────────────────────────────────────────────────────────
 # Auth tests — uses a raw TestClient with NO dependency overrides so we
 # exercise the real authentication code path.
@@ -613,13 +685,19 @@ def unauthed_api_client(engine):
     app.dependency_overrides[get_session] = _override_session
 
     import api.database as _db_mod
-    _original_init = _db_mod.init_db
+    import api.main as _main_mod
+
+    _orig_db_init = _db_mod.init_db
+    _orig_main_init = _main_mod.init_db
+
     _db_mod.init_db = lambda: None
+    _main_mod.init_db = lambda: None
 
     with TestClient(app, raise_server_exceptions=True) as c:
         yield c
 
-    _db_mod.init_db = _original_init
+    _db_mod.init_db = _orig_db_init
+    _main_mod.init_db = _orig_main_init
     app.dependency_overrides.clear()
 
 

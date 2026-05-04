@@ -10,9 +10,9 @@ Reconciliation when two paths describe the same real-world transaction is implem
 
 | Source key | Primary (email) | Fallback (files) | Parser modules (email vs file) |
 |------------|-----------------|------------------|--------------------------------|
-| `hdfc_savings` | InstaAlerts + combined statement PDFs from Gmail | Yearly `.txt` under configured dirs via [`pipeline/config.py`](../../pipeline/config.py) `SOURCE_CONFIGS` | `scraper/email_parsers/hdfc_bank.py`, `hdfc_statement.py` vs `pipeline/parsers/hdfc_savings.py` |
-| `hdfc_cc_*` | InstaAlerts + CC statement PDF emails | Monthly CSV dirs via `SOURCE_CONFIGS` | `hdfc_cc_statement.py` vs `pipeline/parsers/hdfc_cc.py` |
-| `icici_savings` | InstaAlerts + monthly/annual statement PDFs | Yearly PDF dirs via `SOURCE_CONFIGS` | `icici_bank.py`, `icici_statement.py` vs `pipeline/parsers/icici_savings.py` |
+| `hdfc_savings` | InstaAlerts + combined statement PDFs from Gmail | Yearly `.txt` under configured dirs via `user_pipeline_sources.statement_folder` + [`pipeline/config.py`](../../pipeline/config.py) `DATA_DIR` | `scraper/email_parsers/hdfc_bank.py`, `hdfc_statement.py` vs `pipeline/parsers/hdfc_savings.py` |
+| `hdfc_cc_*` | InstaAlerts + CC statement PDF emails | Monthly CSV dirs via `user_pipeline_sources` | `hdfc_cc_statement.py` vs `pipeline/parsers/hdfc_cc.py` |
+| `icici_savings` | InstaAlerts + monthly/annual statement PDFs | Yearly PDF dirs via `user_pipeline_sources` | `icici_bank.py`, `icici_statement.py` vs `pipeline/parsers/icici_savings.py` |
 
 **Operational note:** Use `run_historical_backfill` or [`scripts/scrape_historical.py`](../../scripts/scrape_historical.py) for multi-year Gmail sweeps instead of legacy per-bank backfill scripts.
 

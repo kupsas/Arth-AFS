@@ -19,6 +19,33 @@ def _disable_imf_network_in_tests(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("INFLATION_DISABLE_IMF", "1")
 
 
+@pytest.fixture(autouse=True)
+def _neuter_lifespan_side_effects(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent the FastAPI lifespan from starting real background work.
+
+    TestClient(app) triggers the lifespan, which normally:
+      - start_scheduler() — launches APScheduler with email poll, price jobs
+      - _run_startup_db_maintenance_in_thread() — makes live HTTP calls to
+        NSE, AMFI, yfinance, and IMF; writes to the production SQLite via
+        the module-level _engine
+
+    Both can hang indefinitely (network timeouts, SQLite writer lock when
+    uvicorn is running concurrently).  We replace them with no-ops so
+    TestClient starts instantly and tests stay isolated.
+    """
+    import api.main as _main_mod
+
+    monkeypatch.setattr(_main_mod, "start_scheduler", lambda *a, **kw: None)
+    monkeypatch.setattr(_main_mod, "shutdown_scheduler", lambda: None)
+
+    async def _noop_maintenance():
+        return None
+
+    monkeypatch.setattr(
+        _main_mod, "_run_startup_db_maintenance_in_thread", _noop_maintenance
+    )
+
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BENCHMARK_FIXTURE = REPO_ROOT / "data" / "test" / "benchmark_20.json"
 GOLDEN_FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures"

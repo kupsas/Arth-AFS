@@ -1,5 +1,7 @@
 /**
- * GoalsSection — compact list of financial goals (name, goal “kind”, target, progress, notes).
+ * GoalsSection — lists **all** saved goals with basic fields: subtype (“type”),
+ * targets / recurrence amounts, dates, and progress. Completed goals appear in a
+ * short section at the bottom (still ordered for allocation priority above).
  *
  * The sheet uses `goal_class`-style choices (one-time / investment lump sum, recurring, spending cap);
  * the client maps each choice to API `goal_type` + `goal_class` on create/update.
@@ -16,7 +18,6 @@ import {
   Target,
   Trash2,
 } from "lucide-react"
-
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -93,6 +94,125 @@ function labelForStoredGoalSubtype(goalSubtype: string | null | undefined): stri
   const key = (goalSubtype ?? "").trim().toUpperCase() || "CUSTOM"
   const hit = GOAL_SUBTYPE_OPTIONS_INFLATION.find((o) => o.value === key)
   return hit?.label ?? key.replace(/_/g, " ").toLowerCase()
+}
+
+/** Human hint from today → target date (one-time goals). */
+function formatHorizonToTargetDate(iso: string | null | undefined): string | null {
+  if (!iso?.trim()) return null
+  const end = new Date(`${iso.trim()}T12:00:00`)
+  if (Number.isNaN(end.getTime())) return null
+  const ms = end.getTime() - Date.now()
+  if (ms <= 0) return "due or past"
+  const days = Math.ceil(ms / 86_400_000)
+  if (days < 60) return `${days} day${days === 1 ? "" : "s"} left`
+  const mo = Math.round(days / 30.44)
+  if (mo < 24) return `~${mo} mo left`
+  const yr = (days / 365.25).toFixed(1)
+  return `~${yr} yr left`
+}
+
+function recurrenceFrequencyLabel(freq: string | null | undefined): string {
+  const u = (freq ?? "MONTHLY").toUpperCase()
+  if (u === "MONTHLY") return "month"
+  if (u === "QUARTERLY") return "quarter"
+  if (u === "ANNUAL") return "year"
+  return u.toLowerCase().replaceAll("_", " ")
+}
+
+/** Second line(s) under the goal name — PIT vs recurring vs cap. */
+function GoalBasicDetails({ goal, uiKind }: { goal: Goal; uiKind: GoalUiKind }) {
+  if (uiKind === "RECURRING_CASH_FLOW") {
+    const period = recurrenceFrequencyLabel(goal.recurrence_frequency)
+    const endLabel = goal.recurrence_end ?? goal.target_date ?? null
+    return (
+      <dl className="mt-1 grid gap-0.5 text-xs text-muted-foreground">
+        <div className="flex flex-wrap gap-x-2 gap-y-0">
+          <dt className="sr-only">Category</dt>
+          <dd>Type: {labelForStoredGoalSubtype(goal.goal_subtype)}</dd>
+        </div>
+        {goal.recurrence_amount != null && goal.recurrence_amount > 0 && (
+          <div className="flex flex-wrap gap-x-2 gap-y-0">
+            <dt className="sr-only">Amount</dt>
+            <dd>
+              Amount: {formatCurrency(goal.recurrence_amount)} / {period}
+            </dd>
+          </div>
+        )}
+        <div className="flex flex-wrap gap-x-2 gap-y-0">
+          <dt className="sr-only">Window</dt>
+          <dd>
+            {goal.recurrence_start ? (
+              <>
+                Start: <span className="font-mono text-foreground/80">{goal.recurrence_start}</span>
+                {" · "}
+              </>
+            ) : (
+              "Start: — · "
+            )}
+            End:{" "}
+            {endLabel ? (
+              <span className="font-mono text-foreground/80">{endLabel}</span>
+            ) : (
+              "— (open-ended)"
+            )}
+          </dd>
+        </div>
+      </dl>
+    )
+  }
+
+  if (uiKind === "POINT_IN_TIME") {
+    const horizon = goal.target_date ? formatHorizonToTargetDate(goal.target_date) : null
+    return (
+      <dl className="mt-1 grid gap-0.5 text-xs text-muted-foreground">
+        <div className="flex flex-wrap gap-x-2 gap-y-0">
+          <dt className="sr-only">Category</dt>
+          <dd>Type: {labelForStoredGoalSubtype(goal.goal_subtype)}</dd>
+        </div>
+        {goal.target_amount != null && goal.target_amount > 0 && (
+          <div className="flex flex-wrap gap-x-2 gap-y-0">
+            <dt className="sr-only">Target</dt>
+            <dd>Target: {formatCurrency(goal.target_amount)} (today&apos;s ₹)</dd>
+          </div>
+        )}
+        {goal.target_date ? (
+          <div className="flex flex-wrap gap-x-2 gap-y-0">
+            <dt className="sr-only">Due</dt>
+            <dd>
+              Due: <span className="font-mono text-foreground/80">{goal.target_date}</span>
+              {horizon ? <> ({horizon})</> : null}
+            </dd>
+          </div>
+        ) : (
+          <div>No deadline set</div>
+        )}
+      </dl>
+    )
+  }
+
+  if (uiKind === "EXPENSE_LIMIT") {
+    return (
+      <dl className="mt-1 text-xs text-muted-foreground">
+        <dd>
+          Cap:{" "}
+          {goal.target_amount != null ? formatCurrency(goal.target_amount) : "—"} · Window:{" "}
+          {(goal.progress_cadence ?? "MONTHLY").toLowerCase()}
+        </dd>
+      </dl>
+    )
+  }
+
+  return null
+}
+
+/** Stable ordering: allocation priority (if set), then wizard priority, then id. */
+function sortGoalsForDisplay(goals: Goal[]): Goal[] {
+  return [...goals].sort((a, b) => {
+    const pa = a.allocation_priority ?? a.priority ?? 99
+    const pb = b.allocation_priority ?? b.priority ?? 99
+    if (pa !== pb) return pa - pb
+    return a.id - b.id
+  })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -531,6 +651,7 @@ function GoalCard({ goal }: { goal: Goal }) {
             <p className="text-xs text-muted-foreground">
               {labelGoalUiKind(uiKind)}
             </p>
+            <GoalBasicDetails goal={goal} uiKind={uiKind} />
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
@@ -1110,6 +1231,11 @@ interface Props {
 export function GoalsSection({ className, initialChartKey = null }: Props) {
   const { data: goals, isLoading } = useGoals()
 
+  const sorted = React.useMemo(() => sortGoalsForDisplay(goals ?? []), [goals])
+  /** Open goals first; completed (ACHIEVED) at the bottom so the list stays scannable. */
+  const inPlayGoals = sorted.filter((g) => g.status !== "ACHIEVED")
+  const completedGoals = sorted.filter((g) => g.status === "ACHIEVED")
+
   return (
     <Card className={cn(className)}>
       <CardHeader className="pb-2">
@@ -1117,7 +1243,9 @@ export function GoalsSection({ className, initialChartKey = null }: Props) {
           <div>
             <CardTitle className="text-sm font-medium">Goals</CardTitle>
             <p className="text-xs text-muted-foreground">
-              {goals ? `${goals.length} goal${goals.length !== 1 ? "s" : ""}` : "Targets and notes"}
+              {goals
+                ? `${goals.length} goal${goals.length !== 1 ? "s" : ""}`
+                : "Targets and notes"}
             </p>
           </div>
           <AddGoalSheet prefillChartKey={initialChartKey} />
@@ -1139,9 +1267,17 @@ export function GoalsSection({ className, initialChartKey = null }: Props) {
           </div>
         ) : (
           <>
-            {(goals ?? []).map((goal) => (
+            {inPlayGoals.map((goal) => (
               <GoalCard key={goal.id} goal={goal} />
             ))}
+            {completedGoals.length > 0 && (
+              <div className="pt-2">
+                <p className="text-xs font-medium text-muted-foreground mb-2">Completed</p>
+                {completedGoals.map((goal) => (
+                  <GoalCard key={goal.id} goal={goal} />
+                ))}
+              </div>
+            )}
           </>
         )}
       </CardContent>

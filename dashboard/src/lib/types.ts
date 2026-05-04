@@ -1234,3 +1234,117 @@ export type ValuationMethod = HoldingValuationMethod;
 export type LiquidityClass = HoldingLiquidityClass;
 /** Plan F2.1 naming — same as ``InvestmentLedgerTxnType``. */
 export type InvestmentTxnType = InvestmentLedgerTxnType;
+
+// ── Onboarding (Track 2 Phase 4) ───────────────────────────────────────────
+
+/** One merged stretch of months missing coverage for a source. */
+export interface OnboardingGapListItem {
+  kind: string;
+  period_label: string;
+  period_start: string;
+  period_end: string;
+  reason: string;
+}
+
+export interface OnboardingGapReport {
+  source: string;
+  source_label: string;
+  source_type: string;
+  expected_cadence: string;
+  date_range_start: string;
+  date_range_end: string;
+  transaction_count: number;
+  gaps: OnboardingGapListItem[];
+  note?: string;
+}
+
+export interface OnboardingGapsResponse {
+  generated_at: string;
+  reports: OnboardingGapReport[];
+}
+
+export interface OnboardingTemplatePreview {
+  target_today_in_inr: number;
+  horizon_years: number;
+  inflation_annual_percent_used: number;
+  inflation_fv_inr: number;
+  copy: string;
+  /** Present on onboarding goal-template previews — lump sum vs recurring wording. */
+  preview_mechanism?: "POINT_IN_TIME" | "RECURRING_CASH_FLOW" | string;
+}
+
+/** Grouping hints for the onboarding template grid (mirrors API ``template_sections``). */
+export interface OnboardingGoalTemplateSection {
+  goal_class: string;
+  title: string;
+  description: string;
+}
+
+export interface OnboardingGoalTemplate {
+  id: string;
+  name: string;
+  icon: string;
+  default_target_amount_min: number;
+  default_target_amount_max: number;
+  default_timeframe_years_min: number;
+  default_timeframe_years_max: number;
+  suggested_priority: number;
+  default_expected_return_rate: number;
+  goal_type: string;
+  goal_class: string;
+  goal_subtype: string | null;
+  time_horizon: string | null;
+  funding_mode: string | null;
+  inflation_rate_category: string;
+  inflation_rate_label: string;
+  inflation_annual_percent: number;
+  preview?: OnboardingTemplatePreview;
+  recurrence_amount_hint?: number;
+  recurrence_frequency?: string;
+}
+
+export interface OnboardingGoalTemplatesResponse {
+  headline_cpi_annual_percent: number;
+  templates: OnboardingGoalTemplate[];
+  headline_preview?: OnboardingTemplatePreview;
+  /** Shown before a template is picked — explains run-rate vs one-time FV. */
+  headline_preview_recurring?: OnboardingTemplatePreview;
+  /** Order matches suggested UX: one-time block first, then recurring. */
+  template_sections?: OnboardingGoalTemplateSection[];
+}
+
+/** GET /api/onboarding/state — persisted wizard snapshot. */
+export interface OnboardingStateResponse {
+  current_step: string;
+  completed_steps: unknown[];
+  discovery_results: Record<string, unknown>;
+  backfill_progress: Record<string, unknown>;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+/** GET /api/onboarding/preclassification — last saved identity form fields (wizard resume). */
+export interface OnboardingPreclassificationSavedResponse {
+  first_name: string;
+  last_name: string;
+  extra_aliases: string[];
+  account_hints: string[];
+  family_names: string[];
+  friend_names: string[];
+}
+
+/** GET /api/onboarding/backfill-sources — ordered pipeline keys from bank config. */
+export interface OnboardingBackfillSourceRow {
+  source_key: string;
+  source_type: string;
+}
+
+/** GET /api/metrics/classification-stats — coarse automation provenance mix. */
+export interface ClassificationStatsResponse {
+  total_transactions: number;
+  rules_pct: number;
+  llm_pct: number;
+  user_confirmed_pct: number;
+  unclassified_pct: number;
+  other_pct: number;
+}

@@ -18,6 +18,7 @@ from sqlmodel import Session, select
 from api.auth import get_current_user
 from api.database import get_session
 from api.models import AppUser, UserSecrets
+from scraper.scheduler import resume_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,7 @@ def mark_setup_complete(
     user.setup_completed_at = datetime.datetime.now(datetime.UTC)
     session.add(user)
     session.commit()
+    resume_scheduler()
     return {"setup_completed": True, "username": current_user}
 
 
