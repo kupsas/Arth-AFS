@@ -20,11 +20,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlmodel import Session, col, select
 
 from api.auth import get_current_user
 from api.database import SQLiteSerializingSession, get_session
-from api.models import AppUser, OnboardingState, PasswordTemplate, Transaction, UserContact, UserSecrets
+from api.models import AppUser, Holding, OnboardingState, PasswordTemplate, Transaction, UserContact, UserSecrets
 from api.onboarding_goal_templates import build_goal_templates_response
 from api.routes.transactions import upsert_user_merchant_correction_rule
 from api.services.classifier_runtime import (
@@ -667,22 +668,22 @@ def _reconcile_backfill_needs_classification(
     session: Session,
     user_id: str,
     blob: dict[str, Any],
-    unknowns_live: int,
+    _unknowns_src: int,
 ) -> None:
-    """If live unknowns dropped below the pause threshold, clear a stale ``needs_classification`` status.
+    """Clear a stale ``needs_classification`` status only when the **whole** queue is empty.
 
-    Chunk processing sets ``needs_classification`` whenever ``unknowns >= threshold`` and
-    refuses further work until ``resume_after_classification`` — but ``GET …/progress``
-    refreshes ``unknowns_pending`` from the DB every poll without touching ``status``.
-    That left the wizard showing "waiting for review" even while the backlog was again
-    below the pause line (after inline classify, merchant rules, etc.).  Mirror the
-    orchestrator's ``resume_after_classification`` transition so polling can resume
-    chunk POSTs without an extra classify round-trip.
+    Chunk processing pauses when per-source unknowns **exceed** the configured threshold.
+    While gated, ``GET …/progress`` and SSE refresh ``unknowns_pending`` for this source but
+    leave ``status`` untouched until every email-sourced classification row is cleared
+    across **all** pipeline accounts (matches ``POST /classify`` ``should_resume`` when
+    ``ONBOARDING_RESUME_THRESHOLD`` ≤ 0).
+
+    ``_unknowns_src`` is the per-source live count callers already merged into ``blob``;
+    reconciliation keys off the global queue only.
     """
     if not blob or str(blob.get("status") or "") != "needs_classification":
         return
-    thresh = effective_onboarding_unknown_threshold(session, user_id)
-    if unknowns_live >= thresh:
+    if count_all_classification_unknowns(session, user_id=user_id) > 0:
         return
     stmt = list(blob.get("_pending_statement_ids") or [])
     alerts = list(blob.get("_pending_alert_ids") or [])
@@ -1394,11 +1395,33 @@ def onboarding_classifier_status(
 # ── Phase 3b: inline classification batch ───────────────────────────────────────
 
 
-def _upsert_friend_contact(session: Session, user_id: str, display_name: str) -> None:
-    """If no FRIEND UserContact exists for this name, create one (idempotent)."""
+def _upsert_friend_contact(
+    session: Session,
+    user_id: str,
+    display_name: str,
+    *,
+    extra_aliases: list[str] | None = None,
+) -> None:
+    """Create or extend a FRIEND :class:`UserContact` (idempotent on ``display_name``).
+
+    ``extra_aliases`` holds other counterparty strings for the same person (e.g. the LLM
+    label on this row before the user renamed it). Those strings are merged into
+    ``aliases_json`` so later imports that still use the old narration-derived label match
+    :func:`~scraper.onboarding_orchestrator.count_classification_unknowns` “already
+    confirmed” logic and do not re-queue sensitive LLM rows.
+    """
     norm = display_name.strip()
     if not norm:
         return
+    merged_upper: list[str] = []
+    seen: set[str] = set()
+    for raw in [norm, *(extra_aliases or [])]:
+        u = " ".join((raw or "").split()).strip().upper()
+        if len(u) < 2 or u in seen:
+            continue
+        seen.add(u)
+        merged_upper.append(u)
+
     existing = session.exec(
         select(UserContact)
         .where(UserContact.user_id == user_id)
@@ -1406,12 +1429,19 @@ def _upsert_friend_contact(session: Session, user_id: str, display_name: str) ->
         .where(UserContact.display_name == norm)
     ).first()
     if existing:
+        prior = json.loads(existing.aliases_json or "[]")
+        if not isinstance(prior, list):
+            prior = []
+        for a in merged_upper:
+            if a not in prior:
+                prior.append(a)
+        existing.aliases_json = json.dumps(prior)
         return
     session.add(
         UserContact(
             user_id=user_id,
             display_name=norm,
-            aliases_json=json.dumps([norm.upper()]),
+            aliases_json=json.dumps(merged_upper),
             relationship="FRIEND",
             contact_source="ONBOARDING",
         )
@@ -1576,6 +1606,10 @@ def onboarding_classify(
                         status_code=400,
                         detail=f"Transaction {item.txn_id} is not an email row for source {source_key!r}",
                     )
+                # Keep the pre-edit label so we can store it on UserContact aliases when the user
+                # renames a friend — the next Gmail chunk may still classify that person with the
+                # LLM / parser string, which must match our “already confirmed” checks.
+                prior_counterparty = (txn.counterparty or "").strip()
                 txn.counterparty = item.counterparty.strip()
                 txn.counterparty_category = item.counterparty_category.strip()
                 if item.spend_category is not None:
@@ -1597,7 +1631,12 @@ def onboarding_classify(
                 cp_label = item.counterparty.strip()
 
                 if cat_upper == "Friends and Family":
-                    _upsert_friend_contact(session, current_user, cp_label)
+                    _upsert_friend_contact(
+                        session,
+                        current_user,
+                        cp_label,
+                        extra_aliases=[prior_counterparty] if prior_counterparty else None,
+                    )
                     contacts_created += 1
                 elif cat_upper == "Self Transfer":
                     _upsert_self_contact(session, current_user, cp_label)
@@ -1666,6 +1705,23 @@ def onboarding_portfolio_snapshot(
 ) -> dict[str, Any]:
     """Broker-slice holdings counts and top rows for the onboarding portfolio summary UI."""
     return portfolio_snapshot_summary(session, current_user)
+
+
+@router.get("/holdings-coverage")
+def onboarding_holdings_coverage(
+    *,
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> dict[str, bool]:
+    """True when the user already has at least one ``Holding`` row (portfolio layer).
+
+    Used by the Coverage onboarding step to decide whether to show the manual
+    portfolio upload fallback when Gmail never yielded broker/fund emails.
+    """
+    cnt = session.exec(
+        select(func.count()).select_from(Holding).where(Holding.user_id == current_user)
+    ).one()
+    return {"has_holding_data": cnt > 0}
 
 
 @router.get("/gaps")

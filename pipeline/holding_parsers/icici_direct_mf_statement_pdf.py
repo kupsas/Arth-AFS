@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pdfplumber
 
+from pipeline.detection import DetectionResult, PARSER_LABELS
 from pipeline.holding_parsers.base import ParsedInvestmentTxn, parse_icici_number
 from pipeline.models import InvestmentTxnType
 
@@ -190,3 +191,26 @@ def _extract_all_text(pdf_path: Path) -> str:
             if t.strip():
                 parts.append(t)
     return "\n".join(parts)
+
+
+def detect_icici_mf_statement_pdf(path: str | Path) -> DetectionResult | None:
+    """Mutual fund account statement PDF: Folio No band + ledger rows."""
+    p = Path(path)
+    if p.suffix.lower() != ".pdf" or not p.is_file():
+        return None
+    try:
+        text = _extract_all_text(p)[:25_000]
+    except Exception:
+        return None
+    tl = text.lower()
+    if not _FOLIO_LINE.search(text):
+        if "folio" not in tl or "mutual fund" not in tl:
+            return None
+    if "account statement" in tl or "folio" in tl or "scheme" in tl:
+        return DetectionResult(
+            source_type="icici_direct_mf_statement_pdf",
+            confidence=0.84,
+            account_hint=None,
+            label=PARSER_LABELS["icici_direct_mf_statement_pdf"],
+        )
+    return None

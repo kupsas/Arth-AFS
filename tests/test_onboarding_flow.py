@@ -337,7 +337,7 @@ def test_backfill_progress_reconciles_stale_needs_classification(
     engine: object,
     flow_client: TestClient,
 ) -> None:
-    """GET progress clears ``needs_classification`` when live unknowns are below the pause threshold."""
+    """GET progress clears ``needs_classification`` once the **global** review queue is empty."""
     sk = "hdfc_savings"
     blob = {
         "status": "needs_classification",
@@ -361,18 +361,18 @@ def test_backfill_progress_reconciles_stale_needs_classification(
     with (
         patch(
             "api.routes.onboarding.count_classification_unknowns",
-            return_value=15,
+            return_value=0,
         ),
         patch(
-            "api.routes.onboarding.effective_onboarding_unknown_threshold",
-            return_value=20,
+            "api.routes.onboarding.count_all_classification_unknowns",
+            return_value=0,
         ),
     ):
         r = flow_client.get(f"/api/onboarding/backfill/{sk}/progress")
 
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["unknowns_pending"] == 15
+    assert body["unknowns_pending"] == 0
     assert body["status"] == "processing_alerts"
     assert body["current_phase"] == "alerts"
 
@@ -382,5 +382,5 @@ def test_backfill_progress_reconciles_stale_needs_classification(
         ).one()
         saved = json.loads(st.backfill_progress_json or "{}")[sk]
         assert saved["status"] == "processing_alerts"
-        assert saved["unknowns_pending"] == 15
+        assert saved["unknowns_pending"] == 0
         assert saved["_pending_alert_ids"] == ["m1", "m2"]

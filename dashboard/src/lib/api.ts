@@ -67,6 +67,8 @@ import type {
   Transaction,
   TransactionFilters,
   TransactionUpdate,
+  StatementUploadResult,
+  HoldingUploadResult,
   UploadResponse,
   SimulationParams,
   SimulationResult,
@@ -714,34 +716,41 @@ export function deleteReminder(id: number): Promise<void> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Statement upload  →  /api/pipeline/upload  (Phase 4.5d)
+// Statement upload  →  /api/pipeline/upload  (content-based detection)
 // ─────────────────────────────────────────────────────────────────────────────
+
+export interface UploadStatementOptions {
+  /** After account picker: which configured pipeline source to import into */
+  sourceKey?: string;
+  /** After type picker: logical parser id, e.g. hdfc_savings_pdf */
+  sourceType?: string;
+  /** Password for encrypted PDFs (required on retry after needs_password) */
+  pdfPassword?: string;
+}
 
 /**
  * POST /api/pipeline/upload
- * Uploads a bank statement file and triggers the pipeline.
- * Returns a run_id that can be polled via GET /api/pipeline/runs/{id}.
- *
- * @param file      The File object from an <input type="file"> or drag-and-drop
- * @param sourceKey Optional parser key override (e.g. "hdfc_savings")
+ * Smart-detects bank statement format from file content, then runs the pipeline.
+ * May return type_picker / account_picker / no_match — see ``StatementUploadResult``.
  */
 export async function uploadStatement(
   file: File,
-  sourceKey?: string,
-): Promise<UploadResponse> {
+  opts?: UploadStatementOptions,
+): Promise<StatementUploadResult> {
   const formData = new FormData();
   formData.append("file", file);
 
-  const url = buildApiUrl(
-    "/api/pipeline/upload",
-    sourceKey ? { source_key: sourceKey } : undefined,
-  );
+  const params: QueryParams = {};
+  if (opts?.sourceKey) params.source_key = opts.sourceKey;
+  if (opts?.sourceType) params.source_type = opts.sourceType;
+  if (opts?.pdfPassword) params.pdf_password = opts.pdfPassword;
+
+  const url = buildApiUrl("/api/pipeline/upload", Object.keys(params).length ? params : undefined);
 
   const res = await fetch(url, {
     method: "POST",
     credentials: "include",
     body: formData,
-    // Don't set Content-Type — let the browser set multipart/form-data with the boundary
   });
 
   if (res.status === 401) {
@@ -754,7 +763,53 @@ export async function uploadStatement(
     throw new ApiError(res.status, userMessageFromApiResponseBody(raw));
   }
 
-  return res.json() as Promise<UploadResponse>;
+  return res.json() as Promise<StatementUploadResult>;
+}
+
+export interface UploadHoldingsOptions {
+  sourceType?: string;
+  pdfPassword?: string;
+}
+
+/**
+ * POST /api/pipeline/upload/holdings — portfolio CSV/PDF (manual fallback).
+ */
+export async function uploadHoldingsStatement(
+  file: File,
+  opts?: UploadHoldingsOptions,
+): Promise<HoldingUploadResult> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const params: QueryParams = {};
+  if (opts?.sourceType) params.source_type = opts.sourceType;
+  if (opts?.pdfPassword) params.pdf_password = opts.pdfPassword;
+  const url = buildApiUrl(
+    "/api/pipeline/upload/holdings",
+    Object.keys(params).length ? params : undefined,
+  );
+
+  const res = await fetch(url, {
+    method: "POST",
+    credentials: "include",
+    body: formData,
+  });
+
+  if (res.status === 401) {
+    window.location.href = `/login?from=${encodeURIComponent(window.location.pathname)}`;
+    return new Promise(() => {});
+  }
+
+  if (!res.ok) {
+    const raw = await res.text().catch(() => res.statusText);
+    throw new ApiError(res.status, userMessageFromApiResponseBody(raw));
+  }
+
+  return res.json() as Promise<HoldingUploadResult>;
+}
+
+/** GET /api/onboarding/holdings-coverage — whether the user already has portfolio rows */
+export function fetchHoldingsCoverage(): Promise<{ has_holding_data: boolean }> {
+  return get<{ has_holding_data: boolean }>("/api/onboarding/holdings-coverage");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

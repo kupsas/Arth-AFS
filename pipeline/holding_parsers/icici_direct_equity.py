@@ -10,6 +10,7 @@ import csv
 from datetime import datetime
 from pathlib import Path
 
+from pipeline.detection import DetectionResult, PARSER_LABELS
 from pipeline.holding_parsers.base import (
     BaseHoldingParser,
     ParsedHolding,
@@ -280,6 +281,56 @@ class ICICIDirectEquityParser(BaseHoldingParser):
     @property
     def source_id(self) -> str:
         return "icici_direct_equity"
+
+    @classmethod
+    def detect(cls, path: str | Path) -> DetectionResult | None:
+        """CSV portfolio summary / annual trade exports from ICICI Direct."""
+        p = Path(path)
+        if p.is_dir():
+            summary = p / SUMMARY_FILENAME
+            if summary.is_file():
+                peek = strip_bom(summary.read_text(encoding="utf-8", errors="replace")[:4096])
+                if "isin" in peek.lower() and "qty" in peek.lower():
+                    return DetectionResult(
+                        source_type="icici_direct_equity",
+                        confidence=0.9,
+                        account_hint=None,
+                        label=PARSER_LABELS["icici_direct_equity"],
+                    )
+            for f in sorted(p.glob("*.csv")):
+                peek = strip_bom(f.read_text(encoding="utf-8", errors="replace")[:8192])
+                first = peek.splitlines()[0] if peek else ""
+                if "Trade Value" in first or "Trade Value" in peek:
+                    return DetectionResult(
+                        source_type="icici_direct_equity",
+                        confidence=0.88,
+                        account_hint=None,
+                        label=PARSER_LABELS["icici_direct_equity"],
+                    )
+            return None
+        if p.suffix.lower() != ".csv":
+            return None
+        name_u = p.name.upper()
+        if name_u == SUMMARY_FILENAME.upper():
+            peek = strip_bom(p.read_text(encoding="utf-8", errors="replace")[:4096])
+            if "isin" in peek.lower():
+                return DetectionResult(
+                    source_type="icici_direct_equity",
+                    confidence=0.92,
+                    account_hint=None,
+                    label=PARSER_LABELS["icici_direct_equity"],
+                )
+            return None
+        peek = strip_bom(p.read_text(encoding="utf-8", errors="replace")[:8192])
+        first = peek.splitlines()[0] if peek else ""
+        if "Trade Value" not in first and "Trade Value" not in peek:
+            return None
+        return DetectionResult(
+            source_type="icici_direct_equity",
+            confidence=0.9,
+            account_hint=None,
+            label=PARSER_LABELS["icici_direct_equity"],
+        )
 
     def parse_path(self, path: str | Path) -> tuple[list[ParsedHolding], list[ParsedInvestmentTxn]]:
         p = Path(path)

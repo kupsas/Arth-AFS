@@ -887,11 +887,46 @@ export interface RemindersStatusResponse {
 // Statement upload (Phase 4.5d)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export interface UploadResponse {
-  run_id: number;
-  source_key: string;
-  message: string;
+export type StatementUploadOutcome =
+  | "success"
+  | "type_picker"
+  | "account_picker"
+  | "no_match"
+  | "no_source"
+  | "needs_password";
+
+/** One row from POST /api/pipeline/upload for picker UIs */
+export interface StatementUploadOption {
+  source_type?: string | null;
+  source_key?: string | null;
+  label: string;
 }
+
+/** POST /api/pipeline/upload — content-based detection + disambiguation */
+export interface StatementUploadResult {
+  outcome: StatementUploadOutcome;
+  message: string;
+  run_id?: number | null;
+  source_key?: string | null;
+  contact_prompt?: boolean;
+  /** When outcome is needs_password: user entered wrong pdf_password */
+  password_invalid?: boolean;
+  type_options?: StatementUploadOption[] | null;
+  account_options?: StatementUploadOption[] | null;
+}
+
+/** POST /api/pipeline/upload/holdings — portfolio CSV/PDF */
+export interface HoldingUploadResult {
+  outcome: "success" | "type_picker" | "no_match" | "needs_password";
+  message: string;
+  contact_prompt?: boolean;
+  password_invalid?: boolean;
+  import_stats?: Record<string, unknown> | null;
+  type_options?: StatementUploadOption[] | null;
+}
+
+/** @deprecated Use StatementUploadResult */
+export type UploadResponse = StatementUploadResult;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Portfolio / asset layer (Phase F2) — mirrors holdings, investment txns,

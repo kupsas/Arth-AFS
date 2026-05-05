@@ -31,11 +31,11 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, not_, or_
 from sqlalchemy.orm import aliased
 from sqlmodel import Session, col, func, select
 
-from api.models import OnboardingState, Transaction
+from api.models import OnboardingState, Transaction, UserContact
 from pipeline.models import CounterpartyCategory
 
 from api.services.classifier_runtime import effective_onboarding_unknown_threshold
@@ -62,7 +62,7 @@ DEFAULT_CHUNK_SIZE = 10
 # chunking at HTTP boundaries. The inner loop still processes one message at a time.
 STREAM_DRAIN_CHUNK_SIZE = 1_000_000
 
-# When unknown rows (per source_key) reach this count, pause for classification UI.
+# When unknown rows for a source_key **exceed** this count, pause for classification UI.
 UNKNOWN_THRESHOLD = int(os.environ.get("ONBOARDING_UNKNOWN_THRESHOLD", "20"))
 
 # Pipeline ``source_key`` values for which chunk onboarding imports **statement mail only**
@@ -227,13 +227,44 @@ _PRIOR_USER_REVIEWED_SAME_COUNTERPARTY = (
     )
 ).exists()
 
+# Same idea, but when the *next* email uses a different LLM/parsed label than the name the user
+# typed — we still store the prior label on ``UserContact.aliases_json`` at classify time and
+# match those aliases here so the person does not reappear after the next SSE chunk.
+_UserContactConfirmsCntparty = aliased(UserContact)
+_USER_CONTACT_CONFIRMS_COUNTERPARTY = (
+    select(1)
+    .select_from(_UserContactConfirmsCntparty)
+    .where(_UserContactConfirmsCntparty.user_id == Transaction.user_id)
+    .where(col(_UserContactConfirmsCntparty.relationship).in_(["FRIEND", "FAMILY"]))
+    .where(
+        or_(
+            func.lower(func.trim(_UserContactConfirmsCntparty.display_name))
+            == func.lower(func.trim(Transaction.counterparty)),
+            and_(
+                func.length(func.trim(Transaction.counterparty)) >= 3,
+                func.instr(
+                    func.upper(_UserContactConfirmsCntparty.aliases_json),
+                    func.upper(func.trim(Transaction.counterparty)),
+                )
+                > 0,
+            ),
+        )
+    )
+).exists()
+
+_HUMAN_CONFIRMED_SENSITIVE_COUNTERPARTY = or_(
+    _PRIOR_USER_REVIEWED_SAME_COUNTERPARTY,
+    _USER_CONTACT_CONFIRMS_COUNTERPARTY,
+)
+
 # Shared predicate: rows the onboarding classification queue shows for review.
 #
 # 1. **Automation gap** — missing counterparty or counterparty_category (rules + LLM did not finish).
 # 2. **LLM high-risk labels** — both fields set, ``classification_source == LLM``, and category is
 #    Friends & Family, Gifts & Personal Transfers, or Miscellaneous (needs human check), **unless**
-#    another row for this user is already ``USER_REVIEWED`` with the same counterparty (trimmed,
-#    case-insensitive). Rule-based rows with those categories are *not* re-queued.
+#    the counterparty is already “confirmed”: another ``USER_REVIEWED`` row with the same label,
+#    or a ``UserContact`` (friend/family) whose display name or alias matches (aliases absorb the
+#    pre-rename LLM string from classify). Rule-based rows with those categories are *not* re-queued.
 #
 # ``USER_REVIEWED`` rows are always excluded.
 _CLASSIFICATION_UNKNOWN_PREDICATE = and_(
@@ -249,7 +280,7 @@ _CLASSIFICATION_UNKNOWN_PREDICATE = and_(
             col(Transaction.counterparty).is_not(None),
             col(Transaction.counterparty_category).is_not(None),
             col(Transaction.counterparty_category).in_(_ONBOARDING_SENSITIVE_LLM_CATEGORIES),
-            ~_PRIOR_USER_REVIEWED_SAME_COUNTERPARTY,
+            not_(_HUMAN_CONFIRMED_SENSITIVE_COUNTERPARTY),
         ),
     ),
 )
@@ -988,6 +1019,8 @@ def run_onboarding_backfill(
     Classification pause: ``unknown_threshold`` is checked **before each Gmail message**
     and **after each successfully recorded message**, so a large ``chunk_size`` (including
     SSE drain mode) cannot skip far past the threshold before ``needs_classification``.
+    Pause triggers when unknown rows for this source are **strictly greater than** the
+    threshold (e.g. default 20 → import continues through 20 pending, pauses at 21+).
 
     Args:
         session: Active SQLModel session (caller commits after persisting state).
@@ -1108,20 +1141,24 @@ def run_onboarding_backfill(
         return OnboardingBackfillResult(progress=merged)
 
     if status == "needs_classification" and not resume_after_classification:
-        unknowns = int(src_state.get("unknowns_pending") or 0)
+        fresh_src = count_classification_unknowns(
+            session, user_id=user_id, source_key=source_key
+        )
+        total_backlog = count_all_classification_unknowns(session, user_id=user_id)
         if import_flow_log:
             import_flow_log.write(
                 "backfill_exit",
-                f"waiting for classification UI unknowns_pending={unknowns} (pass resume_after_classification to continue)",
+                f"waiting for classification UI unknowns_pending={fresh_src} "
+                f"global_unknowns={total_backlog} (resume only after entire queue is cleared)",
             )
         return OnboardingBackfillResult(
             progress={
                 **src_state,
                 "source": source_key,
                 "status": "needs_classification",
-                "unknowns_pending": unknowns,
+                "unknowns_pending": fresh_src,
                 "error_message": src_state.get("error_message"),
-                "message": "Pass resume_after_classification=true after resolving unknowns.",
+                "message": "Pass resume_after_classification=true after every pending row is reviewed.",
             }
         )
 
@@ -1155,7 +1192,31 @@ def run_onboarding_backfill(
             src_state["current_phase"] = "statements" if pub_qp == "processing_statements" else "alerts"
         status = str(src_state.get("status") or "processing")
 
-    # Transition out of classification gate.
+    # Client may pass resume early; only honour it when the **combined** review queue is empty.
+    if status == "needs_classification" and resume_after_classification:
+        total_backlog = count_all_classification_unknowns(session, user_id=user_id)
+        if total_backlog > 0:
+            fresh_src = count_classification_unknowns(
+                session, user_id=user_id, source_key=source_key
+            )
+            if import_flow_log:
+                import_flow_log.write(
+                    "backfill_exit",
+                    "resume_after_classification ignored — "
+                    f"global_unknowns={total_backlog} (clear all accounts' pending rows first)",
+                )
+            return OnboardingBackfillResult(
+                progress={
+                    **src_state,
+                    "source": source_key,
+                    "status": "needs_classification",
+                    "unknowns_pending": fresh_src,
+                    "error_message": src_state.get("error_message"),
+                    "message": "Clear every pending classification row before resuming import.",
+                }
+            )
+
+    # Transition out of classification gate (global unknown count is zero).
     if status == "needs_classification" and resume_after_classification:
         src_state["status"] = "processing_statements"
         stmt0 = list(src_state.get("_pending_statement_ids") or [])
@@ -1341,14 +1402,14 @@ def run_onboarding_backfill(
     )
 
     def _pause_if_classification_budget_exceeded(remainder_start_idx: int) -> OnboardingBackfillResult | None:
-        """Return a gate result as soon as unknowns >= threshold (mid-chunk friendly for SSE).
+        """Return a gate result when unknowns **exceed** ``thresh`` (strictly greater).
 
         ``remainder_start_idx`` indexes into ``chunk``: IDs from that index onward are left on
         the pending queue (not yet processed this step). Use ``i`` before fetching ``chunk[i]``,
         and ``i + 1`` after successfully recording ``chunk[i]``.
         """
         unknowns_now = count_classification_unknowns(session, user_id=user_id, source_key=source_key)
-        if unknowns_now < thresh:
+        if unknowns_now <= thresh:
             return None
         remainder_ids = list(chunk[remainder_start_idx:]) + list(rest)
         if pub_status == "processing_statements":
@@ -1567,7 +1628,7 @@ def run_onboarding_backfill(
     unknowns = count_classification_unknowns(session, user_id=user_id, source_key=source_key)
     src_state["unknowns_pending"] = unknowns
 
-    if unknowns >= thresh:
+    if unknowns > thresh:
         src_state["status"] = "needs_classification"
         if not stmt_rest and not alert_rest:
             for k in _CLASSIFICATION_GATE_KEYS:

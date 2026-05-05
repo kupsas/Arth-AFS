@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
-from api.models import Transaction
+from api.models import Transaction, UserContact
 from scraper.config_loader import BankSendersConfig
 from scraper.gmail_client import GmailMessage
 from scraper.onboarding_orchestrator import (
@@ -257,7 +257,7 @@ def test_run_onboarding_backfill_pauses_on_unknown_threshold(
     _bank,
     session: Session,
 ) -> None:
-    """When DB unknowns for the source meet ``unknown_threshold``, status is ``needs_classification``."""
+    """When DB unknowns for the source **exceed** ``unknown_threshold``, status is ``needs_classification``."""
     t0 = datetime.date(2010, 1, 1)
     t1 = datetime.date.today() + datetime.timedelta(days=1)
     m1 = GmailMessage(
@@ -293,7 +293,7 @@ def test_run_onboarding_backfill_pauses_on_unknown_threshold(
             chunk_size=1,
             after=t0,
             before=t1,
-            unknown_threshold=3,
+            unknown_threshold=2,
         )
     assert r.progress.get("status") == "needs_classification"
     assert int(r.progress.get("unknowns_pending") or 0) >= 3
@@ -501,6 +501,41 @@ def test_llm_sensitive_skipped_when_user_already_reviewed_same_counterparty(
             txn_type="UPI_TRANSFER",
             channel="UPI",
             counterparty="  naseema begum ",
+            counterparty_category="Friends and Family",
+            classification_source="LLM",
+        )
+    )
+    session.commit()
+    assert count_classification_unknowns(session, user_id="u1", source_key="hdfc_savings_test") == 0
+
+
+def test_llm_sensitive_skipped_when_user_contact_alias_matches_counterparty(
+    session: Session,
+) -> None:
+    """Friend saved via classify (aliases include LLM label) suppresses a later mismatched LLM row."""
+    session.add(
+        UserContact(
+            user_id="u1",
+            display_name="Alex",
+            aliases_json='["ALEX", "ALEX FROM BANK STRING"]',
+            relationship="FRIEND",
+            contact_source="ONBOARDING",
+        )
+    )
+    session.add(
+        Transaction(
+            content_hash="h" + "k" * 60,
+            txn_date=datetime.date(2024, 5, 1),
+            account_id="HDFC_SAL_3703",
+            user_id="u1",
+            source_statement="hdfc_savings_test",
+            source_type="email",
+            direction="OUTFLOW",
+            amount=9.0,
+            raw_description="UPI ALEX",
+            txn_type="UPI_TRANSFER",
+            channel="UPI",
+            counterparty="Alex From Bank String",
             counterparty_category="Friends and Family",
             classification_source="LLM",
         )

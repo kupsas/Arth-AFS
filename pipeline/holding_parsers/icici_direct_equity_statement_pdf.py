@@ -18,10 +18,12 @@ from __future__ import annotations
 import datetime
 import logging
 import re
+from collections.abc import Sequence
 from pathlib import Path
 
 import pdfplumber
 
+from pipeline.detection import DetectionResult, PARSER_LABELS
 from pipeline.holding_parsers.base import ParsedInvestmentTxn
 from pipeline.holding_parsers.icici_direct_contract_note import aggregate_icici_direct_trades
 from pipeline.holding_parsers.icici_direct_equity import resolve_icici_direct_nse_symbol
@@ -88,7 +90,7 @@ def _map_equity_statement_columns(header_row: list[str | None]) -> dict[str, int
     return col
 
 
-def _is_equity_statement_header_row(row: list[str | None]) -> bool:
+def _is_equity_statement_header_row(row: Sequence[str | None]) -> bool:
     parts = [_norm_cell(c).lower() for c in row]
     joined = " ".join(parts)
     return "isin" in joined and "buy" in joined and "sell" in joined
@@ -283,3 +285,29 @@ def parse_icici_direct_equity_statement_pdf(
     if aggregate:
         return aggregate_icici_direct_trades(legs)
     return legs
+
+
+def detect_icici_equity_statement_pdf(path: str | Path) -> DetectionResult | None:
+    """Return a hit when PDF tables include ISIN + Buy/Sell equity-statement headers."""
+    p = Path(path)
+    if p.suffix.lower() != ".pdf" or not p.is_file():
+        return None
+    try:
+        with pdfplumber.open(p) as pdf:
+            for page in pdf.pages[:8]:
+                tables = page.extract_tables() or []
+                for tbl in tables:
+                    for row in tbl[:22]:
+                        if not row:
+                            continue
+                        cells = [str(c) if c is not None else "" for c in row]
+                        if _is_equity_statement_header_row(cells):
+                            return DetectionResult(
+                                source_type="icici_direct_equity_statement_pdf",
+                                confidence=0.87,
+                                account_hint=None,
+                                label=PARSER_LABELS["icici_direct_equity_statement_pdf"],
+                            )
+    except Exception:
+        return None
+    return None

@@ -11,7 +11,7 @@
  */
 
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { Loader2 } from "lucide-react"
+import { Check, Loader2 } from "lucide-react"
 import * as React from "react"
 
 import { GoalTemplateWizard } from "@/components/onboarding/goal-template-wizard"
@@ -230,19 +230,10 @@ export function OnboardingWizard({
 
   const activeSourceKey = sourcesQ.data?.[bfSourceIdx]?.source_key ?? null
   const activeSourceLabel = activeSourceKey ? humanizeSourceKey(activeSourceKey) : null
-  const activeSourceType = sourcesQ.data?.[bfSourceIdx]?.source_type ?? null
 
   const persistSourcesStatus = stateQ.data?.persist_sources_status ?? "idle"
   const persistSourcesWait = persistSourcesStatus === "running"
   const persistSourcesFailed = persistSourcesStatus === "error"
-
-  /** Coarse section label for the import pipeline (bank cash vs broker portfolio). */
-  const importSectionPhase = React.useMemo((): "banking" | "portfolio" | null => {
-    const st = (activeSourceType || "").toLowerCase()
-    if (st === "broker") return "portfolio"
-    if (st === "savings" || st === "credit_card") return "banking"
-    return null
-  }, [activeSourceType])
 
   /**
    * Last email source finished ingesting (no more chunk work for this account). The combined
@@ -291,8 +282,11 @@ export function OnboardingWizard({
    * connects so rows do not “vanish” when the stream attaches.
    */
   const mailImportActivelyProcessing = React.useMemo(() => {
+    // Never dim once all sources are done.
     if (allMailSourcesFinished) return false
-    if ((globalPendingUnknowns ?? 0) >= unknownPauseThreshold) return false
+
+    // User-action gates: import has paused and is waiting for the user to act.
+    // These are the ONLY states that legitimately drop the overlay.
     const st = bfProgress?.status
     if (
       st === "needs_classification" ||
@@ -301,21 +295,24 @@ export function OnboardingWizard({
     ) {
       return false
     }
-    if (bfProgress?.current_phase === "listing_alerts") {
-      return false
-    }
+
+    // Bug fix 1: source-switch limbo — bfProgress is null while the new SSE stream
+    // starts (setBfProgress(null) fires on bfSourceIdx change before the first event).
+    // importStreamAwaitingSnapshot = bfChunkPosting && bfProgress === null; keep the
+    // overlay so it never blinks out between accounts.
+    if (importStreamAwaitingSnapshot) return true
+
+    // Bug fix 2: listing_alerts phase — Gmail alert scanning is slow but the importer
+    // is still writing to the DB; removing the overlay here caused visible flicker.
+    // Bug fix 3: pending count >= pause-threshold no longer drops the overlay — the
+    // overlay is a DB-race guard, not a "you have enough to review" hint.
     return (
       bfProgress != null &&
       (st === "processing" ||
         st === "processing_statements" ||
         st === "processing_alerts")
     )
-  }, [
-    allMailSourcesFinished,
-    unknownPauseThreshold,
-    globalPendingUnknowns,
-    bfProgress,
-  ])
+  }, [allMailSourcesFinished, bfProgress, importStreamAwaitingSnapshot])
 
   // Persist coarse wizard position so a refresh mid-flow still shows the same step name.
   // Skip while onboarding state is still loading and the user has not navigated yet — otherwise
@@ -364,6 +361,12 @@ export function OnboardingWizard({
         return
       }
 
+      /**
+       * When this run advances to the next source (setBfSourceIdx), the finally block must
+       * NOT clear bfChunkPosting — the new source's run() sets it true and the old finally
+       * fires after, clobbering it (race confirmed by debug session 0f1d46). Track intent here.
+       */
+      let advancingSource = false
       setBfChunkPosting(true)
       try {
         const streamResult = await streamOnboardingBackfill(sk, {
@@ -423,6 +426,7 @@ export function OnboardingWizard({
             await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
             return
           }
+          advancingSource = true   // tell finally not to clear bfChunkPosting
           setBfSourceIdx((i) => i + 1)
           await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
           return
@@ -439,7 +443,10 @@ export function OnboardingWizard({
         setBfError(getUserFacingErrorMessage(e) || "We couldn't import from email. Try again.")
         await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
       } finally {
-        setBfChunkPosting(false)
+        // Do NOT clear bfChunkPosting when we intentionally advanced to the next source.
+        // The new source's run() has already called setBfChunkPosting(true) by this point;
+        // clearing it here would clobber that and leave the overlay in a gap state.
+        if (!advancingSource) setBfChunkPosting(false)
       }
     }
 
@@ -451,7 +458,6 @@ export function OnboardingWizard({
 
 
   const stepIndex = stepMeta.findIndex((s) => s.id === panel)
-  const progressPct = Math.max(5, Math.round(((stepIndex + 1) / stepMeta.length) * 100))
 
   async function handleResumePause() {
     const sk = activeSourceKey
@@ -535,31 +541,69 @@ export function OnboardingWizard({
         className,
       )}
     >
-      <header className="mb-8 space-y-3">
-        <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          {mode === "setup" ? "First-run onboarding" : "Connect account"}
-        </p>
-        <h1 className="text-3xl font-semibold tracking-tight">
-          {mode === "setup" ? "Set up Arth" : "Add mail-driven accounts"}
-        </h1>
-        <div className="h-2 w-full max-w-md rounded-full bg-muted overflow-hidden">
-          <div
-            className="h-full bg-primary transition-all duration-300"
-            style={{ width: `${progressPct}%` }}
-          />
+      <header>
+        {/*
+          Vertical rhythm: keep eyebrow + title as one tight block, then the same nominal gap
+          above and below the stepper. ``space-y-3`` on the whole header used to sit between the
+          h1 line box and the circles; the h1’s default line-height also left a lot of empty space
+          under the words, so the stepper felt farther from the title than from the next section.
+        */}
+        <div className="space-y-3">
+          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            {mode === "setup" ? "First-run onboarding" : "Connect account"}
+          </p>
+          <h1 className="text-3xl font-semibold tracking-tight leading-tight">
+            {mode === "setup" ? "Set up Arth" : "Add mail-driven accounts"}
+          </h1>
         </div>
-        <ol className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-          {stepMeta.map((s, idx) => (
-            <li
-              key={s.id}
-              className={cn(
-                "rounded-full border px-2 py-0.5",
-                idx === stepIndex && "border-primary text-foreground bg-primary/5",
-              )}
-            >
-              {s.label}
-            </li>
-          ))}
+        {/* Step progress stepper — equal vertical padding so title ↔ stepper ↔ page content line up */}
+        <ol className="flex w-full items-start py-8" aria-label="Onboarding steps">
+          {stepMeta.map((s, idx) => {
+            const isCompleted = idx < stepIndex
+            const isActive = idx === stepIndex
+            const isUpcoming = idx > stepIndex
+            return (
+              <React.Fragment key={s.id}>
+                <li className="flex flex-col items-center gap-1.5 shrink-0">
+                  {/* Circle indicator */}
+                  <div
+                    className={cn(
+                      "size-7 rounded-full flex items-center justify-center text-[11px] font-semibold border-2 transition-all duration-300",
+                      isCompleted && "bg-primary border-primary text-primary-foreground",
+                      isActive && "border-primary text-primary bg-primary/10 shadow-sm",
+                      isUpcoming && "border-border text-muted-foreground/40 bg-transparent",
+                    )}
+                  >
+                    {isCompleted ? (
+                      <Check className="size-3.5" strokeWidth={2.5} />
+                    ) : (
+                      <span>{idx + 1}</span>
+                    )}
+                  </div>
+                  {/* Step label */}
+                  <span
+                    className={cn(
+                      "text-[10px] font-medium text-center leading-tight w-14 transition-colors duration-300",
+                      isActive && "text-foreground",
+                      isCompleted && "text-primary",
+                      isUpcoming && "text-muted-foreground/35",
+                    )}
+                  >
+                    {s.label}
+                  </span>
+                </li>
+                {/* Connector line between steps */}
+                {idx < stepMeta.length - 1 && (
+                  <div
+                    className={cn(
+                      "flex-1 h-0.5 mt-3.5 mx-1 rounded-full transition-all duration-500",
+                      idx < stepIndex ? "bg-primary" : "bg-border",
+                    )}
+                  />
+                )}
+              </React.Fragment>
+            )
+          })}
         </ol>
       </header>
 
@@ -635,7 +679,6 @@ export function OnboardingWizard({
                   onResumeFromPause={bfProgress?.status === "paused" ? handleResumePause : undefined}
                   resumeBusy={resumeBusy}
                   importBusy={bfChunkPosting}
-                  wizardSection={importSectionPhase}
                 />
                 <ClassificationBatchReview
                   importAwaitingClassification={bfProgress?.status === "needs_classification"}
