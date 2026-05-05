@@ -14,9 +14,16 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 from api.auth import get_current_user
 from api.database import SQLiteSerializingSession, get_engine, init_db
@@ -32,6 +39,7 @@ from api.routes.investment_transactions import router as investment_transactions
 from api.routes.liabilities import router as liabilities_router
 from api.routes.prices import router as prices_router
 from api.routes.settings import router as settings_router
+from api.routes.diagnostics import router as diagnostics_router
 from api.routes.recurring import router as recurring_router
 from api.routes.surplus import router as surplus_router
 from api.routes.liquidity import router as liquidity_router
@@ -42,6 +50,8 @@ from api.routes.scraper import router as scraper_router
 from api.routes.scraper_config import router as scraper_config_router
 from api.routes.onboarding import router as onboarding_router
 from api.routes.setup import router as setup_router
+from api.errors import ArthError, arth_internal_error
+from api.middleware import RequestLoggingMiddleware
 from pipeline.logging_config import setup_logging
 from scraper.scheduler import shutdown_scheduler, start_scheduler
 
@@ -59,8 +69,11 @@ async def _run_startup_db_maintenance_in_thread() -> None:
     """
 
     logger.info(
-        "Startup DB maintenance: beginning price sync (NSE/AMFI/yfinance), "
-        "then inflation (IMF CPI) — sequential to avoid SQLite writer contention"
+        "Running startup data refresh in the background — prices first, then inflation."
+    )
+    logger.debug(
+        "Startup maintenance runs sequentially so SQLite does not get concurrent writes "
+        "from price refresh and inflation sync."
     )
 
     def _sync_startup_prices() -> None:
@@ -78,7 +91,9 @@ async def _run_startup_db_maintenance_in_thread() -> None:
                 "true",
                 "yes",
             ):
-                logger.info("INFLATION_DISABLE_IMF — skipping startup inflation sync")
+                logger.debug(
+                    "Startup inflation sync skipped — INFLATION_DISABLE_IMF is set"
+                )
                 return
             with SQLiteSerializingSession(get_engine()) as session:
                 sync_imf_cpi_history(session)
@@ -115,7 +130,7 @@ async def lifespan(app: FastAPI):
       6. Clean up the APScheduler background thread so the process exits cleanly.
     """
     setup_logging()
-    logger.info("Arth API starting up...")
+    logger.info("Arth is starting…")
     init_db()
     start_scheduler()
     # Schedule maintenance without awaiting — server becomes ready immediately.
@@ -123,9 +138,11 @@ async def lifespan(app: FastAPI):
     app.state.startup_db_maintenance_task = asyncio.create_task(
         _run_startup_db_maintenance_in_thread()
     )
-    logger.info("Arth API ready (startup DB maintenance runs in background)")
+    logger.info(
+        "Arth is ready — background refresh and scheduled tasks are running."
+    )
     yield
-    logger.info("Arth API shutting down...")
+    logger.info("Arth is shutting down…")
     shutdown_scheduler()
 
 
@@ -136,12 +153,53 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.exception_handler(ArthError)
+async def arth_error_handler(request: Request, exc: ArthError) -> Response:
+    """Log structured client/server errors; response shape matches OpenAPI ``HTTPException``."""
+    rid = getattr(request.state, "request_id", None)
+    if exc.status_code >= 500:
+        logger.error(
+            "%s %s %s status=%s request_id=%s",
+            exc.error_code,
+            request.method,
+            request.url.path,
+            exc.status_code,
+            rid,
+        )
+    else:
+        logger.warning(
+            "%s %s %s status=%s request_id=%s",
+            exc.error_code,
+            request.method,
+            request.url.path,
+            exc.status_code,
+            rid,
+        )
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> Response:
+    """Delegate validation and HTTP errors; log and wrap unknown failures."""
+    if isinstance(exc, RequestValidationError):
+        return await request_validation_exception_handler(request, exc)
+    if isinstance(exc, HTTPException):
+        return await http_exception_handler(request, exc)
+
+    rid = getattr(request.state, "request_id", None)
+    logger.exception(
+        "Unhandled exception %s %s request_id=%s",
+        request.method,
+        request.url.path,
+        rid,
+    )
+    ie = arth_internal_error()
+    return JSONResponse(status_code=500, content={"detail": ie.detail})
+
+
 # ---------------------------------------------------------------------------
-# CORS — allow the Next.js dashboard and Swagger UI.
-# allow_credentials=True is required for cookies to be sent cross-port.
-#
-# For Cloudflare Tunnel (or any non-localhost dashboard URL), add origins via
-# .env: CORS_EXTRA_ORIGINS=https://your-app.trycloudflare.com,https://other...
+# Middleware — CORS next to the app; request logging outermost (registered last).
 # ---------------------------------------------------------------------------
 _cors_extra = os.getenv("CORS_EXTRA_ORIGINS", "")
 _cors_extra_list = [o.strip() for o in _cors_extra.split(",") if o.strip()]
@@ -157,6 +215,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.add_middleware(RequestLoggingMiddleware)
 
 # ---------------------------------------------------------------------------
 # Auth routes — public (no session required for login/logout)
@@ -192,6 +252,7 @@ app.include_router(simulate_router,    prefix="/api/simulate",      tags=["Simul
 app.include_router(goals_router,        prefix="/api/goals",         tags=["Goals"],         dependencies=_auth)
 app.include_router(life_events_router, prefix="/api/life-events",   tags=["Life events"],   dependencies=_auth)
 app.include_router(settings_router,    prefix="/api/settings",      tags=["Settings"],      dependencies=_auth)
+app.include_router(diagnostics_router, prefix="/api/diagnostics",    tags=["Diagnostics"],   dependencies=_auth)
 app.include_router(
     user_config.router,
     prefix="/api/user",

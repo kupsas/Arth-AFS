@@ -21,6 +21,7 @@ GET /api/metrics/classification-stats — rules vs LLM vs user vs unclassified (
 from __future__ import annotations
 
 import datetime
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -28,6 +29,7 @@ from sqlalchemy import case, or_
 from sqlmodel import Session, col, func, select
 
 from api.auth import get_current_user
+from api.errors import arth_validation_error
 from api.database import get_session
 from api.models import Goal, Transaction
 from api.routes.transactions import _txn_to_dict
@@ -45,6 +47,7 @@ from api.services.query_helpers import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -997,7 +1000,8 @@ def get_category_trend(
     try:
         cond = category_trend_condition(series)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        logger.warning("Metrics category-trend: unknown series=%s", series)
+        raise arth_validation_error(str(e)) from e
 
     today = datetime.date.today()
     base_total = today.year * 12 + (today.month - 1)
@@ -1110,7 +1114,8 @@ def get_bar_drilldown(
         try:
             cond = category_trend_condition(series)
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
+            logger.warning("Metrics bar-drilldown: unknown category series=%s", series)
+            raise arth_validation_error(str(e)) from e
         q = _expense_where(q).where(cond)
     else:
         raise HTTPException(status_code=400, detail=f"unknown chart: {chart}")
