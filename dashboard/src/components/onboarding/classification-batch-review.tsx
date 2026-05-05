@@ -10,9 +10,9 @@
  *    (unless you already confirmed that counterparty on another transaction).
  *    Omit ``source`` on this component to review **all** email-linked accounts in one queue.
  * 2. Pick a **category** per row (or select many rows and use the bulk bar).
- * 3. **Confirm** sends ``POST /api/onboarding/classify`` (no ``source`` when mixed), then
- *    ``POST /api/onboarding/backfill/{source}?…`` with ``resume_after_classification`` for each
- *    account that had rows in that batch so chunk import can continue.
+ * 3. **Confirm** sends ``POST /api/onboarding/classify`` (no ``source`` when mixed), then for each
+ *    affected ``source_key`` opens ``GET /api/onboarding/backfill/{source}/stream?resume_after_classification=true``
+ *    so mail import continues with live SSE progress (same resume semantics as the POST chunk API).
  * 4. While the mail importer is **paused for classification** (``needs_classification``), or after **every
  *    email source** has finished (``complete`` on the last source but rows still need labels), an optional
  *    **“rest of queue = Uber”** shortcut fetches *every* pending unknown (not only the visible page),
@@ -49,8 +49,8 @@ import {
 } from "@/components/ui/select";
 import {
   fetchOnboardingUnknowns,
-  postOnboardingBackfillChunk,
   postOnboardingClassify,
+  streamOnboardingBackfill,
   type OnboardingClassifyItem,
   type OnboardingUnknownTxnBrief,
 } from "@/lib/api";
@@ -131,8 +131,10 @@ export type ClassificationBatchReviewProps = {
    * even though the combined queue still has rows, so the string key forces a refetch.
    */
   unknownsTrigger?: number | string;
-  /** After classify + per-source resume succeeds — parent may nudge the backfill poll loop. */
+  /** After classify + SSE resume — parent may refresh backfill UI via ``onImportProgress``. */
   onSubmitted?: () => void;
+  /** Forward live import counters while ``streamOnboardingBackfill`` runs after classification resume. */
+  onImportProgress?: (snapshot: Record<string, unknown>) => void;
   /**
    * When true (e.g. backfill progress ``status === "needs_classification"``), show the
    * **mark entire queue as Uber** shortcut so users can bulk-fix counterparty + category together.
@@ -144,11 +146,22 @@ export type ClassificationBatchReviewProps = {
    */
   allMailSourcesImported?: boolean;
   /**
-   * When true, the Gmail backfill loop is still ingesting messages for this session. The list may
-   * update and saves can race with chunk import — parent passes this so we show a clear overlay
-   * instead of a “broken” confirm button (often greyed out until a category is picked).
+   * When true, the Gmail importer is **actively parsing mail into the ledger** (not paused for
+   * classification/password). We dim the queue so saves do not race with ingestion — see parent
+   * ``mailImportActivelyProcessing`` (SSE-aware; not the same as “HTTP stream connected”).
    */
   mailImportActivelyProcessing?: boolean;
+  /**
+   * While the next source’s SSE stream has not produced a progress snapshot yet, the parent may
+   * hide transaction rows if the **global** unknown backlog is still under the pause threshold
+   * so the card does not flash rows under a “Connecting…” import header.
+   */
+  hideClassificationRowsForImportLimbo?: boolean;
+  /**
+   * Same numeric threshold the server uses to pause for classification (~20). Used for the Uber
+   * bulk shortcut and copy when the list scope is all accounts.
+   */
+  pauseThresholdForShortcuts?: number;
 };
 
 export function ClassificationBatchReview({
@@ -156,9 +169,12 @@ export function ClassificationBatchReview({
   sourceLabel,
   unknownsTrigger,
   onSubmitted,
+  onImportProgress,
   importAwaitingClassification = false,
   allMailSourcesImported = false,
   mailImportActivelyProcessing = false,
+  hideClassificationRowsForImportLimbo = false,
+  pauseThresholdForShortcuts,
 }: ClassificationBatchReviewProps) {
   const scopedSource = source?.trim() || undefined;
   const displayScope =
@@ -357,7 +373,10 @@ export function ClassificationBatchReview({
         if (sk) sources.add(sk);
       }
       for (const sk of sources) {
-        await postOnboardingBackfillChunk(sk, { resume_after_classification: true });
+        await streamOnboardingBackfill(sk, {
+          resume_after_classification: true,
+          onProgress: (snap) => onImportProgress?.(snap),
+        });
       }
     }
     return result;
@@ -459,11 +478,14 @@ export function ClassificationBatchReview({
   }
 
   /**
-   * Uber bulk row: safe when import is paused for classification **or** all Gmail sources are done
-   * but the combined unknown queue is not empty (no chunk work left to race ``POST /classify``).
+   * Uber bulk row: show when import is paused for classification, all sources are done, **or** the
+   * visible queue already has at least the pause-threshold number of rows (multi-source / SSE
+   * “in between” case — same destructive confirm as end-of-import).
    */
+  const pauseBar = pauseThresholdForShortcuts ?? threshold ?? 20;
   const showUberQueueBulkShortcut =
-    pendingTotal > 0 && (importAwaitingClassification || allMailSourcesImported);
+    pendingTotal > 0 &&
+    (importAwaitingClassification || allMailSourcesImported || pendingTotal >= pauseBar);
 
   return (
     <>
@@ -513,7 +535,7 @@ export function ClassificationBatchReview({
             Review classification queue
             {loading && !rows.length ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
           </CardTitle>
-          {pendingTotal > 0 && (
+          {pendingTotal > 0 && !hideClassificationRowsForImportLimbo && (
             <span
               className="rounded-md border border-border bg-muted/50 px-2.5 py-1 text-sm font-medium tabular-nums text-foreground"
               title="Gaps (missing counterparty or category), LLM rows in Friends & Family / Gifts & Personal Transfers / Miscellaneous (unless that counterparty was already confirmed in a prior review), and the count the importer uses before pausing."
@@ -549,13 +571,22 @@ export function ClassificationBatchReview({
               Transactions being processed, please wait.
             </p>
             <p className="max-w-xs text-xs text-muted-foreground">
-              You can confirm labels after this batch pauses for review.
+              You can confirm labels once this mail-ingest burst finishes or when import pauses for
+              review.
             </p>
           </div>
         )}
         {error && <p className="text-sm text-destructive">{error}</p>}
 
-        {showUberQueueBulkShortcut && (
+        {hideClassificationRowsForImportLimbo && (
+          <p className="text-sm text-muted-foreground" role="status">
+            Connecting the next email account. The list appears when you have at least{" "}
+            <span className="font-medium text-foreground tabular-nums">{pauseBar}</span> items to
+            review, or when import pauses for labels.
+          </p>
+        )}
+
+        {!hideClassificationRowsForImportLimbo && showUberQueueBulkShortcut && (
           <div className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-4 py-3.5">
             <div className="flex gap-3">
               <Checkbox
@@ -589,7 +620,7 @@ export function ClassificationBatchReview({
           </div>
         )}
 
-        {selectedIds.size > 0 && (
+        {!hideClassificationRowsForImportLimbo && selectedIds.size > 0 && (
           <div className="sticky top-0 z-10 rounded-lg border bg-card/95 p-3 shadow-sm backdrop-blur">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-medium tabular-nums">{selectedIds.size} selected</span>
@@ -633,11 +664,11 @@ export function ClassificationBatchReview({
           </div>
         )}
 
-        {!rows.length && !loading && (
+        {!hideClassificationRowsForImportLimbo && !rows.length && !loading && (
           <p className="text-sm text-muted-foreground">No rows to review on this page — you are clear.</p>
         )}
 
-        {!!rows.length && (
+        {!hideClassificationRowsForImportLimbo && !!rows.length && (
           <>
             <div className="flex items-center gap-2">
               <Button

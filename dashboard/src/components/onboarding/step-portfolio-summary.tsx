@@ -122,6 +122,9 @@ export function StepPortfolioSummary() {
                 {formatCurrency(snapshot.total_value_inr)}
               </span>
             </p>
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              Values shown are <strong>purchase price</strong> (cost basis from your transaction history), not current market value.
+            </p>
           </CardHeader>
           <CardContent className="space-y-2">
             {snapshot.top_holdings.length === 0 ? (

@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+import queue
 import threading
 import uuid
 from typing import Any
@@ -22,7 +23,7 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session, col, select
 
 from api.auth import get_current_user
-from api.database import get_session
+from api.database import SQLiteSerializingSession, get_session
 from api.models import AppUser, OnboardingState, PasswordTemplate, Transaction, UserContact, UserSecrets
 from api.onboarding_goal_templates import build_goal_templates_response
 from api.routes.transactions import upsert_user_merchant_correction_rule
@@ -60,6 +61,7 @@ from scraper.discovery import (
 from scraper.gap_detector import detect_gaps
 from scraper.gmail_client import GmailClient, GmailReauthRequiredError
 from scraper.onboarding_orchestrator import (
+    STREAM_DRAIN_CHUNK_SIZE,
     count_all_classification_unknowns,
     count_classification_unknowns,
     list_all_classification_unknown_transactions,
@@ -438,6 +440,11 @@ def _ndjson_line(payload: dict[str, Any]) -> bytes:
     return (json.dumps(payload) + "\n").encode("utf-8")
 
 
+def _sse_data_line(payload: dict[str, Any]) -> bytes:
+    """One Server-Sent Events frame: ``data:`` JSON + blank line (RFC 8895 style)."""
+    return (f"data: {json.dumps(payload, default=str)}\n\n").encode("utf-8")
+
+
 def _http_exception_detail(exc: HTTPException) -> str:
     # ``detail`` is often typed as ``str`` only, but at runtime it may be a dict/list.
     d: Any = exc.detail
@@ -499,7 +506,7 @@ def onboarding_discover(
             "sources": payload_list,
         }
 
-        with Session(write_bind) as write_session:
+        with SQLiteSerializingSession(write_bind) as write_session:
             row = _get_or_create_state(write_session, current_user)
             row.discovery_results_json = json.dumps(envelope)
             row.persist_sources_status = "running"
@@ -514,7 +521,7 @@ def onboarding_discover(
             status = "done"
             try:
                 client = _gmail_client_connected()
-                with Session(bind) as bg_session:
+                with SQLiteSerializingSession(bind) as bg_session:
                     persist_scraper_sources_from_discovery(
                         bg_session,
                         uid,
@@ -526,7 +533,7 @@ def onboarding_discover(
                 logger.exception("Background persist-sources failed for user=%r", uid)
                 status = "error"
             try:
-                with Session(bind) as s2:
+                with SQLiteSerializingSession(bind) as s2:
                     r = _get_or_create_state(s2, uid)
                     r.persist_sources_status = status
                     r.updated_at = datetime.datetime.now(datetime.UTC)
@@ -706,6 +713,21 @@ def _merge_and_save_backfill(
 
 _BACKFILL_LOCKS: dict[tuple[str, str], str] = {}
 
+# Per-user threading.Event: when unset (after ``clear()``), POST /classify holds the gate so the
+# onboarding backfill worker waits before ``commit`` — avoids SQLite "database is locked" when the
+# SSE stream and classify both write concurrently. Default is **set** (open); classify clears while
+# committing then sets again in ``finally``.
+_CLASSIFY_GATES: dict[str, threading.Event] = {}
+
+
+def _get_classify_gate(user_id: str) -> threading.Event:
+    """Return the classify/backfill coordination Event for ``user_id`` (creates if missing)."""
+    if user_id not in _CLASSIFY_GATES:
+        gate = threading.Event()
+        gate.set()
+        _CLASSIFY_GATES[user_id] = gate
+    return _CLASSIFY_GATES[user_id]
+
 
 @router.post("/backfill/{source}")
 def onboarding_backfill(
@@ -816,7 +838,11 @@ def onboarding_backfill_progress(
     session: Session = Depends(get_session),
     current_user: str = Depends(get_current_user),
 ) -> BackfillProgressResponse:
-    """Poll backfill progress; unknowns_pending is recomputed from the DB on each GET."""
+    """Poll backfill progress; unknowns_pending is recomputed from the DB on each GET.
+
+    **Deprecated for live UX:** Prefer :func:`onboarding_backfill_stream` (SSE) so the
+    dashboard can show per-email progress without discrete chunk polling.
+    """
     source_key = source.strip()
     row = _get_or_create_state(session, current_user)
     all_bf = _parse_json_object(row.backfill_progress_json, {})
@@ -855,6 +881,180 @@ def onboarding_backfill_progress(
         ),
         windows_total=int(blob.get("windows_total") or 0),
         windows_completed=int(blob.get("windows_completed") or 0),
+    )
+
+
+_BACKFILL_STREAM_DONE = object()
+
+
+@router.get("/backfill/{source}/stream")
+def onboarding_backfill_stream(
+    source: str,
+    *,
+    resume_after_classification: bool = Query(default=False),
+    resume_after_password: bool = Query(default=False),
+    resume_from_pause: bool = Query(default=False),
+    after: datetime.date | None = Query(default=None),
+    before: datetime.date | None = Query(default=None),
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> StreamingResponse:
+    """Stream backfill progress as **Server-Sent Events** (``text/event-stream``).
+
+    Runs the same :func:`run_onboarding_backfill` pipeline as ``POST /backfill/{source}``,
+    but with a large internal chunk size so the connection stays open while Gmail messages
+    are processed one-by-one. Emits:
+
+    * ``{"type": "progress", ...}`` — after each message (counters move smoothly).
+    * ``{"type": "status", "progress": {...}}`` — after each orchestrator step + DB reconcile.
+    * ``{"type": "gate", "progress": {...}}`` — pause gates (password / classification / paused / error).
+    * ``{"type": "complete", "progress": {...}}`` — this source finished successfully.
+
+    **Resume:** pass the same boolean query flags as ``POST`` body (e.g.
+    ``?resume_after_password=true``) after fixing secrets so a **new** stream continues
+    without holding the HTTP lock during user input (avoids 409 on concurrent ``POST``).
+
+    The request-scoped ``session`` may close when this handler returns; the generator uses
+    ``session.get_bind()`` and opens its own :class:`~sqlmodel.Session` per step (same pattern
+    as ``POST /discover``).
+    """
+    source_key = source.strip()
+    if not source_key:
+        raise HTTPException(status_code=400, detail="source must not be empty")
+
+    req_id = uuid.uuid4().hex[:12]
+    lock_key = (current_user, source_key)
+    held_by = _BACKFILL_LOCKS.get(lock_key)
+    if held_by is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Another backfill request ({held_by}) is already processing "
+                f"{source_key}. Wait for it to finish before starting another stream."
+            ),
+        )
+
+    write_bind = session.get_bind()
+    event_queue: queue.Queue[object] = queue.Queue()
+
+    def worker() -> None:
+        _BACKFILL_LOCKS[lock_key] = req_id
+        # Copy query flags into locals so the retry loop can clear them without ``nonlocal`` /
+        # UnboundLocalError surprises on the first ``run_onboarding_backfill`` call.
+        ra_cls = resume_after_classification
+        ra_pwd = resume_after_password
+        rf_pause = resume_from_pause
+        ad = after
+        bd = before
+        try:
+            try:
+                client = _gmail_client_connected()
+            except HTTPException as e:
+                event_queue.put(
+                    {"type": "error", "detail": _http_exception_detail(e), "terminal": True}
+                )
+                return
+
+            flow = EmailImportFlowLog(request_id=req_id, user_id=current_user, source_key=source_key)
+            flow.write("sse_stream_begin", f"resume_cls={ra_cls} resume_pwd={ra_pwd} resume_pause={rf_pause}")
+
+            while True:
+                with SQLiteSerializingSession(write_bind) as stream_session:
+                    row = _get_or_create_state(stream_session, current_user)
+                    all_bf = _parse_json_object(row.backfill_progress_json, {})
+                    existing = dict(all_bf.get(source_key) or {})
+
+                    def _flush_backfill_progress_live(snapshot: dict[str, Any]) -> None:
+                        _get_classify_gate(current_user).wait(timeout=30)
+                        _merge_and_save_backfill(stream_session, current_user, source_key, snapshot)
+                        stream_session.commit()
+                        event_queue.put(
+                            {
+                                "type": "status",
+                                "progress": _strip_internal_keys(snapshot),
+                            }
+                        )
+
+                    def _emit_email_progress(slice_pub: dict[str, Any]) -> None:
+                        evt = {"type": "progress", **slice_pub}
+                        event_queue.put(evt)
+
+                    try:
+                        result = run_onboarding_backfill(
+                            session=stream_session,
+                            user_id=current_user,
+                            source_key=source_key,
+                            gmail_client=client,
+                            existing_progress=existing,
+                            chunk_size=STREAM_DRAIN_CHUNK_SIZE,
+                            after=ad,
+                            before=bd,
+                            resume_after_classification=ra_cls,
+                            resume_after_password=ra_pwd,
+                            resume_from_pause=rf_pause,
+                            import_flow_log=flow,
+                            progress_commit_hook=_flush_backfill_progress_live,
+                            emit_event=_emit_email_progress,
+                        )
+                    except ValueError as e:
+                        event_queue.put({"type": "error", "detail": str(e), "terminal": True})
+                        return
+
+                    merged = dict(result.progress)
+                    unknowns_live = count_classification_unknowns(
+                        stream_session, user_id=current_user, source_key=source_key
+                    )
+                    merged["unknowns_pending"] = unknowns_live
+                    _reconcile_backfill_needs_classification(
+                        stream_session, current_user, merged, unknowns_live
+                    )
+                    _merge_and_save_backfill(stream_session, current_user, source_key, merged)
+                    _get_classify_gate(current_user).wait(timeout=30)
+                    stream_session.commit()
+
+                    public = _strip_internal_keys(merged)
+                    public["unknowns_pending"] = unknowns_live
+                    event_queue.put({"type": "status", "progress": public})
+
+                    st = str(merged.get("status") or "")
+                    if st in ("needs_password", "needs_classification", "paused", "error"):
+                        event_queue.put({"type": "gate", "progress": public})
+                        flow.write("sse_stream_end", f"gate status={st!r}")
+                        return
+                    if st == "complete":
+                        event_queue.put({"type": "complete", "progress": public})
+                        flow.write("sse_stream_end", "complete")
+                        return
+                    if st in ("processing_statements", "processing_alerts", "processing"):
+                        ra_cls = False
+                        ra_pwd = False
+                        rf_pause = False
+                        continue
+                    flow.write("sse_stream_end", f"unexpected_status={st!r}")
+                    event_queue.put({"type": "error", "detail": f"Unexpected status {st!r}.", "terminal": True})
+                    return
+        finally:
+            _BACKFILL_LOCKS.pop(lock_key, None)
+            event_queue.put(_BACKFILL_STREAM_DONE)
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    def generate() -> Any:
+        while True:
+            item = event_queue.get()
+            if item is _BACKFILL_STREAM_DONE:
+                break
+            assert isinstance(item, dict)
+            yield _sse_data_line(item)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -1352,70 +1552,82 @@ def onboarding_classify(
     rules = 0
     contacts_created = 0
     keywords_for_propagation: list[str] = []
-    for item in body.items:
-        txn = session.get(Transaction, item.txn_id)
-        if not txn or txn.user_id != current_user:
-            raise HTTPException(status_code=404, detail=f"Transaction {item.txn_id} not found")
-        if txn.source_type != "email":
-            raise HTTPException(
-                status_code=400,
-                detail=f"Transaction {item.txn_id} is not an email-sourced row",
-            )
-        if source_key is not None and txn.source_statement != source_key:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Transaction {item.txn_id} is not an email row for source {source_key!r}",
-            )
-        txn.counterparty = item.counterparty.strip()
-        txn.counterparty_category = item.counterparty_category.strip()
-        if item.spend_category is not None:
-            txn.spend_category = item.spend_category.strip() or None
-        if item.txn_type is not None:
-            txn.txn_type = item.txn_type.strip() or None
-        if item.upi_type is not None:
-            txn.upi_type = item.upi_type.strip() or None
-        txn.classification_source = "USER_REVIEWED"
-        txn.updated_at = datetime.datetime.now(datetime.UTC)
-        if txn.spend_category is None and txn.direction == "OUTFLOW":
-            canon = transaction_to_canonical(txn)
-            apply_spend_category_heuristics(canon)
-            txn.spend_category = canon.spend_category.value if canon.spend_category else None
-        session.add(txn)
-        updated += 1
 
-        cat_upper = item.counterparty_category.strip()
-        cp_label = item.counterparty.strip()
+    # Pause backfill worker commits while we touch SQLite (see ``_CLASSIFY_GATES``). Always
+    # ``set()`` in ``finally`` so a failed request cannot wedge the stream forever.
+    gate = _get_classify_gate(current_user)
+    gate.clear()
+    try:
+        # ``no_autoflush``: avoid flushing dirty Transaction rows before
+        # ``upsert_user_merchant_correction_rule`` runs a SELECT (that used to trigger autoflush
+        # and SQLite lock fights with the SSE worker).
+        with session.no_autoflush:
+            for item in body.items:
+                txn = session.get(Transaction, item.txn_id)
+                if not txn or txn.user_id != current_user:
+                    raise HTTPException(status_code=404, detail=f"Transaction {item.txn_id} not found")
+                if txn.source_type != "email":
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Transaction {item.txn_id} is not an email-sourced row",
+                    )
+                if source_key is not None and txn.source_statement != source_key:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Transaction {item.txn_id} is not an email row for source {source_key!r}",
+                    )
+                txn.counterparty = item.counterparty.strip()
+                txn.counterparty_category = item.counterparty_category.strip()
+                if item.spend_category is not None:
+                    txn.spend_category = item.spend_category.strip() or None
+                if item.txn_type is not None:
+                    txn.txn_type = item.txn_type.strip() or None
+                if item.upi_type is not None:
+                    txn.upi_type = item.upi_type.strip() or None
+                txn.classification_source = "USER_REVIEWED"
+                txn.updated_at = datetime.datetime.now(datetime.UTC)
+                if txn.spend_category is None and txn.direction == "OUTFLOW":
+                    canon = transaction_to_canonical(txn)
+                    apply_spend_category_heuristics(canon)
+                    txn.spend_category = canon.spend_category.value if canon.spend_category else None
+                session.add(txn)
+                updated += 1
 
-        if cat_upper == "Friends and Family":
-            _upsert_friend_contact(session, current_user, cp_label)
-            contacts_created += 1
-        elif cat_upper == "Self Transfer":
-            _upsert_self_contact(session, current_user, cp_label)
-            contacts_created += 1
+                cat_upper = item.counterparty_category.strip()
+                cp_label = item.counterparty.strip()
 
-        if item.apply_to_future:
-            kw_src = (item.merchant_rule_keyword or item.counterparty).strip().upper()
-            if len(kw_src) >= 2:
-                upsert_user_merchant_correction_rule(
-                    session,
-                    current_user,
-                    keyword=kw_src,
-                    display_name=cp_label,
-                    counterparty_category=cat_upper,
-                )
-                rules += 1
-                keywords_for_propagation.append(kw_src)
+                if cat_upper == "Friends and Family":
+                    _upsert_friend_contact(session, current_user, cp_label)
+                    contacts_created += 1
+                elif cat_upper == "Self Transfer":
+                    _upsert_self_contact(session, current_user, cp_label)
+                    contacts_created += 1
 
-    session.commit()
+                if item.apply_to_future:
+                    kw_src = (item.merchant_rule_keyword or item.counterparty).strip().upper()
+                    if len(kw_src) >= 2:
+                        upsert_user_merchant_correction_rule(
+                            session,
+                            current_user,
+                            keyword=kw_src,
+                            display_name=cp_label,
+                            counterparty_category=cat_upper,
+                        )
+                        rules += 1
+                        keywords_for_propagation.append(kw_src)
 
-    auto_propagated = propagate_merchant_keyword_hits(
-        session,
-        current_user,
-        keywords=keywords_for_propagation,
-        exclude_txn_ids={it.txn_id for it in body.items},
-    )
-    if auto_propagated:
         session.commit()
+
+        auto_propagated = propagate_merchant_keyword_hits(
+            session,
+            current_user,
+            keywords=keywords_for_propagation,
+            exclude_txn_ids={it.txn_id for it in body.items},
+        )
+        if auto_propagated:
+            session.commit()
+    finally:
+        gate.set()
 
     remaining = count_all_classification_unknowns(session, user_id=current_user)
     resume_thresh = effective_onboarding_resume_threshold(session, current_user)

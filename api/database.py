@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 
 from sqlalchemy import event, text
@@ -23,6 +24,29 @@ from sqlmodel import Session, SQLModel, create_engine
 from pipeline.config import DB_PATH, REPO_ROOT
 
 logger = logging.getLogger(__name__)
+
+# SQLite allows only one writer at a time. WAL mode lets readers proceed during a
+# write, but concurrent flush/commit from multiple threads (e.g. onboarding backfill
+# worker + API classify/patch) still causes ``database is locked``. Serialize those
+# operations process-wide; use RLock so commit()->flush() nesting stays safe.
+_SQLITE_WRITER_LOCK = threading.RLock()
+
+
+class SQLiteSerializingSession(Session):
+    """Session that serializes flush/commit/rollback for multi-threaded SQLite use."""
+
+    def flush(self, objects=None):  # type: ignore[override]
+        with _SQLITE_WRITER_LOCK:
+            return super().flush(objects)
+
+    def commit(self):  # type: ignore[override]
+        with _SQLITE_WRITER_LOCK:
+            return super().commit()
+
+    def rollback(self):  # type: ignore[override]
+        with _SQLITE_WRITER_LOCK:
+            return super().rollback()
+
 
 # `check_same_thread=False` is required because FastAPI serves requests
 # across multiple threads, but SQLite's default is single-thread only.
@@ -592,14 +616,14 @@ def _chmod_owner_rw_only(path: Path) -> None:
 def _seed_desktop_prereq_defaults() -> None:
     """Seed app_users + scraper config from env / scraper.config when tables are empty."""
     import bcrypt
-    from sqlmodel import Session, select
+    from sqlmodel import select
 
     from api.models import AppUser, ScraperAccountMapping, ScraperBankSender
     from api.services.family_member_utils import self_member_id
     from scraper.config import BANK_SENDERS
 
     try:
-        with Session(_engine) as session:
+        with SQLiteSerializingSession(_engine) as session:
             if session.exec(select(AppUser)).first() is None:
                 raw_user = (os.getenv("AUTH_USERNAME") or "sashank").strip()
                 raw_pw = (os.getenv("AUTH_PASSWORD") or "").strip()
@@ -662,14 +686,14 @@ def _sync_missing_bank_senders_from_config() -> None:
     otherwise never be polled. This runs on every ``init_db()`` and only adds
     missing (user_id, sender_email) rows plus account mappings — idempotent.
     """
-    from sqlmodel import Session, select
+    from sqlmodel import select
 
     from api.models import ScraperAccountMapping, ScraperBankSender
     from api.services.family_member_utils import self_member_id
     from scraper.config import BANK_SENDERS
 
     try:
-        with Session(_engine) as session:
+        with SQLiteSerializingSession(_engine) as session:
             # Only users who already use SQLite for scraper config (≥1 row).
             # Others still get :data:`scraper.config.BANK_SENDERS` in memory — no merge needed.
             all_rows = session.exec(select(ScraperBankSender)).all()
@@ -730,13 +754,13 @@ def _sync_missing_bank_senders_from_config() -> None:
 
 def _hydrate_scraper_sender_metadata_from_code() -> None:
     """Fill NULL discovery columns on existing ``scraper_bank_senders`` from ``BANK_SENDERS``."""
-    from sqlmodel import Session, select
+    from sqlmodel import select
 
     from api.models import ScraperBankSender
     from scraper.config import BANK_SENDERS
 
     try:
-        with Session(_engine) as session:
+        with SQLiteSerializingSession(_engine) as session:
             changed = False
             for row in session.exec(select(ScraperBankSender)).all():
                 cfg = BANK_SENDERS.get(row.sender_email.strip().lower())
@@ -758,7 +782,7 @@ def _hydrate_scraper_sender_metadata_from_code() -> None:
 
 def _seed_password_templates() -> None:
     """Insert or update default PDF password recipes (idempotent by ``parser_key``)."""
-    from sqlmodel import Session, select
+    from sqlmodel import select
 
     from api.models import PasswordTemplate
 
@@ -816,7 +840,7 @@ def _seed_password_templates() -> None:
     ]
 
     try:
-        with Session(_engine) as session:
+        with SQLiteSerializingSession(_engine) as session:
             for r in rows:
                 pk = str(r.get("parser_key") or "")
                 if not pk:
@@ -862,5 +886,5 @@ def init_db() -> None:
 
 def get_session():
     """FastAPI dependency — yields a DB session per request, auto-closes."""
-    with Session(_engine) as session:
+    with SQLiteSerializingSession(_engine) as session:
         yield session

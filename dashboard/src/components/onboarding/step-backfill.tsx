@@ -1,11 +1,11 @@
 "use client"
 
 /**
- * Step — **chunk backfill progress** (Track 2 Phase 5a).
+ * Step — **email import progress** (Track 2 Phase 5a).
  *
- * The *parent* wizard owns the polling / ``POST /backfill/{source}`` loop; this file
- * is only responsible for rendering numbers humans care about (emails processed,
- * transactions parsed, unknown backlog).  Keeps the UI reusable from Settings.
+ * The parent wizard owns the **SSE** connection to ``GET /api/onboarding/backfill/{source}/stream``;
+ * this file only renders counters humans care about (emails processed, transactions parsed,
+ * unknown backlog). Keeps the UI reusable from Settings.
  */
 
 import { Badge } from "@/components/ui/badge"
@@ -53,9 +53,8 @@ export type StepBackfillProps = {
   onResumeFromPause?: () => void
   resumeBusy?: boolean
   /**
-   * True while ``POST /backfill/{source}`` is in flight. The server only commits progress
-   * after each batch finishes, so counts can look frozen during slow Gmail work — this flag
-   * tells the user the import is still running.
+   * True while the import stream is open — the Import card may show a “working…” hint. This is
+   * not the same as blocking the classification queue (see wizard ``mailImportActivelyProcessing``).
    */
   importBusy?: boolean
   /**

@@ -1231,6 +1231,172 @@ export function fetchOnboardingBackfillProgress(
   );
 }
 
+/** Parsed SSE payloads from ``GET /api/onboarding/backfill/{source}/stream``. */
+export type OnboardingBackfillStreamPayload =
+  | ({ type: "progress" } & Record<string, unknown>)
+  | { type: "status"; progress: Record<string, unknown> }
+  | { type: "gate"; progress: Record<string, unknown> }
+  | { type: "complete"; progress: Record<string, unknown> }
+  | { type: "error"; detail: string; terminal?: boolean };
+
+/** How ``streamOnboardingBackfill`` finished (wizard uses this instead of chunk polling). */
+export type OnboardingBackfillStreamResult = {
+  lastProgress: Record<string, unknown> | null;
+  endReason: "complete" | "gate" | "error" | "closed";
+};
+
+/**
+ * ``GET /api/onboarding/backfill/{source}/stream`` returns ``text/event-stream`` (SSE).
+ * Each ``data:`` line is JSON: ``progress`` (per email), ``status`` / ``gate`` / ``complete``, or ``error``.
+ *
+ * Resume flags mirror ``POST /backfill/{source}`` so after a gate you open a **new** stream
+ * with e.g. ``resume_after_password: true`` (avoids holding the server lock during user input).
+ */
+export async function streamOnboardingBackfill(
+  source: string,
+  options?: {
+    signal?: AbortSignal;
+    resume_after_classification?: boolean;
+    resume_after_password?: boolean;
+    resume_from_pause?: boolean;
+    after?: string;
+    before?: string;
+    /** Called for every ``progress``, ``status``, ``gate``, and ``complete`` snapshot (smooth UI). */
+    onProgress?: (snapshot: Record<string, unknown>) => void;
+  },
+): Promise<OnboardingBackfillStreamResult> {
+  const signal = options?.signal;
+  const onProgress = options?.onProgress;
+  const q = new URLSearchParams();
+  if (options?.resume_after_classification) q.set("resume_after_classification", "true");
+  if (options?.resume_after_password) q.set("resume_after_password", "true");
+  if (options?.resume_from_pause) q.set("resume_from_pause", "true");
+  if (options?.after) q.set("after", options.after);
+  if (options?.before) q.set("before", options.before);
+  const qs = q.toString();
+  const path = `/api/onboarding/backfill/${encodeURIComponent(source)}/stream${qs ? `?${qs}` : ""}`;
+  const url = buildApiUrl(path);
+
+  let res: Response;
+  try {
+    res = await fetch(url, { method: "GET", credentials: "include", signal });
+  } catch (e) {
+    if (signal?.aborted || isAbortLike(e)) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+    throw e;
+  }
+
+  if (res.status === 401) {
+    window.location.href = `/login?from=${encodeURIComponent(window.location.pathname)}`;
+    return new Promise(() => {});
+  }
+
+  if (!res.ok) {
+    const raw = await res.text().catch(() => res.statusText);
+    throw new ApiError(res.status, userMessageFromApiResponseBody(raw));
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) {
+    throw new ApiError(500, "No response body from backfill stream.");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let lastProgress: Record<string, unknown> | null = null;
+  let endReason: OnboardingBackfillStreamResult["endReason"] = "closed";
+
+  function ingestPayload(payload: OnboardingBackfillStreamPayload): void {
+    const t = payload.type;
+    if (t === "progress") {
+      const rest = { ...(payload as Record<string, unknown>) }
+      delete rest.type
+      lastProgress = rest
+      onProgress?.(rest)
+      return
+    }
+    if (t === "status" || t === "gate" || t === "complete") {
+      lastProgress = payload.progress;
+      onProgress?.(payload.progress);
+    }
+    if (t === "complete") {
+      endReason = "complete";
+    }
+    if (t === "gate") {
+      endReason = "gate";
+    }
+    if (t === "error") {
+      endReason = "error";
+      throw new ApiError(503, payload.detail || "Email import stream reported an error.");
+    }
+  }
+
+  try {
+    while (true) {
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch (e) {
+        if (signal?.aborted || isAbortLike(e)) {
+          throw new DOMException("Aborted", "AbortError");
+        }
+        throw e;
+      }
+      const { done, value } = chunk;
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      // SSE events are separated by a blank line (\\n\\n).
+      let sep: number;
+      while ((sep = buffer.indexOf("\n\n")) >= 0) {
+        const frame = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const lines = frame.split("\n");
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+          const jsonStr = trimmed.replace(/^data:\s*/, "").trim();
+          if (!jsonStr) continue;
+          let payload: OnboardingBackfillStreamPayload;
+          try {
+            payload = JSON.parse(jsonStr) as OnboardingBackfillStreamPayload;
+          } catch {
+            throw new ApiError(500, "Invalid backfill SSE payload from server.");
+          }
+          ingestPayload(payload);
+        }
+      }
+    }
+
+    const tail = buffer.trim();
+    if (tail) {
+      const lines = tail.split("\n");
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const jsonStr = trimmed.replace(/^data:\s*/, "").trim();
+        if (!jsonStr) continue;
+        let payload: OnboardingBackfillStreamPayload;
+        try {
+          payload = JSON.parse(jsonStr) as OnboardingBackfillStreamPayload;
+        } catch {
+          throw new ApiError(500, "Invalid backfill SSE payload from server.");
+        }
+        ingestPayload(payload);
+      }
+    }
+  } catch (e) {
+    if (signal?.aborted || isAbortLike(e)) {
+      throw new DOMException("Aborted", "AbortError");
+    }
+    throw e;
+  }
+
+  throwIfAborted(signal);
+  return { lastProgress, endReason };
+}
+
 /** POST /api/onboarding/persist-sources — seed scraper DB rows from last discovery scan. */
 export function postOnboardingPersistSources(): Promise<{
   ok: boolean;

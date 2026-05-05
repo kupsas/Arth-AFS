@@ -122,6 +122,60 @@ def test_count_classification_unknowns_increments(
 
 @patch("scraper.onboarding_orchestrator.get_bank_senders_config", return_value=_MINI_BANK)
 @patch("scraper.onboarding_orchestrator._process_email", return_value=("processed", 1))
+def test_run_onboarding_backfill_emit_event_matches_progress_slices(
+    _proc,
+    _bank,
+    session: Session,
+) -> None:
+    """emit_event receives the same public snapshot shape as progress_callback (per email)."""
+    t0 = datetime.date(2010, 1, 1)
+    t1 = datetime.date.today() + datetime.timedelta(days=1)
+    m1 = GmailMessage(
+        id="mid1",
+        thread_id="th1",
+        sender="alerts@hdfcbank.net",
+        subject="x",
+        received_at=datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+    )
+
+    class _FakeGmail:
+        def search_messages(self, query: str, **kwargs):
+            if "alerts@hdfcbank.net" in query and "bank.in" not in query:
+                return [m1]
+            return []
+
+        def fetch_message_by_id(self, message_id: str) -> GmailMessage:
+            return m1
+
+    emitted: list[dict] = []
+
+    def emit_event(slice_pub: dict) -> None:
+        emitted.append(dict(slice_pub))
+
+    with patch("scraper.onboarding_orchestrator._record_email"), patch(
+        "scraper.onboarding_orchestrator._get_processed_ids", return_value=set()
+    ):
+        g = _FakeGmail()
+        run_onboarding_backfill(
+            session=session,
+            user_id="u1",
+            source_key="hdfc_savings_test",
+            gmail_client=g,  # type: ignore[arg-type]
+            existing_progress={},
+            chunk_size=1,
+            after=t0,
+            before=t1,
+            unknown_threshold=10_000,
+            emit_event=emit_event,
+        )
+
+    assert len(emitted) == 1
+    assert emitted[0].get("emails_processed") == 1
+    assert emitted[0].get("source") == "hdfc_savings_test"
+
+
+@patch("scraper.onboarding_orchestrator.get_bank_senders_config", return_value=_MINI_BANK)
+@patch("scraper.onboarding_orchestrator._process_email", return_value=("processed", 1))
 def test_run_onboarding_backfill_processes_chunk(
     _proc,
     _bank,

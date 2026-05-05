@@ -57,6 +57,11 @@ logger = logging.getLogger(__name__)
 # How many Gmail messages to drain per API call (tune for UX vs request time).
 DEFAULT_CHUNK_SIZE = 10
 
+# Upper bound for **SSE / single-connection** backfill: drain the active queue in one
+# ``run_onboarding_backfill`` call so the server can emit per-email progress without
+# chunking at HTTP boundaries. The inner loop still processes one message at a time.
+STREAM_DRAIN_CHUNK_SIZE = 1_000_000
+
 # When unknown rows (per source_key) reach this count, pause for classification UI.
 UNKNOWN_THRESHOLD = int(os.environ.get("ONBOARDING_UNKNOWN_THRESHOLD", "20"))
 
@@ -974,10 +979,15 @@ def run_onboarding_backfill(
     resume_from_pause: bool = False,
     unknown_threshold: int | None = None,
     progress_callback: ProgressCallback | None = None,
+    emit_event: ProgressCallback | None = None,
     import_flow_log: EmailImportFlowLog | None = None,
     progress_commit_hook: Callable[[dict[str, Any]], None] | None = None,
 ) -> OnboardingBackfillResult:
     """Advance onboarding backfill by **one chunk** (up to ``chunk_size`` emails).
+
+    Classification pause: ``unknown_threshold`` is checked **before each Gmail message**
+    and **after each successfully recorded message**, so a large ``chunk_size`` (including
+    SSE drain mode) cannot skip far past the threshold before ``needs_classification``.
 
     Args:
         session: Active SQLModel session (caller commits after persisting state).
@@ -998,6 +1008,8 @@ def run_onboarding_backfill(
             flag and continue chunk processing on the next call.
         unknown_threshold: Override env ``ONBOARDING_UNKNOWN_THRESHOLD``.
         progress_callback: Optional hook invoked after each email (tests / logging).
+        emit_event: Same shape as ``progress_callback``; used by the SSE stream endpoint to
+            push per-email JSON to the client (in addition to ``progress_callback`` when both set).
         import_flow_log: When provided (onboarding HTTP handler), append diagnostics to
             ``data/logs/email-import.log``.
         progress_commit_hook: Optional callback invoked with a shallow copy of ``src_state``
@@ -1306,11 +1318,90 @@ def run_onboarding_backfill(
 
     already_done = _get_processed_ids(session)
 
+    _CLASSIFICATION_GATE_KEYS: tuple[str, ...] = (
+        "_pending_statement_ids",
+        "_pending_alert_ids",
+        "_alert_items_full",
+        "_alerts_transitioned",
+        "_had_statement_ids_at_init",
+        "_defer_alert_fetch",
+        "_statement_total_at_init",
+        "_statement_id_set_at_init",
+        "_use_alert_windows",
+        "_alert_windows",
+        "_alert_next_window_idx",
+        "_alert_loaded_window_idx",
+        "_alert_loaded_window_size",
+        "_alert_emails_planned_total",
+        "_last_drained_window_kind",
+        "_last_drained_window_loaded_count",
+        "current_window_label",
+        "windows_total",
+        "windows_completed",
+    )
+
+    def _pause_if_classification_budget_exceeded(remainder_start_idx: int) -> OnboardingBackfillResult | None:
+        """Return a gate result as soon as unknowns >= threshold (mid-chunk friendly for SSE).
+
+        ``remainder_start_idx`` indexes into ``chunk``: IDs from that index onward are left on
+        the pending queue (not yet processed this step). Use ``i`` before fetching ``chunk[i]``,
+        and ``i + 1`` after successfully recording ``chunk[i]``.
+        """
+        unknowns_now = count_classification_unknowns(session, user_id=user_id, source_key=source_key)
+        if unknowns_now < thresh:
+            return None
+        remainder_ids = list(chunk[remainder_start_idx:]) + list(rest)
+        if pub_status == "processing_statements":
+            src_state["_pending_statement_ids"] = remainder_ids
+        else:
+            src_state["_pending_alert_ids"] = remainder_ids
+        stmt_rest = list(src_state.get("_pending_statement_ids") or [])
+        alert_rest = list(src_state.get("_pending_alert_ids") or [])
+        src_state["emails_processed"] = emails_done
+        src_state["transactions_parsed"] = tx_total
+        if src_state.get("_alerts_transitioned"):
+            pass
+        else:
+            src_state["emails_found"] = initial_total
+        src_state["unknowns_pending"] = unknowns_now
+        src_state["status"] = "needs_classification"
+        src_state["source"] = source_key
+        src_state["error_message"] = None
+        if not stmt_rest and not alert_rest:
+            for k in _CLASSIFICATION_GATE_KEYS:
+                src_state.pop(k, None)
+        if import_flow_log:
+            import_flow_log.write(
+                "classification_pause",
+                f"unknowns={unknowns_now} threshold={thresh} remainder_start_idx={remainder_start_idx} "
+                f"stmt_remaining={len(stmt_rest)} alert_remaining={len(alert_rest)}",
+            )
+        return OnboardingBackfillResult(progress=src_state)
+
     for i, msg_id in enumerate(chunk):
         if msg_id in already_done:
             logger.debug("Skipping already-processed email %s during backfill chunk", msg_id)
             emails_done += 1
+            slice_skip = _public_slice(
+                {
+                    **src_state,
+                    "source": source_key,
+                    "status": pub_status,
+                    "emails_found": initial_total,
+                    "emails_processed": emails_done,
+                    "transactions_parsed": tx_total,
+                    "current_phase": src_state.get("current_phase"),
+                }
+            )
+            if progress_callback:
+                progress_callback(slice_skip)
+            if emit_event:
+                emit_event(slice_skip)
             continue
+
+        gate = _pause_if_classification_budget_exceeded(i)
+        if gate is not None:
+            return gate
 
         try:
             if import_flow_log:
@@ -1352,6 +1443,12 @@ def run_onboarding_backfill(
             )
             if progress_callback:
                 progress_callback(slice_pub)
+            if emit_event:
+                emit_event(slice_pub)
+
+            gate_after = _pause_if_classification_budget_exceeded(i + 1)
+            if gate_after is not None:
+                return gate_after
 
         except Exception as exc:
             if is_statement_password_failure(exc):
@@ -1473,52 +1570,12 @@ def run_onboarding_backfill(
     if unknowns >= thresh:
         src_state["status"] = "needs_classification"
         if not stmt_rest and not alert_rest:
-            for k in (
-                "_pending_statement_ids",
-                "_pending_alert_ids",
-                "_alert_items_full",
-                "_alerts_transitioned",
-                "_had_statement_ids_at_init",
-                "_defer_alert_fetch",
-                "_statement_total_at_init",
-                "_statement_id_set_at_init",
-                "_use_alert_windows",
-                "_alert_windows",
-                "_alert_next_window_idx",
-                "_alert_loaded_window_idx",
-                "_alert_loaded_window_size",
-                "_alert_emails_planned_total",
-                "_last_drained_window_kind",
-                "_last_drained_window_loaded_count",
-                "current_window_label",
-                "windows_total",
-                "windows_completed",
-            ):
+            for k in _CLASSIFICATION_GATE_KEYS:
                 src_state.pop(k, None)
     elif not stmt_rest and not alert_rest:
         src_state["status"] = "complete"
         src_state["current_phase"] = None
-        for k in (
-            "_pending_statement_ids",
-            "_pending_alert_ids",
-            "_alert_items_full",
-            "_alerts_transitioned",
-            "_had_statement_ids_at_init",
-            "_defer_alert_fetch",
-            "_statement_total_at_init",
-            "_statement_id_set_at_init",
-            "_use_alert_windows",
-            "_alert_windows",
-            "_alert_next_window_idx",
-            "_alert_loaded_window_idx",
-            "_alert_loaded_window_size",
-            "_alert_emails_planned_total",
-            "_last_drained_window_kind",
-            "_last_drained_window_loaded_count",
-            "current_window_label",
-            "windows_total",
-            "windows_completed",
-        ):
+        for k in _CLASSIFICATION_GATE_KEYS:
             src_state.pop(k, None)
     else:
         _next_ids, pub2 = _active_drain_queue(src_state)

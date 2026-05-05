@@ -5,12 +5,12 @@
  *
  * - Owns high-level step navigation + a progress indicator.
  * - Runs the Gmail → discovery → identity → optional LLM keys → sequential backfill
- *   (with automatic chunk polling) → optional broker portfolio snapshot → gap review → goals → summary.
+ *   (with Server-Sent Events live email import) → optional broker portfolio snapshot → gap review → goals → summary.
  * - The same component is mounted full-screen from ``/setup`` **and** inside the
  *   Settings sheet for **Connect account** — pass ``mode`` + ``className`` only.
  */
 
-import { useQueryClient } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Loader2 } from "lucide-react"
 import * as React from "react"
 
@@ -29,12 +29,11 @@ import { StepWelcome } from "@/components/onboarding/step-welcome"
 import { Button } from "@/components/ui/button"
 import {
   ApiError,
-  fetchOnboardingBackfillProgress,
   fetchOnboardingUnknowns,
   patchOnboardingState,
-  postOnboardingBackfillChunk,
   postOnboardingBackfillResume,
   postOnboardingPersistSources,
+  streamOnboardingBackfill,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { humanizeSourceKey } from "@/lib/source-label"
@@ -42,6 +41,7 @@ import {
   onboardingBackfillSourcesKey,
   onboardingStateKey,
   useOnboardingBackfillSources,
+  useOnboardingClassifierStatus,
   useOnboardingState,
 } from "@/hooks/use-onboarding"
 import { getUserFacingErrorMessage } from "@/lib/user-facing-api-error"
@@ -74,6 +74,29 @@ const WIZARD_STEP_IDS = new Set<WizardStepId>(ALL_WIZARD_STEP_IDS)
 const LEGACY_WIZARD_STEPS: Record<string, WizardStepId> = {
   /** Merged into Config (``preclass``) — see ``PdfPasswordConfigFields`` in pre-classification. */
   passwords: "preclass",
+}
+
+/** Map stream / API JSON into the **Import mail** card snapshot (defensive coercions). */
+function recordToBackfillSnapshot(
+  p: Record<string, unknown> | null | undefined,
+): BackfillProgressSnapshot | null {
+  if (!p || typeof p.source !== "string") return null
+  return {
+    source: p.source,
+    status: String(p.status ?? "idle"),
+    emails_found: Number(p.emails_found ?? 0),
+    emails_processed: Number(p.emails_processed ?? 0),
+    transactions_parsed: Number(p.transactions_parsed ?? 0),
+    unknowns_pending: Number(p.unknowns_pending ?? 0),
+    error_message: p.error_message != null ? String(p.error_message) : null,
+    current_phase: p.current_phase != null ? String(p.current_phase) : null,
+    password_parser_key: p.password_parser_key != null ? String(p.password_parser_key) : null,
+    password_failure_message_id:
+      p.password_failure_message_id != null ? String(p.password_failure_message_id) : null,
+    current_window_label: p.current_window_label != null ? String(p.current_window_label) : null,
+    windows_total: p.windows_total != null ? Number(p.windows_total) : undefined,
+    windows_completed: p.windows_completed != null ? Number(p.windows_completed) : undefined,
+  }
 }
 
 /** Progress pills: inserts **Portfolio** after Import mail when discovery included a broker source. */
@@ -136,6 +159,7 @@ export function OnboardingWizard({
 }: OnboardingWizardProps) {
   const stateQ = useOnboardingState()
   const sourcesQ = useOnboardingBackfillSources()
+  const classifierStatusQ = useOnboardingClassifierStatus()
   const hasBrokerSource = React.useMemo(
     () => (sourcesQ.data ?? []).some((s) => (s.source_type || "").toLowerCase() === "broker"),
     [sourcesQ.data],
@@ -168,7 +192,10 @@ export function OnboardingWizard({
   const [bfSourceIdx, setBfSourceIdx] = React.useState(0)
   const [bfTick, setBfTick] = React.useState(0)
   const [bfProgress, setBfProgress] = React.useState<BackfillProgressSnapshot | null>(null)
-  /** True during ``POST /backfill`` — counts stay stale until the request returns; see StepBackfill. */
+  /**
+   * True while the SSE import stream is connected — drives the Import mail card hint only.
+   * Do **not** use this to lock the classification queue (see ``mailImportActivelyProcessing``).
+   */
   const [bfChunkPosting, setBfChunkPosting] = React.useState(false)
   const [bfError, setBfError] = React.useState<string | null>(null)
   const [resumeBusy, setResumeBusy] = React.useState(false)
@@ -229,6 +256,67 @@ export function OnboardingWizard({
     bfSourceIdx === backfillSourcesLen - 1 &&
     bfProgress?.status === "complete"
 
+  /** Matches server ``effective_onboarding_unknown_threshold`` (pause ~20). */
+  const unknownPauseThreshold = classifierStatusQ.data?.unknown_threshold ?? 20
+
+  /**
+   * Global unknown backlog (all email-linked sources). Used so we do not dim the review table
+   * or strip the Uber shortcut when the user already has a pause-sized backlog between SSE sources.
+   */
+  const globalPendingUnknownsQ = useQuery({
+    queryKey: ["onboarding", "unknowns-pending-total", bfSourceIdx, bfTick] as const,
+    queryFn: async () =>
+      (await fetchOnboardingUnknowns({ limit: 1, offset: 0 })).pending_total,
+    enabled: panel === "backfill",
+    staleTime: 3_000,
+  })
+  const globalPendingUnknowns = globalPendingUnknownsQ.data
+
+  /** First SSE events not applied yet for this source — Import card shows “Connecting…”. */
+  const importStreamAwaitingSnapshot = bfChunkPosting && bfProgress === null
+
+  /**
+   * Between accounts the backlog may still be tiny — hide the txn rows until we know it is worth
+   * showing or the stream has attached (avoids flashing rows then “Connecting…” above).
+   */
+  const hideClassificationRowsForImportLimbo =
+    importStreamAwaitingSnapshot &&
+    (globalPendingUnknowns === undefined || globalPendingUnknowns < unknownPauseThreshold)
+
+  /**
+   * Dim the classification queue while mail is **actively being parsed** into the DB, so saves
+   * do not race with the importer. With SSE, ``bfChunkPosting`` stays true for the whole HTTP
+   * stream — do **not** key off that flag here. Never block during gates. If the combined queue
+   * is already at/over the pause threshold, keep the table interactive while the next source
+   * connects so rows do not “vanish” when the stream attaches.
+   */
+  const mailImportActivelyProcessing = React.useMemo(() => {
+    if (allMailSourcesFinished) return false
+    if ((globalPendingUnknowns ?? 0) >= unknownPauseThreshold) return false
+    const st = bfProgress?.status
+    if (
+      st === "needs_classification" ||
+      st === "needs_password" ||
+      st === "paused"
+    ) {
+      return false
+    }
+    if (bfProgress?.current_phase === "listing_alerts") {
+      return false
+    }
+    return (
+      bfProgress != null &&
+      (st === "processing" ||
+        st === "processing_statements" ||
+        st === "processing_alerts")
+    )
+  }, [
+    allMailSourcesFinished,
+    unknownPauseThreshold,
+    globalPendingUnknowns,
+    bfProgress,
+  ])
+
   // Persist coarse wizard position so a refresh mid-flow still shows the same step name.
   // Skip while onboarding state is still loading and the user has not navigated yet — otherwise
   // we would PATCH the default ``welcome`` over the real server step.
@@ -250,12 +338,12 @@ export function OnboardingWizard({
     setBfError(null)
   }, [panel])
 
-  // Avoid showing the previous source's numbers on the new tab while the first GET loads.
+  // Avoid showing the previous source's numbers on the new tab until the first SSE events arrive.
   React.useEffect(() => {
     setBfProgress(null)
   }, [bfSourceIdx])
 
-  // ── Automated chunk loop (only while the backfill panel is visible) ─────────
+  // ── Gmail import: one SSE stream per effect run (per-email progress; gates end the stream) ──
   React.useEffect(() => {
     if (panel !== "backfill") return
     if (!sourcesQ.data?.length) return
@@ -276,86 +364,82 @@ export function OnboardingWizard({
         return
       }
 
-      while (!signal.aborted) {
-        let prog: BackfillProgressSnapshot
-        try {
-          prog = await fetchOnboardingBackfillProgress(sk, { signal })
-        } catch {
-          if (signal.aborted) return
-          await new Promise((r) => setTimeout(r, 1000))
-          continue
-        }
+      setBfChunkPosting(true)
+      try {
+        const streamResult = await streamOnboardingBackfill(sk, {
+          signal,
+          onProgress: (snap) => {
+            const shot = recordToBackfillSnapshot(snap)
+            if (shot) setBfProgress(shot)
+          },
+        })
         if (signal.aborted) return
-        setBfProgress(prog)
 
-        if (prog.status === "needs_classification") {
-          await new Promise((r) => setTimeout(r, 2000))
-          continue
-        }
+        const shot = recordToBackfillSnapshot(streamResult.lastProgress)
+        if (shot) setBfProgress(shot)
 
-        if (prog.status === "needs_password") {
+        const st = shot?.status ?? ""
+
+        if (st === "needs_password" || st === "paused") {
+          await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
           return
         }
 
-        if (prog.status === "complete") {
+        if (st === "needs_classification") {
+          await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
+          return
+        }
+
+        if (st === "error") {
+          setBfError(
+            shot?.error_message
+              ? getUserFacingErrorMessage(shot.error_message)
+              : "We couldn't import from email for this account. You can go back, check Gmail, and try again.",
+          )
+          await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
+          return
+        }
+
+        if (st === "complete" || streamResult.endReason === "complete") {
           if (bfSourceIdx >= currentList.length - 1) {
-            // ``GET …/progress`` unknowns are per-source; the review card loads **all** email-linked
-            // unknowns. Stay on Import mail until that global queue is empty so rows are not hidden.
-            let pendingGlobal = prog.unknowns_pending ?? 0
+            let pendingGlobal = shot?.unknowns_pending ?? 0
             try {
-              const snap = await fetchOnboardingUnknowns({
+              const unknownSnap = await fetchOnboardingUnknowns({
                 limit: 1,
                 offset: 0,
                 signal,
               })
-              pendingGlobal = snap.pending_total
+              pendingGlobal = unknownSnap.pending_total
             } catch {
               if (signal.aborted) return
-              // If the global check fails, fall back to this source’s count only.
-              pendingGlobal = prog.unknowns_pending ?? 0
+              pendingGlobal = shot?.unknowns_pending ?? 0
             }
             if (signal.aborted) return
             if (pendingGlobal > 0) {
+              await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
               return
             }
             setUserPanel(hasBrokerSource ? "portfolio_summary" : "gaps")
+            await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
             return
           }
           setBfSourceIdx((i) => i + 1)
+          await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
           return
         }
 
-        if (prog.status === "paused") {
+        await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
+      } catch (e) {
+        if (signal.aborted) return
+        if (e instanceof ApiError && e.status === 409) {
+          await new Promise((r) => setTimeout(r, 2000))
+          setBfTick((t) => t + 1)
           return
         }
-
-        if (prog.status === "error") {
-          setBfError(
-            prog.error_message
-              ? getUserFacingErrorMessage(prog.error_message)
-              : "We couldn’t import from email for this account. You can go back, check Gmail, and try again.",
-          )
-          return
-        }
-
-        try {
-          // Do **not** pass ``signal`` into the POST: aborting the fetch does not stop the
-          // server, so the in-memory backfill lock would still be held → 409 spam and a UI
-          // that looks frozen until the server finishes anyway.
-          setBfChunkPosting(true)
-          await postOnboardingBackfillChunk(sk, { chunk_size: 10 })
-        } catch (e) {
-          if (signal.aborted) return
-          if (e instanceof ApiError && e.status === 409) {
-            await new Promise((r) => setTimeout(r, 2000))
-            continue
-          }
-          setBfError(getUserFacingErrorMessage(e) || "We couldn’t start the next batch. Try again.")
-          return
-        } finally {
-          setBfChunkPosting(false)
-        }
-        await new Promise((r) => setTimeout(r, 400))
+        setBfError(getUserFacingErrorMessage(e) || "We couldn't import from email. Try again.")
+        await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
+      } finally {
+        setBfChunkPosting(false)
       }
     }
 
@@ -363,7 +447,8 @@ export function OnboardingWizard({
     return () => {
       ac.abort()
     }
-  }, [panel, bfSourceIdx, bfTick, sourcesQ.data, hasBrokerSource])
+  }, [panel, bfSourceIdx, bfTick, sourcesQ.data, hasBrokerSource, queryClient])
+
 
   const stepIndex = stepMeta.findIndex((s) => s.id === panel)
   const progressPct = Math.max(5, Math.round(((stepIndex + 1) / stepMeta.length) * 100))
@@ -376,10 +461,17 @@ export function OnboardingWizard({
     try {
       await postOnboardingBackfillResume(sk)
       setBfChunkPosting(true)
-      await postOnboardingBackfillChunk(sk, { resume_from_pause: true, chunk_size: 10 })
+      await streamOnboardingBackfill(sk, {
+        resume_from_pause: true,
+        onProgress: (snap) => {
+          const shot = recordToBackfillSnapshot(snap)
+          if (shot) setBfProgress(shot)
+        },
+      })
       setBfTick((t) => t + 1)
+      void queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
     } catch (e) {
-      setBfError(getUserFacingErrorMessage(e) || "We couldn’t resume the import. Try again.")
+      setBfError(getUserFacingErrorMessage(e) || "We couldn't resume the import. Try again.")
     } finally {
       setBfChunkPosting(false)
       setResumeBusy(false)
@@ -392,8 +484,15 @@ export function OnboardingWizard({
     setBfChunkPosting(true)
     setBfError(null)
     try {
-      await postOnboardingBackfillChunk(sk, { resume_after_password: true, chunk_size: 10 })
+      await streamOnboardingBackfill(sk, {
+        resume_after_password: true,
+        onProgress: (snap) => {
+          const shot = recordToBackfillSnapshot(snap)
+          if (shot) setBfProgress(shot)
+        },
+      })
       setBfTick((t) => t + 1)
+      void queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
     } catch (e) {
       setBfError(getUserFacingErrorMessage(e) || "Could not retry import.")
     } finally {
@@ -541,18 +640,16 @@ export function OnboardingWizard({
                 <ClassificationBatchReview
                   importAwaitingClassification={bfProgress?.status === "needs_classification"}
                   allMailSourcesImported={allMailSourcesFinished}
-                  mailImportActivelyProcessing={
-                    !allMailSourcesFinished &&
-                    (bfChunkPosting ||
-                      bfProgress?.current_phase === "listing_alerts" ||
-                      (bfProgress != null &&
-                        (bfProgress.status === "processing" ||
-                          bfProgress.status === "processing_statements" ||
-                          bfProgress.status === "processing_alerts")))
-                  }
+                  mailImportActivelyProcessing={mailImportActivelyProcessing}
+                  hideClassificationRowsForImportLimbo={hideClassificationRowsForImportLimbo}
+                  pauseThresholdForShortcuts={unknownPauseThreshold}
                   unknownsTrigger={`${bfSourceIdx}:${bfProgress?.status ?? "none"}:${bfProgress?.unknowns_pending ?? 0}`}
                   onSubmitted={() => {
                     setBfTick((t) => t + 1)
+                  }}
+                  onImportProgress={(snap) => {
+                    const shot = recordToBackfillSnapshot(snap)
+                    if (shot) setBfProgress(shot)
                   }}
                 />
                 <Button
