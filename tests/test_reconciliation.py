@@ -524,7 +524,7 @@ class TestB2ExactDateBeforeWindow:
         assert len(session.exec(select(Transaction)).all()) == 2
 
 
-# ─── Path B2b: PDF statement email vs prior InstaAlert (same source_type=email) ─
+# ─── Path B2b: PDF statement email vs prior transaction alert (same source_type=email) ─
 
 class TestEmailSkipsWhenReconciledRowExists:
     """After email+statement reconciliation, a later PDF email line must not insert a duplicate."""
@@ -564,11 +564,11 @@ class TestEmailSkipsWhenReconciledRowExists:
         assert len(session.exec(select(Transaction)).all()) == 1
 
 
-class TestB2bPdfSkipsWhenInstaAlertExists:
+class TestB2bPdfSkipsWhenTransactionAlertExists:
     """Monthly PDF duplicates HTML alerts — both are ``source_type='email'``."""
 
-    def test_pdf_email_skipped_when_insta_alert_row_exists(self, session):
-        """InstaAlert inserted first; same spend from statement PDF must not insert."""
+    def test_pdf_email_skipped_when_transaction_alert_row_exists(self, session):
+        """Transaction alert row inserted first; same spend from statement PDF must not insert."""
         from api.models import Transaction
 
         d = datetime.date(2026, 3, 28)

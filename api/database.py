@@ -244,7 +244,7 @@ def _scraper_sender_meta_from_code_cfg(cfg: dict) -> dict:
     pats = cfg.get("discovery_subject_patterns")
     return {
         "display_name": cfg.get("display_name"),
-        "source_type": cfg.get("source_type"),
+        "instrument_type": cfg.get("instrument_type"),
         "expected_cadence": cfg.get("expected_cadence"),
         "discovery_subject_patterns_json": json.dumps(pats) if isinstance(pats, list) else None,
     }

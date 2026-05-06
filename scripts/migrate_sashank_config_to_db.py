@@ -175,7 +175,7 @@ def migrate(*, user_id: str, dry_run: bool) -> int:
                     first_run_lookback_days=cfg.get("first_run_lookback_days"),
                     enabled=True,
                     display_name=cfg.get("display_name"),
-                    source_type=cfg.get("source_type"),
+                    instrument_type=cfg.get("instrument_type"),
                     expected_cadence=cfg.get("expected_cadence"),
                     discovery_subject_patterns_json=meta_json,
                 )

@@ -1,5 +1,6 @@
 """
-Base class for **broker** PDF email parsers that fill investment side-channels.
+Base class for **broker email statement** readers — PDFs that populate investment
+side-channels (holdings / trades), not only bank cash rows.
 
 :class:`~parsers.statements.base.BaseStatementEmailParser` is about
 ``parse_attachment`` → ``list[ParsedTransaction]`` (bank cash ledger). Some PDFs
@@ -20,7 +21,7 @@ from parsers.statements.base import BaseStatementEmailParser
 
 
 class BaseBrokerStatementParser(BaseStatementEmailParser):
-    """PDF attachment parser with ``_attachment_holdings`` / ``_attachment_inv_txns`` side channels."""
+    """Broker statement PDF reader with holdings / investment txn side channels."""
 
     def __init__(self, accounts: dict[str, dict]) -> None:
         super().__init__(accounts)

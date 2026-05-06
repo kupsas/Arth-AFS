@@ -24,9 +24,9 @@ def test_discover_sources_iter_probes_nse_senders_last() -> None:
     client.list_message_ids.return_value = []
 
     bank = {
-        "ebix@nse.co.in": {"display_name": "NSE ebix", "source_type": "broker"},
-        "service@icicisecurities.com": {"display_name": "ICICI Direct", "source_type": "broker"},
-        "alerts@hdfcbank.net": {"display_name": "HDFC", "source_type": "savings"},
+        "ebix@nse.co.in": {"display_name": "NSE ebix", "instrument_type": "broker"},
+        "service@icicisecurities.com": {"display_name": "ICICI Direct", "instrument_type": "broker"},
+        "alerts@hdfcbank.net": {"display_name": "HDFC", "instrument_type": "savings"},
     }
     list(discover_sources_iter(client, bank))
 
@@ -45,7 +45,7 @@ def test_discover_sources_empty_mailbox() -> None:
     bank = {
         "nobody@example.com": {
             "display_name": "Empty Bank",
-            "source_type": "savings",
+            "instrument_type": "savings",
         }
     }
     out = discover_sources(client, bank)
@@ -66,7 +66,7 @@ def test_discover_sources_finds_ids_and_caps_estimate() -> None:
     bank = {
         "alerts@hdfcbank.net": {
             "display_name": "HDFC Test",
-            "source_type": "savings",
+            "instrument_type": "savings",
         }
     }
     out = discover_sources(client, bank, list_max_results=100)
@@ -82,12 +82,13 @@ def test_discovered_sources_to_json_round_trip() -> None:
     row = DiscoveredSource(
         sender_email="a@b.com",
         display_name="Bank",
-        source_type="savings",
+        instrument_type="savings",
         email_count_estimate=3,
         sample_message_ids=["x1", "x2"],
     )
     payload = discovered_sources_to_json([row])[0]
     assert payload["sender_email"] == "a@b.com"
+    assert payload["instrument_type"] == "savings"
     assert payload["email_count_estimate"] == 3
     assert payload["sample_message_ids"] == ["x1", "x2"]
     assert "earliest_email_date" not in payload

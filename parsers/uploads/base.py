@@ -1,12 +1,13 @@
 """
-Abstract base class that every statement parser must inherit.
+Abstract base for **uploaded statement** readers — files the user exports from a bank
+website and drops into Arth (CSV / PDF / text).
 
 The contract is simple:
   1. Implement ``parse(file_path)`` → returns a list of ParsedTransaction.
   2. Set ``source_id`` to a unique string (used for config lookup, logging, etc.)
 
 Everything downstream (transformer, classifiers, writer) works on
-ParsedTransaction and never needs to know which parser produced the data.
+ParsedTransaction and never needs to know which reader produced the data.
 """
 
 from __future__ import annotations
@@ -22,12 +23,12 @@ if TYPE_CHECKING:
 
 
 class BaseParser(ABC):
-    """Plug-in point for new statement formats.
+    """Plug-in base for uploaded bank / card statement files.
 
     To add support for a new bank/card:
-      1. Create a new file in ``pipeline/parsers/``.
+      1. Create a new file under ``parsers/uploads/``.
       2. Subclass ``BaseParser`` and implement ``parse()`` + ``source_id``.
-      3. Register it in ``pipeline/parsers/__init__.py:PARSER_REGISTRY``.
+      3. Register it in ``parsers/uploads/__init__.py:PARSER_REGISTRY``.
     """
 
     @property

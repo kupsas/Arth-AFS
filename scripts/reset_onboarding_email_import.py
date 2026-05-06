@@ -7,7 +7,7 @@ Wipe **email-import onboarding data** so you can re-run Gmail backfill + classif
 **What this touches (data only)**
 
 1. ``investment_transactions`` — rows with ``source_type = 'email'`` (PPF PDF path, etc.).
-2. ``transactions`` — rows for your user with ``source_type = 'email'`` (InstaAlerts / statement mails).
+2. ``transactions`` — rows for your user with ``source_type = 'email'`` (transaction alerts / statement mails).
 3. ``processed_emails`` — **entire table** (Gmail message-id dedup ledger). Required so the same
    messages are eligible again. This table has **no per-user column**; use only on a DB you own.
 4. ``onboarding_states.backfill_progress_json`` — reset to ``{}`` for your user so chunk queues

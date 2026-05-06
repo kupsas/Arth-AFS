@@ -1286,7 +1286,7 @@ export interface OnboardingGapListItem {
 export interface OnboardingGapReport {
   source: string;
   source_label: string;
-  source_type: string;
+  instrument_type: string;
   expected_cadence: string;
   date_range_start: string;
   date_range_end: string;
@@ -1362,6 +1362,12 @@ export interface OnboardingStateResponse {
   updated_at: string | null;
 }
 
+/** GET /api/onboarding/has-data — transaction row count for the current user. */
+export interface OnboardingHasDataResponse {
+  has_transactions: boolean;
+  transaction_count: number;
+}
+
 /** GET /api/onboarding/preclassification — last saved identity form fields (wizard resume). */
 export interface OnboardingPreclassificationSavedResponse {
   first_name: string;
@@ -1375,7 +1381,7 @@ export interface OnboardingPreclassificationSavedResponse {
 /** GET /api/onboarding/backfill-sources — ordered pipeline keys from bank config. */
 export interface OnboardingBackfillSourceRow {
   source_key: string;
-  source_type: string;
+  instrument_type: string;
 }
 
 /** One row inside ``GET /api/onboarding/portfolio-snapshot`` ``top_holdings``. */

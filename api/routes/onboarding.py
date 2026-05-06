@@ -5,6 +5,13 @@ State endpoints persist :class:`~api.models.OnboardingState`. Discovery and
 chunk-based backfill use ``scraper.discovery`` and ``scraper.onboarding_orchestrator``.
 Phase 3 adds pre-classification identity, inline unknown batching + classify,
 and optional per-user LLM keys (see ``POST /api/onboarding/api-key``).
+
+**Local QA — empty transaction gate without deleting rows**
+
+Set ``ARTH_MOCK_ONBOARDING_ZERO_HAS_DATA=1`` and ``ARTH_MOCK_ONBOARDING_ZERO_HAS_DATA_USERS`` to a
+comma-separated list of Arth usernames. Then ``GET /api/onboarding/has-data`` returns zeros for those
+users while the database is unchanged. Pass ``?truth=true`` (dashboard does this after statement upload)
+to read real counts while the mock is enabled.
 """
 
 from __future__ import annotations
@@ -12,6 +19,7 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+import os
 import queue
 import threading
 import uuid
@@ -84,6 +92,32 @@ from scraper.scheduler import resume_scheduler
 
 logger = logging.getLogger(__name__)
 
+# Warn once per process when ``GET /has-data`` is mocked to zero for a user.
+_has_data_mock_warned = False
+
+
+def _onboarding_has_data_mock_master_enabled() -> bool:
+    """True when ``ARTH_MOCK_ONBOARDING_ZERO_HAS_DATA`` is set (local QA only)."""
+    v = (os.environ.get("ARTH_MOCK_ONBOARDING_ZERO_HAS_DATA") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def _onboarding_has_data_mock_user_ids() -> set[str]:
+    """Usernames from ``ARTH_MOCK_ONBOARDING_ZERO_HAS_DATA_USERS`` (comma-separated)."""
+    raw = (os.environ.get("ARTH_MOCK_ONBOARDING_ZERO_HAS_DATA_USERS") or "").strip()
+    if not raw:
+        return set()
+    return {u.strip() for u in raw.split(",") if u.strip()}
+
+
+def _onboarding_has_data_mock_active(user_id: str) -> bool:
+    """When True, ``/has-data`` pretends ``transaction_count`` is 0 unless ``truth=true`` is passed."""
+    if not _onboarding_has_data_mock_master_enabled():
+        return False
+    allowed = _onboarding_has_data_mock_user_ids()
+    return user_id in allowed if allowed else False
+
+
 router = APIRouter()
 
 # Terminal INFO lines follow copy guidelines (warm, no internal jargon). DEBUG carries ids for logs/diagnostics.
@@ -121,15 +155,15 @@ def _log_onboarding_step_transition(*, user_id: str, from_step: str, to_step: st
 
 
 # Order for chunk backfill: savings first, then credit cards, then brokers (Track 2 wizard).
-_SOURCE_TYPE_RANK: dict[str, int] = {"savings": 0, "credit_card": 1, "broker": 2}
+_INSTRUMENT_TYPE_RANK: dict[str, int] = {"savings": 0, "credit_card": 1, "broker": 2}
 
 
 def _ordered_backfill_sources(bank: BankSendersConfig) -> list[dict[str, str]]:
     """Unique ``source_key`` values from bank config, ordered for the onboarding wizard."""
     best: dict[str, tuple[int, str]] = {}
     for _sender, cfg in bank.items():
-        st_raw = str(cfg.get("source_type") or "unknown").lower().strip()
-        rank = _SOURCE_TYPE_RANK.get(st_raw, 5)
+        st_raw = str(cfg.get("instrument_type") or "unknown").lower().strip()
+        rank = _INSTRUMENT_TYPE_RANK.get(st_raw, 5)
         for acct in cfg.get("accounts", {}).values():
             sk = str(acct.get("source_key") or "").strip()
             if not sk:
@@ -138,7 +172,7 @@ def _ordered_backfill_sources(bank: BankSendersConfig) -> list[dict[str, str]]:
             if prev is None or rank < prev[0]:
                 best[sk] = (rank, st_raw)
     ordered = sorted(best.items(), key=lambda kv: (kv[1][0], kv[0]))
-    return [{"source_key": sk, "source_type": st} for sk, (_r, st) in ordered]
+    return [{"source_key": sk, "instrument_type": st} for sk, (_r, st) in ordered]
 
 
 def _parse_json_object(raw: str, default: Any) -> Any:
@@ -216,6 +250,47 @@ class OnboardingStatePatch(BaseModel):
     completed_steps: list[Any] | None = None
     discovery_results: dict[str, Any] | None = None
     backfill_progress: dict[str, Any] | None = None
+
+
+class OnboardingHasDataResponse(BaseModel):
+    """Whether the signed-in user has any transaction rows (statement or mail import)."""
+
+    has_transactions: bool
+    transaction_count: int
+
+
+@router.get("/has-data", response_model=OnboardingHasDataResponse)
+def onboarding_has_data(
+    *,
+    truth: bool = Query(
+        False,
+        description=(
+            "When the mock env vars are set, pass true so this endpoint returns real DB counts "
+            "(used after a statement upload so the wizard can clear the gate)."
+        ),
+    ),
+    session: Session = Depends(get_session),
+    current_user: str = Depends(get_current_user),
+) -> OnboardingHasDataResponse:
+    """Used by the wizard to require at least one transaction before leaving **Import mail**."""
+    cnt = session.exec(
+        select(func.count()).select_from(Transaction).where(Transaction.user_id == current_user)
+    ).one()
+    n = int(cnt)
+
+    # Local QA: pretend there are no transactions without deleting rows (see module doc env vars).
+    if truth and _onboarding_has_data_mock_master_enabled():
+        return OnboardingHasDataResponse(has_transactions=n > 0, transaction_count=n)
+    if _onboarding_has_data_mock_active(current_user):
+        global _has_data_mock_warned
+        if not _has_data_mock_warned:
+            logger.warning(
+                "ARTH_MOCK_ONBOARDING_ZERO_HAS_DATA is on for this user — /api/onboarding/has-data "
+                "returns zeros unless ?truth=true. Unset the env vars when finished testing."
+            )
+            _has_data_mock_warned = True
+        return OnboardingHasDataResponse(has_transactions=False, transaction_count=0)
+    return OnboardingHasDataResponse(has_transactions=n > 0, transaction_count=n)
 
 
 @router.get("/state", response_model=OnboardingStateResponse)
@@ -689,15 +764,15 @@ class BackfillProgressResponse(BaseModel):
     )
     current_window_label: str | None = Field(
         default=None,
-        description="Human label for the active InstaAlert Gmail window (windowed onboarding only).",
+        description="Human label for the active transaction-alert Gmail window (windowed onboarding only).",
     )
     windows_total: int = Field(
         default=0,
-        description="Number of date windows planned for InstaAlert import (may grow during pre-statement expansion).",
+        description="Number of date windows planned for transaction-alert import (may grow during pre-statement expansion).",
     )
     windows_completed: int = Field(
         default=0,
-        description="How many InstaAlert windows have been fully drained.",
+        description="How many transaction-alert windows have been fully drained.",
     )
 
 
@@ -836,7 +911,7 @@ def _run_backfill_locked(
     flow.write("gmail_connected", "Gmail client authenticated successfully")
 
     def _flush_backfill_progress_live(snapshot: dict[str, Any]) -> None:
-        """Let GET /progress reflect mid-request work (e.g. long InstaAlert Gmail listing)."""
+        """Let GET /progress reflect mid-request work (e.g. long Gmail listing for transaction alerts)."""
         _merge_and_save_backfill(session, current_user, source_key, snapshot)
         session.commit()
 

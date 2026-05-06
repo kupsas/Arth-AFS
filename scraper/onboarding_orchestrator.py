@@ -7,15 +7,15 @@ Wraps the same parse → classify → DB path as :mod:`scraper.orchestrator`, bu
   * Processes **N messages per HTTP request** so the API stays responsive.
   * Persists queue + counters in :class:`~api.models.OnboardingState.backfill_progress_json`.
   * Pauses when “classification unknowns” for that source exceed a threshold.
-  * **Statement-first:** annual/quarterly/monthly senders are drained before InstaAlerts;
-    InstaAlert Gmail listing may be **deferred** until statements finish so the first POST
+  * **Statement-first:** annual/quarterly/monthly senders are drained before **transaction alerts**;
+    per-transaction Gmail listing may be **deferred** until statements finish so the first POST
     does not paginate thousands of alerts and hit HTTP timeouts. After statements, alert
     IDs are filtered with :func:`scraper.gap_detector.filter_onboarding_alert_ids_after_statements`.
 
-  * **HDFC Savings onboarding** can skip InstaAlerts entirely via
-    ``ONBOARDING_SKIP_INSTAALERT_SOURCES`` (empty by default — use for emergency kill-switch).
+  * **HDFC Savings onboarding** can skip transaction-alert imports entirely via
+    ``ONBOARDING_SKIP_ALERT_SOURCES`` (empty by default — use for emergency kill-switch).
 
-  * **HDFC Credit Card** (``hdfc_cc_XXXX``): Gmail discovery often maps InstaAlerts to the
+  * **HDFC Credit Card** (``hdfc_cc_XXXX``): Gmail discovery often maps transaction-alert mail to the
     card ``source_key`` without also persisting ``emailstatements.cards@…`` mappings.  We
     merge those statement senders in-memory so statement-first queueing still runs.
 """
@@ -66,9 +66,9 @@ STREAM_DRAIN_CHUNK_SIZE = 1_000_000
 UNKNOWN_THRESHOLD = int(os.environ.get("ONBOARDING_UNKNOWN_THRESHOLD", "20"))
 
 # Pipeline ``source_key`` values for which chunk onboarding imports **statement mail only**
-# (no InstaAlert / per-transaction Gmail listing). Empty by default — InstaAlerts use
+# (no per-transaction Gmail listing). Empty by default — transaction alerts use
 # :func:`compute_alert_backfill_windows` for small targeted Gmail searches.
-ONBOARDING_SKIP_INSTAALERT_SOURCES: frozenset[str] = frozenset()
+ONBOARDING_SKIP_ALERT_SOURCES: frozenset[str] = frozenset()
 
 # After a **pre_statement** window yields at least this many alert emails, add another
 # 90-day slice further back (stop when a slice is sparse — user likely had no alerts then).
@@ -130,7 +130,7 @@ def _partition_senders_for_source(
     Statement senders are ordered **annual → quarterly → monthly** so FY / rare PDFs run
     before dense monthly runs (better priority if the HTTP budget is tight).
 
-    Alert senders are everything else (typically ``per_transaction`` InstaAlerts).
+    Alert senders are everything else (typically ``per_transaction`` transaction-alert mail).
     """
     senders = sender_emails_for_source_key(bank, source_key)
     stmt_rows: list[tuple[str, str]] = []
@@ -158,9 +158,9 @@ def merge_hdfc_cc_statement_sender_accounts(
 
     ``sender_emails_for_source_key`` only lists senders that already have a
     ``ScraperAccountMapping`` row for the ``source_key``.  Users frequently get
-    InstaAlerts mapped to ``hdfc_cc_XXXX`` during discovery but omit the separate
+    transaction-alert mail mapped to ``hdfc_cc_XXXX`` during discovery but omit the separate
     ``emailstatements.cards@hdfcbank.{net,bank.in}`` rows — then ``statement_senders=0``,
-    ``defer_alert_listing=False``, and onboarding hits InstaAlerts first (bad for CC:
+    ``defer_alert_listing=False``, and onboarding hits transaction-alert mail first (bad for CC:
     monthly PDFs should seed history before noisy alerts).
 
     This returns a **deep copy** of ``bank`` with template entries from
@@ -196,7 +196,7 @@ def merge_hdfc_cc_statement_sender_accounts(
             "parser_key",
             "expected_cadence",
             "display_name",
-            "source_type",
+            "instrument_type",
             "first_run_lookback_days",
         ):
             if meta_key in tmpl and not base.get(meta_key):
@@ -388,7 +388,7 @@ class CollectedQueue:
     # True when this source has statement-cadence senders configured (annual/monthly/…).
     # Used with gap detection: treat statements as source-of-truth when present.
     had_statement_ids_at_init: bool
-    # When True, InstaAlert Gmail list/search was **not** run yet — it runs after statement
+    # When True, transaction-alert Gmail list/search was **not** run yet — it runs after statement
     # emails are processed so a single POST does not paginate thousands of alerts + timeout.
     defer_alert_fetch: bool
 
@@ -431,8 +431,8 @@ def _gather_alert_message_items(
     exclude_message_ids: set[str],
     import_flow_log: EmailImportFlowLog | None = None,
 ) -> list[dict[str, str]]:
-    """Run Gmail search for InstaAlert / per-transaction senders only (heavy pagination)."""
-    if source_key in ONBOARDING_SKIP_INSTAALERT_SOURCES:
+    """Run Gmail search for transaction-alert / per-transaction senders only (heavy pagination)."""
+    if source_key in ONBOARDING_SKIP_ALERT_SOURCES:
         if import_flow_log:
             import_flow_log.write(
                 "gmail_alert_search_skipped",
@@ -494,7 +494,7 @@ def _collect_pending_queue(
 
     **Statement senders** (annual / quarterly / monthly): searched immediately, oldest first.
 
-    **Alert senders** (InstaAlerts): when at least one statement sender exists for this
+    **Alert senders** (transaction alerts): when at least one statement sender exists for this
     ``source_key``, alert listing is **deferred** until statement emails are drained.
     That avoids one HTTP request paginating thousands of alert IDs (browser/API timeout).
 
@@ -502,7 +502,7 @@ def _collect_pending_queue(
     matching :func:`scraper.gap_detector.filter_onboarding_alert_ids_after_statements`.
     """
     stmt_senders, alert_senders = _partition_senders_for_source(bank, source_key)
-    if source_key in ONBOARDING_SKIP_INSTAALERT_SOURCES:
+    if source_key in ONBOARDING_SKIP_ALERT_SOURCES:
         alert_senders = []
     all_senders = sender_emails_for_source_key(bank, source_key)
     if not all_senders:
@@ -601,7 +601,7 @@ def _public_slice(src: dict[str, Any]) -> dict[str, Any]:
 def _has_any_pending(src: dict[str, Any]) -> bool:
     if src.get("_pending_statement_ids"):
         return True
-    # Statements drained but InstaAlert IDs not listed yet (deferred fetch).
+    # Statements drained but transaction-alert IDs not listed yet (deferred fetch).
     if src.get("_defer_alert_fetch") and not src.get("_alerts_transitioned"):
         return True
     if not src.get("_alerts_transitioned") and (src.get("_alert_items_full") or []):
@@ -648,7 +648,7 @@ def _gather_alert_items_for_date_window(
     exclude_message_ids: set[str],
     import_flow_log: EmailImportFlowLog | None = None,
 ) -> list[dict[str, str]]:
-    """InstaAlert Gmail search restricted to ``[after, before_exclusive)`` (narrow windows).
+    """Transaction-alert Gmail search restricted to ``[after, before_exclusive)`` (narrow windows).
 
     Same behaviour as :func:`_gather_alert_message_items` but accepts an explicit slice
     so onboarding never lists an unbounded multi-year alert queue in one HTTP request.
@@ -881,8 +881,8 @@ def _ensure_alert_queue_ready(
     import_flow_log: EmailImportFlowLog | None = None,
     progress_commit_hook: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
-    """Build or extend the InstaAlert slice of the onboarding queue (statement-first)."""
-    if source_key in ONBOARDING_SKIP_INSTAALERT_SOURCES:
+    """Build or extend the transaction-alert slice of the onboarding queue (statement-first)."""
+    if source_key in ONBOARDING_SKIP_ALERT_SOURCES:
         src_state["_alert_items_full"] = []
         src_state["_defer_alert_fetch"] = False
         src_state["_use_alert_windows"] = False
@@ -927,7 +927,7 @@ def _ensure_alert_queue_ready(
     if defer and not full:
         if gmail_client is None or after is None or before is None:
             logger.warning(
-                "Deferred InstaAlert listing missing gmail_client or date window — "
+                "Deferred transaction-alert listing missing gmail_client or date window — "
                 "skipping alert fetch for source_key=%s",
                 source_key,
             )
@@ -1046,7 +1046,7 @@ def run_onboarding_backfill(
         import_flow_log: When provided (onboarding HTTP handler), append diagnostics to
             ``data/logs/email-import.log``.
         progress_commit_hook: Optional callback invoked with a shallow copy of ``src_state``
-            so the HTTP layer can ``commit`` mid-run (e.g. before heavy InstaAlert Gmail search).
+            so the HTTP layer can ``commit`` mid-run (e.g. before heavy transaction-alert Gmail search).
 
     Returns:
         :class:`OnboardingBackfillResult` with updated progress dict (includes ``_``
@@ -1596,7 +1596,7 @@ def run_onboarding_backfill(
     if pub_status == "processing_statements":
         src_state["_pending_statement_ids"] = rest
     else:
-        # Windowed InstaAlert import: record completed slice so we can expand pre-statement.
+        # Windowed transaction-alert import: record completed slice so we can expand pre-statement.
         if (
             pub_status == "processing_alerts"
             and src_state.get("_use_alert_windows")

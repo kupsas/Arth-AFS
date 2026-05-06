@@ -68,7 +68,7 @@ def test_hdfc_bank_savings_last4_not_cc_when_generic_credit_card_mention_in_blob
     html = _read_fixture("alerts_hdfcbank_net_01.html")
     marketing = " Earn more rewards on every credit card spend. Visit us today. "
     cfg = {"parser_key": "hdfc_bank"}
-    acct = _infer_accounts_dict(cfg, ["InstaAlert", html + marketing], session=session, user_id=uid)
+    acct = _infer_accounts_dict(cfg, ["HDFC Bank Alerts", html + marketing], session=session, user_id=uid)
     assert "3703" in acct
     assert acct["3703"]["source_key"] == "hdfc_savings"
 
@@ -138,7 +138,7 @@ def test_hdfc_inbound_fixture_masked_account(infer_session: tuple[Session, str])
 
 def test_filter_redundant_nse_keeps_nse_when_only_nse_broker() -> None:
     sources = [
-        {"sender_email": "ebix@nse.co.in", "email_count_estimate": 5, "source_type": "broker"},
+        {"sender_email": "ebix@nse.co.in", "email_count_estimate": 5, "instrument_type": "broker"},
     ]
     assert discovery_has_non_nse_broker_mail(sources) is False
     out = filter_redundant_nse_broker_sources(sources)
@@ -152,10 +152,10 @@ def test_filter_redundant_nse_drops_nse_when_icici_broker_present() -> None:
         {
             "sender_email": "service@icicisecurities.com",
             "email_count_estimate": 12,
-            "source_type": "broker",
+            "instrument_type": "broker",
         },
-        {"sender_email": "ebix@nse.co.in", "email_count_estimate": 100, "source_type": "broker"},
-        {"sender_email": "nseinvest@nse.co.in", "email_count_estimate": 39, "source_type": "broker"},
+        {"sender_email": "ebix@nse.co.in", "email_count_estimate": 100, "instrument_type": "broker"},
+        {"sender_email": "nseinvest@nse.co.in", "email_count_estimate": 39, "instrument_type": "broker"},
     ]
     assert discovery_has_non_nse_broker_mail(sources) is True
     out = filter_redundant_nse_broker_sources(sources)
@@ -169,9 +169,9 @@ def test_filter_redundant_nse_keeps_both_when_icici_broker_has_zero_mail() -> No
         {
             "sender_email": "service@icicisecurities.com",
             "email_count_estimate": 0,
-            "source_type": "broker",
+            "instrument_type": "broker",
         },
-        {"sender_email": "ebix@nse.co.in", "email_count_estimate": 10, "source_type": "broker"},
+        {"sender_email": "ebix@nse.co.in", "email_count_estimate": 10, "instrument_type": "broker"},
     ]
     assert discovery_has_non_nse_broker_mail(sources) is False
     out = filter_redundant_nse_broker_sources(sources)

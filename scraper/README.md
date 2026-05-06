@@ -91,13 +91,13 @@ Full detail: **Swagger** at `http://localhost:8000/docs` while the server runs.
 | Piece             | Job                                          |
 | ----------------- | -------------------------------------------- |
 | `gmail_client.py` | Sign-in, token refresh, fetching             |
-| `email_router.py` | Pick which parser fits this sender + subject |
+| `email_router.py` | Pick which statement / alert format fits this sender + subject |
 | `orchestrator.py` | One full “fetch → parse → save” lap          |
 | `scheduler.py`    | Timers (mail + shared maintenance jobs)      |
-| `email_parsers/`  | One file per bank / template family          |
+| `parsers/alerts/`, `parsers/statements/` (via `email_router.py`) | One module per bank / template family (mail is wired through the central registry) |
 
 
-**New bank mail:** Add a parser class (`can_parse` + `parse`), register it, add trusted senders in `config.py`.
+**New bank mail:** Add a reader class (`can_parse` + `parse`), register it in the email registry, add trusted senders in `config.py`. Source files live under `parsers/` so mail and file-import code stay in one tree.
 
 ---
 

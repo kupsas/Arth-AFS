@@ -1,3 +1,5 @@
+> **Archived:** historical notes only — see [`docs/system-design/`](../system-design/) for current design docs.
+
 # Archived system-design notes
 
 Early scratch notes moved out of [`docs/system-design/`](../system-design/) so the active design folder stays small.

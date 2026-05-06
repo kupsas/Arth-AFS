@@ -1,14 +1,16 @@
 """
-Base class for parsers that read **PDF attachments** (monthly statements), not HTML bodies.
+Base class for **email statement** readers — PDF attachments on bank mail (monthly /
+quarterly statements), not HTML transaction alerts.
 
-HTML alert parsers subclass :class:`~parsers.alerts.base.BaseEmailParser` and
-implement ``parse(html, date)``. Statement parsers subclass *this* class and implement
+HTML alert readers subclass :class:`~parsers.alerts.base.BaseEmailParser` and implement
+``parse(html, date)``. Email statement readers subclass *this* class and implement
 ``parse_attachment(pdf_bytes, date, email_sender=…, email_subject=…)`` instead.
 
 The orchestrator checks ``parse_type``:
-  - ``"body"`` (default) → download HTML via ``get_message_body``, then ``parse``.
-  - ``"attachment"`` → download PDFs via ``get_attachments``, then ``parse_attachment``
-    for each PDF (results concatenated).
+  - ``"alert"`` (default on :class:`~parsers.alerts.base.BaseEmailParser`) → HTML via
+    ``get_message_body``, then ``parse``.
+  - ``"statement"`` → PDFs via ``get_attachments``, then ``parse_attachment`` per file
+    (results concatenated).
 """
 
 from __future__ import annotations
@@ -23,9 +25,9 @@ from pipeline.models import ParsedTransaction
 
 
 class BaseStatementEmailParser(BaseEmailParser):
-    """Email parser driven by PDF attachment(s), not InstaAlert HTML."""
+    """Email statement reader driven by PDF attachment(s), not HTML alerts."""
 
-    parse_type: ClassVar[str] = "attachment"
+    parse_type: ClassVar[str] = "statement"
 
     @abstractmethod
     def parse_attachment(
@@ -65,7 +67,7 @@ class BaseStatementEmailParser(BaseEmailParser):
     def reset_attachment_outputs(self) -> None:
         """Optional: clear per-email attachment side-channels before processing PDFs.
 
-        The orchestrator calls this once per Gmail message when ``parse_type == "attachment"``
+        The orchestrator calls this once per Gmail message when ``parse_type == "statement"``
         so parsers that :meth:`extend` PPF / investment rows across multiple attachments
         do not leak state from the previous email.
         """

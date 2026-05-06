@@ -30,7 +30,7 @@ from scraper.onboarding_orchestrator import (
 _MINI_BANK: BankSendersConfig = {
     "alerts@hdfcbank.net": {
         "display_name": "HDFC",
-        "source_type": "savings",
+        "instrument_type": "savings",
         "expected_cadence": "monthly",
         "accounts": {
             "3703": {"account_id": "HDFC_SAL_3703", "source_key": "hdfc_savings_test"},
@@ -38,7 +38,7 @@ _MINI_BANK: BankSendersConfig = {
     },
     "alerts@hdfcbank.bank.in": {
         "display_name": "HDFC",
-        "source_type": "savings",
+        "instrument_type": "savings",
         "expected_cadence": "per_transaction",
         "accounts": {
             "3703": {"account_id": "HDFC_SAL_3703", "source_key": "hdfc_savings_test"},
@@ -205,7 +205,7 @@ def test_run_onboarding_backfill_processes_chunk(
             # Statement PDF sender (.net) — monthly cadence in _MINI_BANK
             if "alerts@hdfcbank.net" in query and "bank.in" not in query:
                 return [m1, m2]
-            # InstaAlerts deferred until after statements — searched on transition
+            # Transaction alerts deferred until after statements — searched on transition
             return []
 
         def fetch_message_by_id(self, message_id: str) -> GmailMessage:
@@ -300,7 +300,7 @@ def test_run_onboarding_backfill_pauses_on_unknown_threshold(
 
 
 def test_merge_hdfc_cc_statement_senders_enables_statement_first_partition() -> None:
-    """InstaAlerts-only DB mapping for hdfc_cc_XXXX still yields CC statement senders."""
+    """Transaction-alert–only DB mapping for hdfc_cc_XXXX still yields CC statement senders."""
     from scraper.onboarding_orchestrator import (
         _partition_senders_for_source,
         merge_hdfc_cc_statement_sender_accounts,

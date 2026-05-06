@@ -961,8 +961,11 @@ class ScraperBankSender(SQLModel, table=True):
     enabled: bool = Field(default=True)
     # Auto-discovery / onboarding metadata (mirrors ``scraper.config.BANK_SENDERS``).
     display_name: str | None = Field(default=None, sa_column=Column(String(256), nullable=True))
-    # High-level source bucket: savings | credit_card | broker (see scraper.config).
-    source_type: str | None = Field(default=None, sa_column=Column(String(32), nullable=True))
+    # savings | credit_card | broker — instrument bucket for wizard routing (DB column legacy name).
+    instrument_type: str | None = Field(
+        default=None,
+        sa_column=Column("source_type", String(32), nullable=True),
+    )
     discovery_subject_patterns_json: str | None = Field(
         default=None,
         sa_column=Column(Text, nullable=True),

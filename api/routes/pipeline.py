@@ -470,7 +470,10 @@ async def upload_statement(
             logger.info("Upload (explicit key): %s → %s (%s)", filename, active_file.name, sk)
             return UploadStatementResponse(
                 outcome="success",
-                message=f"Import started for {sk}. Poll GET /api/pipeline/runs/{run_id} for status.",
+                message=(
+                    f"Import started for your linked account. "
+                    f"You can watch progress under Runs in the app (run #{run_id})."
+                ),
                 run_id=run_id,
                 source_key=sk,
             )
@@ -525,8 +528,8 @@ async def upload_statement(
             return UploadStatementResponse(
                 outcome="no_source",
                 message=(
-                    f"This looks like {chosen.label}, but you have no matching bank account "
-                    "connected yet. Add the account under pipeline sources, then try again."
+                    f"This looks like {chosen.label}, but that bank isn’t connected here yet. "
+                    "Open Settings, add the account, then upload again."
                 ),
             )
 
@@ -554,7 +557,8 @@ async def upload_statement(
         return UploadStatementResponse(
             outcome="success",
             message=(
-                f"Import started for {resolved}. Poll GET /api/pipeline/runs/{run_id} for status."
+                f"Import started for your linked account. "
+                f"You can watch progress under Runs in the app (run #{run_id})."
             ),
             run_id=run_id,
             source_key=resolved,
@@ -676,6 +680,7 @@ async def upload_holdings_statement(
             )
 
         chosen = deduped[0].source_type
+        chosen_label = deduped[0].label
         stats = ingest_portfolio_file(
             path=active_file,
             source_type=chosen,
@@ -685,7 +690,7 @@ async def upload_holdings_statement(
         session.commit()
         return HoldingUploadResponse(
             outcome="success",
-            message=f"Imported using {chosen}.",
+            message=f"Done — saved as {chosen_label}.",
             import_stats=stats,
         )
     except ValueError as ve:

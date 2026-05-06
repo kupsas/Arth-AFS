@@ -84,7 +84,7 @@ def _card_last4_from_subject(subject: str) -> str | None:
 class HDFCCCStatementEmailParser(BaseStatementEmailParser):
     """Decrypt HDFC CC PDF attachments and parse with :class:`HDFCCreditCardPdfParser`."""
 
-    parse_type: ClassVar[str] = "attachment"
+    parse_type: ClassVar[str] = "statement"
 
     def can_parse(self, sender: str, subject: str) -> bool:
         # Sender is scoped in ``EMAIL_PARSER_REGISTRY`` to ``emailstatements.cards@…``

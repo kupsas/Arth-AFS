@@ -76,8 +76,8 @@ def get_bank_senders_config(session: Session, user_id: str) -> BankSendersConfig
             entry["first_run_lookback_days"] = s.first_run_lookback_days
         if s.display_name:
             entry["display_name"] = s.display_name
-        if s.source_type:
-            entry["source_type"] = s.source_type
+        if s.instrument_type:
+            entry["instrument_type"] = s.instrument_type
         if s.expected_cadence:
             entry["expected_cadence"] = s.expected_cadence
         if s.discovery_subject_patterns_json:

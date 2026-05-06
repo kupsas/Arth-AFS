@@ -1,7 +1,8 @@
 """
-Abstract base class for all bank email alert parsers.
+Abstract base for **transaction alert** readers — one Gmail message's HTML maps to
+one-or-few ParsedTransactions (real-time spend / transfer notifications).
 
-Every concrete parser must implement two methods:
+Every concrete reader must implement two methods:
   - can_parse(sender, subject) → bool   : routing check, no HTML required
   - parse(html_body, received_date) → list[ParsedTransaction]
 
@@ -24,6 +25,7 @@ from __future__ import annotations
 import datetime
 import logging
 from abc import ABC, abstractmethod
+from typing import ClassVar
 
 from pipeline.models import ParsedTransaction
 
@@ -31,7 +33,10 @@ logger = logging.getLogger(__name__)
 
 
 class BaseEmailParser(ABC):
-    """Abstract base for all bank email alert parsers."""
+    """Abstract base for transaction alert readers (HTML body, not PDF statements)."""
+
+    #: Orchestrator routing: ``"alert"`` → fetch HTML body and call :meth:`parse`.
+    parse_type: ClassVar[str] = "alert"
 
     def __init__(self, accounts: dict[str, dict]) -> None:
         """

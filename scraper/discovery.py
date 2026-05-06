@@ -58,7 +58,7 @@ class DiscoveredSource:
 
     sender_email: str
     display_name: str
-    source_type: str
+    instrument_type: str
     email_count_estimate: int
     # Message IDs from list() — persist-sources fetches bodies by ID (no re-search).
     sample_message_ids: list[str] = dataclasses.field(default_factory=list)
@@ -85,7 +85,7 @@ def discover_sources_iter(
     for sender_email in _discovery_sender_probe_order(bank_senders_config):
         cfg = bank_senders_config[sender_email]
         display_name = str(cfg.get("display_name") or sender_email)
-        source_type = str(cfg.get("source_type") or "unknown")
+        instrument_type = str(cfg.get("instrument_type") or "unknown")
 
         query = f"from:{sender_email}"
         ids = gmail_client.list_message_ids(query, max_results=list_max_results)
@@ -93,7 +93,7 @@ def discover_sources_iter(
         yield DiscoveredSource(
             sender_email=sender_email,
             display_name=display_name,
-            source_type=source_type,
+            instrument_type=instrument_type,
             email_count_estimate=len(ids),
             sample_message_ids=ids[:3],
         )
@@ -133,7 +133,7 @@ def discovered_sources_to_json(rows: list[DiscoveredSource]) -> list[dict[str, o
             {
                 "sender_email": r.sender_email,
                 "display_name": r.display_name,
-                "source_type": r.source_type,
+                "instrument_type": r.instrument_type,
                 "email_count_estimate": r.email_count_estimate,
                 "sample_message_ids": list(r.sample_message_ids),
             }

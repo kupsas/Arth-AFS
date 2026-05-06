@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 # Human-readable labels for upload UI (transaction + holding logical types).
+# Transaction rows: keep ``dashboard/src/lib/statement-upload-type-labels.ts`` in sync when you add keys here.
 PARSER_LABELS: dict[str, str] = {
     "hdfc_savings": "HDFC Savings Account Statement (.txt export)",
     "hdfc_savings_pdf": "HDFC Combined Bank Statement (PDF)",

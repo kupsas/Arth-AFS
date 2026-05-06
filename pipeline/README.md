@@ -14,7 +14,7 @@ If you’re day‑to‑day using Arth, you’ll mostly live in **onboarding + Se
 4. **Smart labels (optional)** — For merchants and categories still ambiguous, we ask an AI provider **you** configure — see `prompts/` for the templates (nothing secret there).
 5. **Save** — Same real-world line never lands twice; re‑runs only fill empty cells — **your corrections stay put.**
 
-Bank-specific knowledge stays in `**parsers/`** (cash) and `**holding_parsers/**` (investments). Everything after step 1 is shared across banks.
+Bank-specific file readers live in `**parsers/uploads/`** (statements you import) and `**parsers/holdings/`** (brokers, PPF, NPS). Legacy import paths `pipeline.parsers` / `pipeline.holding_parsers` still work as thin shims. Everything after step 1 is shared across banks.
 
 ---
 
@@ -53,11 +53,11 @@ Rough recipe — still technical, but only contributors need it:
 
 ### 1. Write the reader
 
-Create `pipeline/parsers/newbank.py` extending `BaseParser` — turn **their** file into `ParsedTransaction` rows. PDFs usually use `pdfplumber`; if tables look empty, you may need tighter layout logic (the ICICI PDF was picky — worth a short comment in code when you hack it).
+Create `parsers/uploads/newbank.py` extending `BaseParser` — turn **their** file into `ParsedTransaction` rows. PDFs usually use `pdfplumber`; if tables look empty, you may need tighter layout logic (the ICICI PDF was picky — worth a short comment in code when you hack it).
 
 ### 2. Register it
 
-Add the class to `PARSER_REGISTRY` in `pipeline/parsers/__init__.py`.
+Add the class to `PARSER_REGISTRY` in `parsers/uploads/__init__.py` (re-exported from `pipeline.parsers` for old imports).
 
 ### 3. Tell Arth where files live
 

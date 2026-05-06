@@ -85,7 +85,7 @@ class ParsedLiability(BaseModel):
 
 
 class BaseHoldingParser(ABC):
-    """Plug-in base: one class per institution / file family."""
+    """Plug-in base for **uploaded portfolio** files (broker CSV/PDF, PPF, NPS)."""
 
     @property
     @abstractmethod

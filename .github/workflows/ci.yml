@@ -75,7 +75,7 @@ jobs:
 
       # ── 6. Tests (pytest + coverage) ──────────────────────────────────────
       # -m "not slow" excludes any test marked @pytest.mark.slow (LLM API calls).
-      # Email parser / orchestrator tests that need gitignored fixture files are
+      # Alert/statement readers + orchestrator tests that need gitignored fixture files are
       # automatically skipped via pytestmark skipif (no fixture dir in CI).
       - name: Run tests with coverage
         run: |

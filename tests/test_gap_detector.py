@@ -74,7 +74,7 @@ def test_monthly_gap_between_two_active_months(session: Session):
     cfg = {
         "a@b.com": {
             "display_name": "Test",
-            "source_type": "savings",
+            "instrument_type": "savings",
             "expected_cadence": "monthly",
             "accounts": {"1": {"source_key": src, "account_id": "a1"}},
         }
@@ -94,7 +94,7 @@ def test_credit_card_ignores_two_quiet_months(session: Session):
     cfg = {
         "a@b.com": {
             "display_name": "CC",
-            "source_type": "credit_card",
+            "instrument_type": "credit_card",
             "expected_cadence": "monthly",
             "accounts": {"1": {"source_key": src, "account_id": "a1"}},
         }
@@ -113,7 +113,7 @@ def test_credit_card_flags_three_consecutive_quiet_months(session: Session):
     cfg = {
         "a@b.com": {
             "display_name": "CC",
-            "source_type": "credit_card",
+            "instrument_type": "credit_card",
             "expected_cadence": "monthly",
             "accounts": {"1": {"source_key": src, "account_id": "a1"}},
         }
@@ -140,7 +140,7 @@ def test_per_transaction_no_month_gaps(session: Session):
     cfg = {
         "a@b.com": {
             "display_name": "Broker",
-            "source_type": "broker",
+            "instrument_type": "broker",
             "expected_cadence": "per_transaction",
             "accounts": {"1": {"source_key": src, "account_id": "a1"}},
         }
@@ -163,7 +163,7 @@ def test_quarterly_cadence_flags_fully_empty_calendar_quarter(session: Session):
     cfg = {
         "a@b.com": {
             "display_name": "Quarterly PDF",
-            "source_type": "savings",
+            "instrument_type": "savings",
             "expected_cadence": "quarterly",
             "accounts": {"1": {"source_key": src, "account_id": "a1"}},
         }
@@ -196,13 +196,13 @@ def test_build_source_key_meta_prefers_monthly_cadence() -> None:
     cfg = {
         "alerts@bank.com": {
             "display_name": "Alerts",
-            "source_type": "savings",
+            "instrument_type": "savings",
             "expected_cadence": "per_transaction",
             "accounts": {"1": {"source_key": "shared", "account_id": "A"}},
         },
         "stmt@bank.com": {
             "display_name": "Stmt",
-            "source_type": "savings",
+            "instrument_type": "savings",
             "expected_cadence": "monthly",
             "accounts": {"1": {"source_key": "shared", "account_id": "A"}},
         },
@@ -223,7 +223,7 @@ def test_compute_alert_backfill_windows_includes_gap_and_pre_statement(session: 
     cfg = {
         "stmt@bank.com": {
             "display_name": "Stmt",
-            "source_type": "savings",
+            "instrument_type": "savings",
             "expected_cadence": "monthly",
             "accounts": {"1": {"source_key": src, "account_id": "a1"}},
         },
@@ -254,7 +254,7 @@ def test_compute_alert_backfill_windows_uncertain_is_capped(session: Session):
     cfg = {
         "stmt@bank.com": {
             "display_name": "Stmt",
-            "source_type": "savings",
+            "instrument_type": "savings",
             "expected_cadence": "monthly",
             "accounts": {"1": {"source_key": src, "account_id": "a1"}},
         },

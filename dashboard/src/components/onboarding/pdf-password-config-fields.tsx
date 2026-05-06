@@ -204,22 +204,6 @@ export const PdfPasswordConfigFields = React.forwardRef<PdfPasswordConfigFieldsH
             later under Settings.
           </p>
         )}
-        {identityNameStrings.length === 0 && mode === "wizard" && (requirements?.length ?? 0) > 0 && (
-          <p className="text-sm text-amber-600 dark:text-amber-500" role="status">
-            {embeddedInConfigStep ? (
-              <>
-                Add your <strong>first name</strong> above — we need it to build ICICI / HDFC CC / ICICI Direct
-                PDF passwords. You can still enter PAN and DOB below and save.
-              </>
-            ) : (
-              <>
-                Save your name on the <strong>identity</strong> step first — we need it to build ICICI / HDFC CC
-                / ICICI Direct PDF passwords.
-              </>
-            )}
-          </p>
-        )}
-
         {showPanField && (
           <div className="space-y-2">
             <Label htmlFor="arth-pan">{FIELD_LABELS.pan}</Label>

@@ -73,7 +73,7 @@ HISTORICAL_GMAIL_QUERY_PRESETS: dict[str, str] = {
 
 
 class _AttachmentEmailParser(Protocol):
-    """Parsers with ``parse_type == "attachment"`` implement this (not :class:`BaseEmailParser` alone)."""
+    """Parsers with ``parse_type == "statement"`` implement this (not :class:`BaseEmailParser` alone)."""
 
     def parse_attachment(
         self,
@@ -263,16 +263,16 @@ def _process_email(
         return "skipped", 0
 
     # ── Step 2: download body or PDF attachments ─────────────────────────────
-    # HTML parsers ("body"): one InstaAlert-style email → one HTML body.
-    # Statement parsers ("attachment"): monthly PDF(s) → many transactions.
-    parse_type = getattr(parser, "parse_type", "body")
+    # Transaction alerts ("alert"): HTML body → one-or-few rows.
+    # Email statements ("statement"): monthly PDF(s) → many transactions.
+    parse_type = getattr(parser, "parse_type", "alert")
     received_date = msg.received_at.date()
 
     attachment_holdings: list = []
     attachment_inv_txns: list = []
 
     with statement_secrets_context(session, user_id):
-        if parse_type == "attachment":
+        if parse_type == "statement":
             if import_flow_log:
                 import_flow_log.write("email_body_fetch", "attachment mode — fetching PDF part(s)")
             attachments = client.get_attachments(msg.id)

@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 _LAST4_PATTERNS: list[re.Pattern[str]] = [
     # HDFC inbound UPI / generic masks: **3703, ***3703
     re.compile(r"\*{1,4}(\d{4})\b"),
-    # HDFC CC InstaAlert (legacy + 2026): "…Credit Card ending 1905 …"
+    # HDFC CC transaction alert (legacy + 2026): "…Credit Card ending 1905 …"
     re.compile(r"(?i)credit\s+card\s+ending\s+(\d{4})\b"),
     # HDFC UPI outbound: "debited from account 3703"
     re.compile(r"(?i)debited\s+from\s+account\s+(\d{4})\b"),
@@ -79,7 +79,7 @@ def _is_nse_co_in_broker_sender(sender_norm: str) -> bool:
     These overlap ICICI Direct imports when both are present — we treat NSE as fallback-only.
     """
     row = BANK_SENDERS.get(sender_norm)
-    if not row or row.get("source_type") != "broker":
+    if not row or row.get("instrument_type") != "broker":
         return False
     return "@nse.co.in" in sender_norm.lower()
 
@@ -96,7 +96,7 @@ def discovery_has_non_nse_broker_mail(sources: list[Any]) -> bool:
             continue
         sender_norm = _normalise_sender(sender_raw)
         cfg = BANK_SENDERS.get(sender_norm)
-        if not cfg or cfg.get("source_type") != "broker":
+        if not cfg or cfg.get("instrument_type") != "broker":
             continue
         if _is_nse_co_in_broker_sender(sender_norm):
             continue
@@ -134,7 +134,7 @@ def filter_redundant_nse_broker_sources(sources: list[Any]) -> list[Any]:
 def _normalise_sample_chunks(parser_key: str, sample_texts: list[str]) -> str:
     """Turn Gmail samples into plain text similar to what bank email parsers see.
 
-    Raw ``get_message_body`` returns HTML; InstaAlert regexes in ``hdfc_bank`` /
+    Raw ``get_message_body`` returns HTML; transaction-alert regexes in ``hdfc_bank`` /
     ``icici_bank`` run on **plain** text extracted from specific tags.  Reuse those
     extractors so last-4 heuristics see the same digits the parsers would.
     """
@@ -306,7 +306,7 @@ def _infer_account_for_last4(
         return (f"ICICI_SAV_{last4}", "icici_savings")
 
     if pk in ("hdfc_bank",):
-        # Do **not** use a blob-wide "credit card" substring — InstaAlert footers and UPI
+        # Do **not** use a blob-wide "credit card" substring — alert footers and UPI
         # payment lines often mention cards while the masked digits are still savings.
         # Only treat as CC when this specific last-4 appears in an explicit CC context.
         cc_pattern = re.compile(
@@ -398,7 +398,7 @@ def _upsert_sender_with_accounts(
             first_run_lookback_days=cfg.get("first_run_lookback_days"),
             enabled=True,
             display_name=cfg.get("display_name"),
-            source_type=cfg.get("source_type"),
+            instrument_type=cfg.get("instrument_type"),
             expected_cadence=cfg.get("expected_cadence"),
             discovery_subject_patterns_json=meta_json,
         )

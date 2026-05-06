@@ -422,7 +422,7 @@ export function ClassificationBatchReview({
     try {
       const queueRows = await fetchAllUnknownRowsInQueue(scopedSource);
       if (!queueRows.length) {
-        setError("Nothing left in the review queue right now.");
+        setError("Nothing left to review in this list right now.");
         return;
       }
       const sourceLookup: Record<number, string> = {};
@@ -502,11 +502,11 @@ export function ClassificationBatchReview({
       <Dialog open={uberDialogOpen} onOpenChange={setUberDialogOpen}>
         <DialogContent showCloseButton={false} className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Mark entire queue as Uber?</DialogTitle>
+            <DialogTitle>Mark entire list as Uber?</DialogTitle>
             <DialogDescription>
               This is effectively <strong>irreversible in bulk</strong>: about{" "}
               <strong>{pendingTotal.toLocaleString()}</strong> transaction
-              {pendingTotal === 1 ? "" : "s"} still in this review queue will be saved as counterparty{" "}
+              {pendingTotal === 1 ? "" : "s"} still in this list will be saved as counterparty{" "}
               <strong>{UBER_QUEUE_COUNTERPARTY}</strong> and category <strong>{UBER_QUEUE_CATEGORY}</strong>
               , including rows you have not opened. We also persist <strong>apply to future</strong> so
               similar narrations learn a merchant rule keyed on <strong>UBER</strong>. Only continue if
@@ -542,13 +542,13 @@ export function ClassificationBatchReview({
       <CardHeader>
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <CardTitle className="flex items-center gap-2">
-            Review classification queue
+            Review labels
             {loading && !rows.length ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
           </CardTitle>
           {pendingTotal > 0 && !hideClassificationRowsForImportLimbo && (
             <span
               className="rounded-md border border-border bg-muted/50 px-2.5 py-1 text-sm font-medium tabular-nums text-foreground"
-              title="Gaps (missing counterparty or category), LLM rows in Friends & Family / Gifts & Personal Transfers / Miscellaneous (unless that counterparty was already confirmed in a prior review), and the count the importer uses before pausing."
+              title="Gaps (missing counterparty or category), auto-categorised rows in Friends & Family / Gifts & Personal Transfers / Miscellaneous (unless that counterparty was already confirmed in a prior round), and the count the importer uses before pausing."
             >
               {pendingTotal.toLocaleString()} pending
             </span>
@@ -557,9 +557,9 @@ export function ClassificationBatchReview({
         <CardDescription>
           Scope: <span className="font-medium text-foreground">{displayScope}</span>
           {" — "}
-          Rows here are either missing labels or are LLM-tagged Friends &amp; Family, Gifts &amp;
+          Rows here are either missing labels or are auto-categorised Friends &amp; Family, Gifts &amp;
           Personal Transfers, or Miscellaneous (worth double-checking). Names you already saved in a
-          prior review round are skipped for that LLM pattern.
+          prior round are skipped for that pattern.
           {threshold != null && (
             <>
               {" "}

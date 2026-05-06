@@ -115,7 +115,7 @@ class HDFCCreditCardAlertParser(BaseEmailParser):
         s = subject.lower()
         if "debited via credit card" in s:
             return True
-        # HDFC 2026+ InstaAlert subject for card spends (replaces "debited via…")
+        # HDFC 2026+ transaction-alert subject for card spends (replaces "debited via…")
         return "a payment was made using your credit card" in s
 
     def parse(self, html_body: str, received_date: datetime.date) -> list[ParsedTransaction]:

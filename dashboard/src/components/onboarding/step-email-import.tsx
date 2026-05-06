@@ -27,7 +27,7 @@ export type BackfillProgressSnapshot = {
   /** When the API pauses for PDF decryption. */
   password_parser_key?: string | null
   password_failure_message_id?: string | null
-  /** InstaAlert windowed import (WS4): which slice is active and overall progress. */
+  /** Transaction-alert windowed import: which slice is active and overall progress. */
   current_window_label?: string | null
   windows_total?: number
   windows_completed?: number
@@ -36,10 +36,11 @@ export type BackfillProgressSnapshot = {
 /** Minimal shape for each source in the pipeline (from GET /backfill-sources). */
 export type BackfillSourceInfo = {
   source_key: string
-  source_type: string
+  /** savings | credit_card | broker — matches GET /backfill-sources */
+  instrument_type: string
 }
 
-export type StepBackfillProps = {
+export type StepEmailImportProps = {
   /** Human-readable label (usually the pipeline ``source_key``). */
   title: string
   progress: BackfillProgressSnapshot | null
@@ -56,6 +57,11 @@ export type StepBackfillProps = {
    * not the same as blocking the classification queue (see wizard ``mailImportActivelyProcessing``).
    */
   importBusy?: boolean
+  /**
+   * When true, show a bottom link that scrolls to the inline statement upload card on the
+   * parent page (``#onboarding-statement-fallback``).
+   */
+  showStatementUploadLink?: boolean
 }
 
 /** Map orchestrator status strings to short, user-facing labels. */
@@ -66,7 +72,7 @@ function statusLabel(status: string | undefined): string {
     case "processing_statements":
       return "Importing statement emails"
     case "processing_alerts":
-      return "Filling gaps with alerts"
+      return "Importing transaction alerts"
     case "processing":
       return "Working through your mail"
     case "needs_classification":
@@ -133,7 +139,7 @@ function statusDotAriaLabel(status: string | undefined): string {
   return `Status: ${status.replace(/_/g, " ")}`
 }
 
-export function StepBackfill({
+export function StepEmailImport({
   title,
   progress,
   error,
@@ -142,7 +148,8 @@ export function StepBackfill({
   onResumeFromPause,
   resumeBusy,
   importBusy,
-}: StepBackfillProps) {
+  showStatementUploadLink = false,
+}: StepEmailImportProps) {
   /**
    * After statement emails finish, the server switches status to ``processing_alerts`` and sets
    * ``current_phase`` to ``listing_alerts`` while Gmail runs a fresh search. Progress counters
@@ -287,6 +294,22 @@ export function StepBackfill({
           )}
         </CardContent>
       </Card>
+
+      {showStatementUploadLink && (
+        <p className="text-center text-sm text-muted-foreground">
+          <a
+            href="#onboarding-statement-fallback"
+            className="font-medium text-primary underline underline-offset-2 hover:text-primary/90"
+          >
+            Have a statement file? Upload it here
+          </a>
+        </p>
+      )}
     </div>
   )
 }
+
+/** @deprecated Use StepEmailImport */
+export type StepBackfillProps = StepEmailImportProps
+/** @deprecated Use StepEmailImport */
+export const StepBackfill = StepEmailImport

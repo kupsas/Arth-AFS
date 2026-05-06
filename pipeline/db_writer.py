@@ -150,7 +150,7 @@ def _find_prior_email_alert_match_for_pdf(
     *,
     exclude_gmail_message_id: str | None,
 ) -> Transaction | None:
-    """If an **InstaAlert** (or other) email row already captured this spend, skip PDF duplicate.
+    """If a **transaction-alert** (or other) email row already captured this spend, skip PDF duplicate.
 
     Path B2 / :func:`_find_statement_match_for_email` only compares against
     ``statement`` / ``reconciled`` rows.  Monthly statement PDFs often duplicate
@@ -318,7 +318,7 @@ def write_to_db(
 
     Email path (inverse):
         Before inserting email-sourced rows we check (1) statement/reconciled match
-        (:func:`_find_statement_match_for_email`) and (2) a prior **InstaAlert** email
+        (:func:`_find_statement_match_for_email`) and (2) a prior **transaction-alert** email
         row for the same spend (:func:`_find_prior_email_alert_match_for_pdf`).
         :func:`compute_content_hash` uses ``txn_date | raw_description | amount |
         account_id`` only — **not** ``ref_number`` — so PDF vs alert dedup relies on
@@ -423,7 +423,7 @@ def write_to_db(
                 )
                 continue
 
-            # ── Path B2b: PDF email → skip if an InstaAlert email row already exists ─
+            # ── Path B2b: PDF email → skip if a transaction-alert email row already exists ─
             # Same (date, amount, direction), different narration & different Gmail id.
             alert_dup = _find_prior_email_alert_match_for_pdf(
                 session,

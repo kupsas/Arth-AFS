@@ -1,7 +1,7 @@
 """
 ICICI Bank **statement PDF** emails (monthly + annual savings).
 
-These are not InstaAlerts: they carry a password-protected PDF attachment with a
+These are not transaction-alert emails: they carry a password-protected PDF attachment with a
 full transaction table. We decrypt, reuse :class:`~parsers.uploads.icici_savings.ICICISavingsParser`
 (same layout as manually uploaded PDFs), then stamp ``account_id`` / ``source_key``
 on each row so the orchestrator can group and transform like other email sources.

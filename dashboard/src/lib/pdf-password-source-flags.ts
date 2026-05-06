@@ -5,7 +5,7 @@
 
 import type { OnboardingBackfillSourceRow } from "@/lib/types";
 
-/** True when the user has HDFC **savings** (combined statement / InstaAlerts), not CC-only. */
+/** True when the user has HDFC **savings** (combined statement / transaction alerts), not CC-only. */
 export function hasHdfcBankSavingsSource(sources: OnboardingBackfillSourceRow[] | undefined): boolean {
   return (sources ?? []).some((s) => s.source_key === "hdfc_savings");
 }

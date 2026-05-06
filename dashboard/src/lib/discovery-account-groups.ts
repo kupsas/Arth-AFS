@@ -9,7 +9,7 @@
 
 import type { OnboardingDiscoveryStreamRow } from "@/lib/api"
 
-/** Coarse bucket aligned with scraper `source_type` (`savings` | `broker` | `credit_card`). */
+/** Coarse bucket aligned with scraper `instrument_type` (`savings` | `broker` | `credit_card`). */
 export type DiscoveryUiCategory = "bank" | "demat" | "credit"
 
 export type DiscoveryInstitutionGroup = {
@@ -23,7 +23,7 @@ export type DiscoveryInstitutionGroup = {
 
 const CATEGORY_ORDER: DiscoveryUiCategory[] = ["bank", "demat", "credit"]
 
-/** Maps normalized `source_type` strings to our three UI sections. */
+/** Maps normalized `instrument_type` strings to our three UI sections. */
 export function sourceTypeToCategory(sourceType: string): DiscoveryUiCategory {
   const t = sourceType.trim().toLowerCase().replace(/\s+/g, "_")
   if (t === "savings" || t === "saving") return "bank"
@@ -128,7 +128,7 @@ export function groupDiscoveryRowsForUi(rows: OnboardingDiscoveryStreamRow[]): R
   }
 
   for (const row of rows) {
-    buckets[sourceTypeToCategory(row.source_type)].push(row)
+    buckets[sourceTypeToCategory(row.instrument_type || row.source_type || "")].push(row)
   }
 
   const result = {} as Record<DiscoveryUiCategory, DiscoveryInstitutionGroup[]>

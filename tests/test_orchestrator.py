@@ -42,22 +42,22 @@ _BANK_ORCH_TEST: dict = {
     HDFC_SENDER: {
         "parser_key": "hdfc_bank",
         "accounts": dict(HDFC_ALERT_ACCOUNTS),
-        "display_name": "HDFC InstaAlerts",
-        "source_type": "savings",
+        "display_name": "HDFC Bank transaction alerts",
+        "instrument_type": "savings",
         "expected_cadence": "per_transaction",
     },
     "alerts@hdfcbank.bank.in": {
         "parser_key": "hdfc_bank",
         "accounts": dict(HDFC_ALERT_ACCOUNTS),
-        "display_name": "HDFC InstaAlerts",
-        "source_type": "savings",
+        "display_name": "HDFC Bank transaction alerts (.bank.in)",
+        "instrument_type": "savings",
         "expected_cadence": "per_transaction",
     },
     ICICI_SENDER: {
         "parser_key": "icici_bank",
         "accounts": dict(ICICI_INSTA_ACCOUNTS),
-        "display_name": "ICICI InstaAlerts",
-        "source_type": "savings",
+        "display_name": "ICICI Bank transaction alerts",
+        "instrument_type": "savings",
         "expected_cadence": "per_transaction",
     },
 }

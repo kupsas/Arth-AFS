@@ -88,8 +88,8 @@ export function StepGapDetection() {
         <Card>
           <CardContent className="pt-6 flex items-start gap-2 text-sm text-muted-foreground">
             <AlertCircle className="size-4 mt-0.5 shrink-0" />
-            No source-level transaction history found yet. Finish a backfill or
-            import a statement, then return here.
+            No source-level transaction history found yet. Finish importing from email or upload a
+            statement, then return here.
           </CardContent>
         </Card>
       )}
@@ -105,7 +105,7 @@ export function StepGapDetection() {
                       <CardTitle className="text-base">{r.source_label}</CardTitle>
                     </div>
                     <p className="text-xs text-muted-foreground shrink-0">
-                      {r.transaction_count} txns · {r.source_type} · {r.expected_cadence}
+                      {r.transaction_count} txns · {r.instrument_type} · {r.expected_cadence}
                     </p>
                   </div>
                 </CardHeader>

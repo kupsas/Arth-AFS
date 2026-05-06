@@ -2,7 +2,7 @@
 """
 Remove rows from ``processed_emails`` so Gmail messages can be parsed again.
 
-When a bank changes email copy, InstaAlerts are often recorded as **skipped**
+When a bank changes email copy, transaction alerts are often recorded as **skipped**
 (no parser matched) but the Gmail id stays in the ledger — historical backfill
 and normal polling will *not* download them again. After you fix the parser,
 delete those ledger rows for the affected window, then run::
@@ -14,7 +14,7 @@ which would risk duplicate work if misused).
 
 Examples::
 
-  # Preview what would be removed (HDFC InstaAlerts, Apr 15–29 received)
+  # Preview what would be removed (HDFC alert mail, Apr 15–29 received)
   python3 scripts/clear_scraper_ledger_for_rescrape.py \\
       --after 2026-04-15 --before 2026-04-30 --dry-run
 
@@ -27,7 +27,7 @@ Examples::
   python3 scripts/clear_scraper_ledger_for_rescrape.py \\
       --after 2026-04-15 --before 2026-04-30 --include-failed
 
-  # Only CC InstaAlerts (recommended after a parser fix — avoids re-pulling OTP / MAB noise)
+  # Only CC transaction-alert subjects (recommended after a parser fix — avoids re-pulling OTP / MAB noise)
   python3 scripts/clear_scraper_ledger_for_rescrape.py \\
       --after 2026-04-15 --before 2026-04-30 \\
       --subject-contains "A payment was made using your Credit Card"
@@ -53,7 +53,7 @@ from api.database import get_engine, init_db
 from api.models import ProcessedEmail
 from sqlmodel import Session, col, select
 
-# Default: both InstaAlert From: addresses used in scraper.config.BANK_SENDERS
+# Default: both HDFC transaction-alert From: addresses used in scraper.config.BANK_SENDERS
 DEFAULT_HDFC_ALERT_SENDERS = (
     "alerts@hdfcbank.net",
     "alerts@hdfcbank.bank.in",
@@ -79,7 +79,7 @@ def main() -> None:
         action="append",
         dest="senders",
         metavar="EMAIL",
-        help="Normalised sender to clear (repeatable). Default: both HDFC InstaAlert addresses.",
+        help="Normalised sender to clear (repeatable). Default: both HDFC transaction-alert addresses.",
     )
     ap.add_argument(
         "--include-failed",

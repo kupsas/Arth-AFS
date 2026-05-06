@@ -46,7 +46,7 @@ GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 #       "parser_key": str,          # matches a key in EMAIL_PARSER_REGISTRY (email_parsers/__init__.py)
 #       "accounts": { ... },       # as below
 #       "display_name": str,       # human label for onboarding / UI
-#       "source_type": str,        # savings | credit_card | broker (coarse bucket for wizard)
+#       "instrument_type": str,     # savings | credit_card | broker (coarse bucket for wizard)
 #       "discovery_subject_patterns": list[str],  # regexes matched against Subject during Gmail discovery
 #       "expected_cadence": str,   # annual | yearly | quarterly | monthly | per_transaction
 #       "gmail_subject_filter_keywords": list[str],  # optional — onboarding Gmail queries use
@@ -62,10 +62,10 @@ GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 # rows — run ``python scripts/migrate_sashank_config_to_db.py`` once for your user,
 # or complete onboarding ``POST /api/onboarding/persist-sources``.
 
-# ICICI savings — InstaAlerts + statement PDFs share the same shape; mappings from DB.
+# ICICI savings — transaction alerts + statement PDFs share the same shape; mappings from DB.
 _ICICI_STATEMENT_ACCOUNTS: dict[str, dict] = {}
 
-# HDFC InstaAlerts (.net / .bank.in) — mappings from DB.
+# HDFC transaction alerts (.net / .bank.in) — mappings from DB.
 _HDFC_BANK_ACCOUNTS: dict[str, dict] = {}
 
 # HDFC Card Statement PDF — mappings from DB.
@@ -89,7 +89,7 @@ _ICICI_DIRECT_BROKER_ACCOUNTS: dict[str, dict] = {
 }
 
 # Shared discovery regex snippets (Subject line hints; case-insensitive).
-_PAT_HDFC_INSTA = [r"(?i)Insta\s*Alert", r"(?i)HDFC"]
+_PAT_HDFC_ALERT = [r"(?i)Insta\s*Alert", r"(?i)HDFC"]
 _PAT_ICICI_NOTIF = [r"(?i)ICICI", r"(?i)Transaction"]
 _PAT_ICICI_STMT = [r"(?i)e-?\s*Statement", r"(?i)ICICI", r"(?i)Account"]
 _PAT_HDFC_CC_STMT = [r"(?i)Credit\s*Card", r"(?i)Statement", r"(?i)HDFC"]
@@ -104,17 +104,17 @@ BANK_SENDERS: dict[str, dict] = {
     "alerts@hdfcbank.net": {
         "parser_key": "hdfc_bank",
         "accounts": _HDFC_BANK_ACCOUNTS,
-        "display_name": "HDFC Bank InstaAlerts",
-        "source_type": "savings",
-        "discovery_subject_patterns": _PAT_HDFC_INSTA,
+        "display_name": "HDFC Bank transaction alerts",
+        "instrument_type": "savings",
+        "discovery_subject_patterns": _PAT_HDFC_ALERT,
         "expected_cadence": "per_transaction",
     },
     "alerts@hdfcbank.bank.in": {
         "parser_key": "hdfc_bank",
         "accounts": _HDFC_BANK_ACCOUNTS,
-        "display_name": "HDFC Bank InstaAlerts (.bank.in)",
-        "source_type": "savings",
-        "discovery_subject_patterns": _PAT_HDFC_INSTA,
+        "display_name": "HDFC Bank transaction alerts (.bank.in)",
+        "instrument_type": "savings",
+        "discovery_subject_patterns": _PAT_HDFC_ALERT,
         "expected_cadence": "per_transaction",
     },
     # Note: ICICI transaction alerts come from the .bank.in domain (NOT .com).
@@ -122,19 +122,19 @@ BANK_SENDERS: dict[str, dict] = {
     "customernotification@icici.bank.in": {
         "parser_key": "icici_bank",
         "accounts": _ICICI_STATEMENT_ACCOUNTS,
-        "display_name": "ICICI Bank InstaAlerts",
-        "source_type": "savings",
+        "display_name": "ICICI Bank transaction alerts",
+        "instrument_type": "savings",
         "discovery_subject_patterns": _PAT_ICICI_NOTIF,
         "expected_cadence": "per_transaction",
     },
-    # ICICI savings statement PDFs (password-protected attachment — not InstaAlerts).
+    # ICICI savings statement PDFs (password-protected attachment — not transaction alerts).
     # Monthly (current + legacy): estatement may use .com or .bank.in; annual FY: .com below.
     "estatement@icicibank.com": {
         "parser_key": "icici_statement",
         "accounts": _ICICI_STATEMENT_ACCOUNTS,
         "first_run_lookback_days": 45,
         "display_name": "ICICI e-Statement (.com)",
-        "source_type": "savings",
+        "instrument_type": "savings",
         "discovery_subject_patterns": _PAT_ICICI_STMT,
         "expected_cadence": "monthly",
     },
@@ -143,7 +143,7 @@ BANK_SENDERS: dict[str, dict] = {
         "accounts": _ICICI_STATEMENT_ACCOUNTS,
         "first_run_lookback_days": 45,
         "display_name": "ICICI e-Statement (.bank.in)",
-        "source_type": "savings",
+        "instrument_type": "savings",
         "discovery_subject_patterns": _PAT_ICICI_STMT,
         "expected_cadence": "monthly",
     },
@@ -152,7 +152,7 @@ BANK_SENDERS: dict[str, dict] = {
         "accounts": _ICICI_STATEMENT_ACCOUNTS,
         "first_run_lookback_days": 45,
         "display_name": "ICICI statement notifications (.com)",
-        "source_type": "savings",
+        "instrument_type": "savings",
         "discovery_subject_patterns": _PAT_ICICI_STMT,
         "expected_cadence": "monthly",
     },
@@ -162,7 +162,7 @@ BANK_SENDERS: dict[str, dict] = {
         "accounts": _HDFC_CC_STATEMENT_ACCOUNTS,
         "first_run_lookback_days": 45,
         "display_name": "HDFC Credit Card e-statements",
-        "source_type": "credit_card",
+        "instrument_type": "credit_card",
         "discovery_subject_patterns": _PAT_HDFC_CC_STMT,
         "expected_cadence": "monthly",
     },
@@ -171,7 +171,7 @@ BANK_SENDERS: dict[str, dict] = {
         "accounts": _HDFC_CC_STATEMENT_ACCOUNTS,
         "first_run_lookback_days": 45,
         "display_name": "HDFC Credit Card e-statements (.bank.in)",
-        "source_type": "credit_card",
+        "instrument_type": "credit_card",
         "discovery_subject_patterns": _PAT_HDFC_CC_STMT,
         "expected_cadence": "monthly",
     },
@@ -182,7 +182,7 @@ BANK_SENDERS: dict[str, dict] = {
         "accounts": dict(_HDFC_BANK_ACCOUNTS),
         "first_run_lookback_days": 45,
         "display_name": "HDFC Smart / combined statement",
-        "source_type": "savings",
+        "instrument_type": "savings",
         "discovery_subject_patterns": _PAT_HDFC_COMBINED,
         "expected_cadence": "monthly",
     },
@@ -191,7 +191,7 @@ BANK_SENDERS: dict[str, dict] = {
         "accounts": dict(_HDFC_BANK_ACCOUNTS),
         "first_run_lookback_days": 45,
         "display_name": "HDFC Smart / combined statement (.bank.in)",
-        "source_type": "savings",
+        "instrument_type": "savings",
         "discovery_subject_patterns": _PAT_HDFC_COMBINED,
         "expected_cadence": "monthly",
     },
@@ -202,7 +202,7 @@ BANK_SENDERS: dict[str, dict] = {
         "accounts": _ICICI_DIRECT_TRADE_ACCOUNTS,
         "first_run_lookback_days": 45,
         "display_name": "NSE trade confirmations (ebix)",
-        "source_type": "broker",
+        "instrument_type": "broker",
         "discovery_subject_patterns": _PAT_NSE_TRADE,
         "expected_cadence": "per_transaction",
     },
@@ -211,7 +211,7 @@ BANK_SENDERS: dict[str, dict] = {
         "accounts": _ICICI_DIRECT_TRADE_ACCOUNTS,
         "first_run_lookback_days": 45,
         "display_name": "NSE trade confirmations (nseinvest)",
-        "source_type": "broker",
+        "instrument_type": "broker",
         "discovery_subject_patterns": _PAT_NSE_TRADE,
         "expected_cadence": "per_transaction",
     },
@@ -220,7 +220,7 @@ BANK_SENDERS: dict[str, dict] = {
         "accounts": _ICICI_DIRECT_TRADE_ACCOUNTS,
         "first_run_lookback_days": 45,
         "display_name": "NSE trade confirmations (nse-direct)",
-        "source_type": "broker",
+        "instrument_type": "broker",
         "discovery_subject_patterns": _PAT_NSE_TRADE,
         "expected_cadence": "per_transaction",
     },
@@ -231,7 +231,7 @@ BANK_SENDERS: dict[str, dict] = {
         "accounts": _ICICI_DIRECT_BROKER_ACCOUNTS,
         "first_run_lookback_days": 120,
         "display_name": "ICICI Direct broker statements (equity + MF)",
-        "source_type": "broker",
+        "instrument_type": "broker",
         "discovery_subject_patterns": _PAT_ICICI_DIRECT_STMT,
         "expected_cadence": "quarterly",
         # Narrow Gmail searches — this sender also pushes portfolio/KYC/scheme noise.
@@ -246,7 +246,7 @@ BANK_SENDERS: dict[str, dict] = {
 # Gmail From addresses that carry ICICI **savings** statement PDFs (monthly or annual FY).
 # Used by :mod:`parsers.statements.icici` to recognise FY subjects regardless
 # of whether ICICI used ``estatement@…`` or ``customernotification@icicibank.com``.
-# **Exclude** ``customernotification@icici.bank.in`` — that domain is InstaAlerts only today.
+# **Exclude** ``customernotification@icici.bank.in`` — that domain is transaction alerts only today.
 # When ICICI routes FY PDFs from a new ``*@icici.bank.in`` mailbox, add it here and in
 # ``BANK_SENDERS`` with ``parser_key="icici_statement"``.
 ICICI_SAVINGS_STATEMENT_SENDERS: frozenset[str] = frozenset(

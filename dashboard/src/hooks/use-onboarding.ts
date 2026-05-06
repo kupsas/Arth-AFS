@@ -18,6 +18,7 @@ import {
 import {
   fetchOnboardingBackfillSources,
   fetchOnboardingClassifierStatus,
+  fetchOnboardingPreclassificationSaved,
   fetchOnboardingState,
   patchOnboardingState,
   postOnboardingBackfillChunk,
@@ -29,12 +30,14 @@ import type { OnboardingDiscoveryStreamRow } from "@/lib/api"
 import { getUserFacingErrorMessage } from "@/lib/user-facing-api-error"
 import type {
   OnboardingBackfillSourceRow,
+  OnboardingPreclassificationSavedResponse,
   OnboardingStateResponse,
 } from "@/lib/types"
 
 export const onboardingStateKey = ["onboarding", "state"] as const
 export const onboardingBackfillSourcesKey = ["onboarding", "backfill-sources"] as const
 export const onboardingClassifierStatusKey = ["onboarding", "classifier-status"] as const
+export const onboardingPreclassificationSavedKey = ["onboarding", "preclassification-saved"] as const
 
 export function useOnboardingState(
   options?: Partial<UseQueryOptions<OnboardingStateResponse>>,
@@ -81,6 +84,18 @@ export function useOnboardingClassifierStatus(
   })
 }
 
+/** Cached saved name and hints from the onboarding Config step (wizard resume). */
+export function useOnboardingPreclassificationSaved(
+  options?: Partial<UseQueryOptions<OnboardingPreclassificationSavedResponse>>,
+) {
+  return useQuery<OnboardingPreclassificationSavedResponse>({
+    queryKey: [...onboardingPreclassificationSavedKey],
+    queryFn: () => fetchOnboardingPreclassificationSaved(),
+    staleTime: 10_000,
+    ...options,
+  })
+}
+
 export function usePatchOnboardingState() {
   const qc = useQueryClient()
   return useMutation({
@@ -100,10 +115,16 @@ export type OnboardingDiscoverRunStatus =
 function isPersistedDiscoveryRow(x: unknown): x is OnboardingDiscoveryStreamRow {
   if (x === null || typeof x !== "object") return false
   const o = x as Record<string, unknown>
+  const it =
+    typeof o.instrument_type === "string"
+      ? o.instrument_type
+      : typeof o.source_type === "string"
+        ? o.source_type
+        : null
   return (
     typeof o.sender_email === "string" &&
     typeof o.display_name === "string" &&
-    typeof o.source_type === "string" &&
+    it !== null &&
     typeof o.email_count_estimate === "number"
   )
 }
@@ -126,7 +147,12 @@ export function parsePersistedDiscoveryResults(
     rows.push({
       sender_email: item.sender_email,
       display_name: item.display_name,
-      source_type: item.source_type,
+      instrument_type:
+        typeof item.instrument_type === "string"
+          ? item.instrument_type
+          : typeof item.source_type === "string"
+            ? item.source_type
+            : "unknown",
       email_count_estimate: item.email_count_estimate,
     })
   }

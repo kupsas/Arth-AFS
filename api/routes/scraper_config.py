@@ -28,7 +28,7 @@ class BankSenderIn(BaseModel):
     first_run_lookback_days: int | None = None
     enabled: bool = True
     display_name: str | None = None
-    source_type: str | None = None
+    instrument_type: str | None = None
     discovery_subject_patterns: list[str] | None = None
     expected_cadence: str | None = None
 
@@ -59,7 +59,7 @@ def list_senders(
                 "first_run_lookback_days": r.first_run_lookback_days,
                 "enabled": r.enabled,
                 "display_name": r.display_name,
-                "source_type": r.source_type,
+                "instrument_type": r.instrument_type,
                 "expected_cadence": r.expected_cadence,
                 "discovery_subject_patterns": (
                     json.loads(r.discovery_subject_patterns_json)
@@ -92,8 +92,8 @@ def upsert_sender(
         existing.enabled = body.enabled
         if body.display_name is not None:
             existing.display_name = body.display_name
-        if body.source_type is not None:
-            existing.source_type = body.source_type
+        if body.instrument_type is not None:
+            existing.instrument_type = body.instrument_type
         if body.expected_cadence is not None:
             existing.expected_cadence = body.expected_cadence
         if body.discovery_subject_patterns is not None:
@@ -108,7 +108,7 @@ def upsert_sender(
                 first_run_lookback_days=body.first_run_lookback_days,
                 enabled=body.enabled,
                 display_name=body.display_name,
-                source_type=body.source_type,
+                instrument_type=body.instrument_type,
                 expected_cadence=body.expected_cadence,
                 discovery_subject_patterns_json=pat_json,
             )

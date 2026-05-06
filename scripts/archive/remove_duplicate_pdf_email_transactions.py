@@ -3,7 +3,7 @@
 Remove **duplicate** bank transactions that came from a Gmail PDF ingest, when another
 row already represents the same spend.
 
-Typical case: combined statement PDF email inserted rows even though InstaAlert +/or
+Typical case: combined statement PDF email inserted rows even though a transaction alert +/or
 ``.txt`` import already had the same (date, amount, direction).  Path B2 is fixed to
 prefer **exact calendar date** when matching statement rows, but old duplicates remain
 until you delete them.

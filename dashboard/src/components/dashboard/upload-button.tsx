@@ -31,6 +31,7 @@ import { buildApiUrl } from "@/lib/api-base"
 import { holdingsCoverageKey } from "@/hooks/use-onboarding-gaps"
 import { metricsKeys } from "@/hooks/use-metrics"
 import { portfolioKeys } from "@/hooks/use-portfolio"
+import { humanizeSourceKey } from "@/lib/source-label"
 import { cn } from "@/lib/utils"
 import type { StatementUploadOption } from "@/lib/types"
 
@@ -89,7 +90,7 @@ async function pollRunStatus(
 // DropZone
 // ─────────────────────────────────────────────────────────────────────────────
 
-function DropZone({
+export function DropZone({
   onFile,
   disabled,
   helpText,
@@ -104,6 +105,7 @@ function DropZone({
   function handleDrop(e: React.DragEvent) {
     e.preventDefault()
     setDragging(false)
+    if (disabled) return
     const file = e.dataTransfer.files[0]
     if (file) onFile(file)
   }
@@ -136,6 +138,7 @@ function DropZone({
         type="file"
         accept=".txt,.csv,.pdf"
         className="hidden"
+        disabled={disabled}
         onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f) }}
       />
     </div>
@@ -149,9 +152,15 @@ function DropZone({
 function UploadDialog({
   onImportComplete,
   variant,
+  disabled = false,
+  compactProgressCopy = false,
 }: {
   onImportComplete?: () => void
   variant: "transactions" | "holdings"
+  /** When true (e.g. onboarding mail import is writing to the DB), block starting a new upload. */
+  disabled?: boolean
+  /** Onboarding: hide internal run ids and use shorter progress copy. */
+  compactProgressCopy?: boolean
 }) {
   const queryClient = useQueryClient()
   const [state, setState] = React.useState<UploadState>({ phase: "idle" })
@@ -333,6 +342,7 @@ function UploadDialog({
   }
 
   function handleFile(file: File) {
+    if (disabled) return
     pdfSessionPasswordRef.current = undefined
     setPdfPasswordInput("")
     if (variant === "transactions") void runTxnUpload(file)
@@ -349,7 +359,7 @@ function UploadDialog({
   return (
     <div className="space-y-4">
       {state.phase === "idle" && (
-        <DropZone onFile={handleFile} disabled={false} helpText={helpText} />
+        <DropZone onFile={handleFile} disabled={disabled} helpText={helpText} />
       )}
 
       {state.phase === "uploading" && (
@@ -365,12 +375,17 @@ function UploadDialog({
         <div className="flex flex-col items-center gap-3 py-8 text-center">
           <Progress value={undefined} className="w-full animate-pulse" />
           <p className="text-sm font-medium">
-            Running import for <span className="font-mono">{state.sourceKey}</span>…
+            Finishing import for your{" "}
+            <span className="text-foreground">{humanizeSourceKey(state.sourceKey)}</span> account…
           </p>
           <p className="text-xs text-muted-foreground">
-            Parsing → Rules → LLM → Saving. Usually 30–60 seconds.
+            {compactProgressCopy
+              ? "Usually about half a minute while we finish saving."
+              : "Usually about half a minute while we finish sorting and saving your transactions."}
           </p>
-          <p className="text-xs text-muted-foreground">Run #{state.runId}</p>
+          {!compactProgressCopy && (
+            <p className="text-xs text-muted-foreground">Run #{state.runId}</p>
+          )}
         </div>
       )}
 
@@ -480,8 +495,11 @@ function UploadDialog({
           <p className="text-sm font-semibold">Done!</p>
           <p className="text-xs text-muted-foreground">
             Processed {state.txnCount} transactions
-            {state.newCount > 0 && ` · ${state.newCount} new`} from{" "}
-            <span className="font-mono">{state.sourceKey}</span>.
+            {state.newCount > 0 && ` · ${state.newCount} new`} for your{" "}
+            <span className="font-medium text-foreground">
+              {humanizeSourceKey(state.sourceKey)}
+            </span>{" "}
+            account.
           </p>
           <p className="text-xs text-muted-foreground">Dashboard metrics have been refreshed.</p>
           <Button size="sm" className="mt-2" onClick={goIdle}>
@@ -518,6 +536,28 @@ function UploadDialog({
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * Same transaction upload UI as inside **Upload statement**, without the dialog wrapper —
+ * used by onboarding fallback so users can drop a file inline during setup.
+ */
+export function StatementUploadPanel({
+  onImportComplete,
+  disabled = false,
+}: {
+  onImportComplete?: () => void
+  /** True while onboarding mail import is actively writing — avoids racing SQLite with upload import. */
+  disabled?: boolean
+}) {
+  return (
+    <UploadDialog
+      onImportComplete={onImportComplete}
+      variant="transactions"
+      disabled={disabled}
+      compactProgressCopy
+    />
   )
 }
 

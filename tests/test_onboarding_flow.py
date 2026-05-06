@@ -87,7 +87,7 @@ def _flow_client(
     monkeypatch.setattr(pc, "LLM_MODEL", "auto", raising=False)
 
 
-@patch("api.routes.onboarding.get_bank_senders_config", return_value={"a@test.in": {"display_name": "T", "source_type": "savings", "accounts": {}}})
+@patch("api.routes.onboarding.get_bank_senders_config", return_value={"a@test.in": {"display_name": "T", "instrument_type": "savings", "accounts": {}}})
 @patch("api.routes.onboarding.discover_sources_iter", autospec=True)
 def test_discover_saves_to_onboarding_state(
     mock_iter: Any,
@@ -100,7 +100,7 @@ def test_discover_saves_to_onboarding_state(
             DiscoveredSource(
                 sender_email="a@test.in",
                 display_name="T",
-                source_type="savings",
+                instrument_type="savings",
                 email_count_estimate=2,
                 sample_message_ids=["mid1", "mid2"],
             )
@@ -215,7 +215,7 @@ def test_gaps_and_complete_round_trip(
         mock_b.return_value = {
             "a@b.com": {
                 "display_name": "G",
-                "source_type": "savings",
+                "instrument_type": "savings",
                 "expected_cadence": "per_transaction",
                 "accounts": {
                     "1": {"source_key": "monthly_test_src", "account_id": "a1"},
@@ -426,3 +426,116 @@ def test_backfill_progress_reconciles_stale_needs_classification(
         assert saved["status"] == "processing_alerts"
         assert saved["unknowns_pending"] == 0
         assert saved["_pending_alert_ids"] == ["m1", "m2"]
+
+
+def test_onboarding_has_data_empty(flow_client: TestClient) -> None:
+    r = flow_client.get("/api/onboarding/has-data")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"has_transactions": False, "transaction_count": 0}
+
+
+def test_onboarding_has_data_with_transactions(engine: object, flow_client: TestClient) -> None:
+    t = Transaction(
+        content_hash="has_data_chk",
+        txn_date=date(2022, 6, 1),
+        account_id="acct1",
+        user_id="flow_user",
+        source_statement="stmt_src",
+        source_type="statement",
+        direction="INFLOW",
+        amount=100.0,
+        raw_description="test row",
+    )
+    with Session(engine) as session:  # type: ignore[call-arg]
+        session.add(t)
+        session.commit()
+
+    r = flow_client.get("/api/onboarding/has-data")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["has_transactions"] is True
+    assert body["transaction_count"] == 1
+
+
+def test_onboarding_has_data_mock_env_returns_zero_without_truth(
+    monkeypatch: pytest.MonkeyPatch,
+    engine: object,
+    flow_client: TestClient,
+) -> None:
+    """``ARTH_MOCK_ONBOARDING_*`` forces zeros while rows still exist (local QA)."""
+    monkeypatch.setenv("ARTH_MOCK_ONBOARDING_ZERO_HAS_DATA", "1")
+    monkeypatch.setenv("ARTH_MOCK_ONBOARDING_ZERO_HAS_DATA_USERS", "flow_user")
+    t = Transaction(
+        content_hash="mock_has_data_chk",
+        txn_date=date(2022, 6, 2),
+        account_id="acct1",
+        user_id="flow_user",
+        source_statement="stmt_src",
+        source_type="statement",
+        direction="INFLOW",
+        amount=50.0,
+        raw_description="still in db",
+    )
+    with Session(engine) as session:  # type: ignore[call-arg]
+        session.add(t)
+        session.commit()
+
+    r = flow_client.get("/api/onboarding/has-data")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"has_transactions": False, "transaction_count": 0}
+
+
+def test_onboarding_has_data_mock_env_truth_returns_real_count(
+    monkeypatch: pytest.MonkeyPatch,
+    engine: object,
+    flow_client: TestClient,
+) -> None:
+    monkeypatch.setenv("ARTH_MOCK_ONBOARDING_ZERO_HAS_DATA", "1")
+    monkeypatch.setenv("ARTH_MOCK_ONBOARDING_ZERO_HAS_DATA_USERS", "flow_user")
+    t = Transaction(
+        content_hash="mock_truth_chk",
+        txn_date=date(2022, 6, 3),
+        account_id="acct1",
+        user_id="flow_user",
+        source_statement="stmt_src",
+        source_type="statement",
+        direction="INFLOW",
+        amount=25.0,
+        raw_description="truth bypass",
+    )
+    with Session(engine) as session:  # type: ignore[call-arg]
+        session.add(t)
+        session.commit()
+
+    r = flow_client.get("/api/onboarding/has-data?truth=true")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["has_transactions"] is True
+    assert body["transaction_count"] == 1
+
+
+def test_onboarding_has_data_mock_env_wrong_user_unaffected(
+    monkeypatch: pytest.MonkeyPatch,
+    engine: object,
+    flow_client: TestClient,
+) -> None:
+    monkeypatch.setenv("ARTH_MOCK_ONBOARDING_ZERO_HAS_DATA", "1")
+    monkeypatch.setenv("ARTH_MOCK_ONBOARDING_ZERO_HAS_DATA_USERS", "someone_else")
+    t = Transaction(
+        content_hash="mock_other_user_chk",
+        txn_date=date(2022, 6, 4),
+        account_id="acct1",
+        user_id="flow_user",
+        source_statement="stmt_src",
+        source_type="statement",
+        direction="INFLOW",
+        amount=10.0,
+        raw_description="row",
+    )
+    with Session(engine) as session:  # type: ignore[call-arg]
+        session.add(t)
+        session.commit()
+
+    r = flow_client.get("/api/onboarding/has-data")
+    assert r.status_code == 200, r.text
+    assert r.json()["transaction_count"] == 1

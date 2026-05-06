@@ -13,8 +13,10 @@
 
 import * as React from "react"
 import { ChevronDown, Loader2, Radar } from "lucide-react"
+import { useQueryClient } from "@tanstack/react-query"
 
 import { OnboardingErrorCallout } from "@/components/onboarding/onboarding-error-callout"
+import { UploadButton } from "@/components/dashboard/upload-button"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
@@ -27,10 +29,13 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import {
+  onboardingBackfillSourcesKey,
+  onboardingStateKey,
   parsePersistedDiscoveryResults,
   useOnboardingDiscover,
   useOnboardingState,
 } from "@/hooks/use-onboarding"
+import { holdingsCoverageKey, onboardingGapsKey } from "@/hooks/use-onboarding-gaps"
 import type { OnboardingDiscoveryStreamRow } from "@/lib/api"
 import {
   discoveryCategoryMeta,
@@ -86,6 +91,7 @@ export interface StepDiscoveryProps {
 }
 
 export function StepDiscovery({ onContinue }: StepDiscoveryProps) {
+  const queryClient = useQueryClient()
   const onboardingState = useOnboardingState()
   const {
     runDiscover,
@@ -151,6 +157,14 @@ export function StepDiscovery({ onContinue }: StepDiscoveryProps) {
 
   /** Groups scan rows into banks / demat / cards, then by institution (HDFC, ICICI, …). */
   const grouped = React.useMemo(() => groupDiscoveryRowsForUi(rows), [rows])
+
+  /** After a manual file import, refresh onboarding + gap hints so later steps see new data. */
+  const onStatementUploadComplete = React.useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
+    void queryClient.invalidateQueries({ queryKey: [...onboardingBackfillSourcesKey] })
+    void queryClient.invalidateQueries({ queryKey: [...onboardingGapsKey] })
+    void queryClient.invalidateQueries({ queryKey: [...holdingsCoverageKey] })
+  }, [queryClient])
 
   /**
    * Which institution accordion panels are open (`"{category}-{institution}"`).
@@ -238,6 +252,25 @@ export function StepDiscovery({ onContinue }: StepDiscoveryProps) {
         >
           {errorText}
         </OnboardingErrorCallout>
+      )}
+
+      {isSuccess && !isError && accountsFound === 0 && (
+        <Card className="border-dashed">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">No bank mail in this scan?</CardTitle>
+            <CardDescription className="text-sm leading-relaxed">
+              Sometimes the inbox comes up empty — older mail, filters, or senders we haven&apos;t seen yet.
+              Drop a statement export here and we&apos;ll still pull it in. You&apos;ll get another upload shortcut on{" "}
+              <strong>Coverage</strong> later too.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-center gap-3 pt-0">
+            <UploadButton variant="transactions" onImportComplete={onStatementUploadComplete} />
+            <span className="text-xs text-muted-foreground">
+              We read the file contents only — nothing leaves your session until you upload.
+            </span>
+          </CardContent>
+        </Card>
       )}
 
       {showResultsCard && (

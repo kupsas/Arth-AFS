@@ -21,7 +21,7 @@ from sqlmodel import Session, col, select
 from api.models import Transaction
 from scraper.config_loader import BankSendersConfig
 
-# InstaAlert Gmail searches use these slice sizes when building targeted windows
+# Transaction-alert Gmail searches use these slice sizes when building targeted windows
 # (onboarding orchestrator — see :func:`compute_alert_backfill_windows`).
 ALERT_BACKFILL_PRE_STATEMENT_DAYS = 90
 ALERT_BACKFILL_UNCERTAIN_SLICE_DAYS = 90
@@ -100,7 +100,7 @@ def _merge_consecutive_months(chunks: Iterable[str]) -> list[dict[str, str]]:
 def _build_source_key_meta(cfg: BankSendersConfig) -> dict[str, dict[str, str]]:
     """Map ``source_key`` (pipeline key) to display + cadence metadata."""
     # Prefer stronger cadence when multiple senders map to the same source_key
-    # (e.g. HDFC CC statements are ``monthly`` while InstaAlerts are ``per_transaction``).
+    # (e.g. HDFC CC statements are ``monthly`` while transaction alerts are ``per_transaction``).
     rank = {"monthly": 0, "quarterly": 1, "per_transaction": 2}
 
     def _cad_rank(ec: str) -> int:
@@ -109,7 +109,7 @@ def _build_source_key_meta(cfg: BankSendersConfig) -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
     for _sender, blob in cfg.items():
         dname = (blob.get("display_name") or _sender) or "Unknown"
-        st = (blob.get("source_type") or "savings").lower()
+        st = (blob.get("instrument_type") or "savings").lower()
         ec = (blob.get("expected_cadence") or "per_transaction").lower()
         for _last4, acc in (blob.get("accounts") or {}).items():
             if not isinstance(acc, dict):
@@ -121,7 +121,7 @@ def _build_source_key_meta(cfg: BankSendersConfig) -> dict[str, dict[str, str]]:
             if prev is None or _cad_rank(ec) < _cad_rank(str(prev.get("expected_cadence") or "")):
                 out[sk] = {
                     "display_name": str(dname),
-                    "source_type": st,
+                    "instrument_type": st,
                     "expected_cadence": ec,
                 }
     return out
@@ -134,7 +134,7 @@ def _candidates_zero_months(
     active_months: set[str],
     range_months: list[str],
     *,
-    source_type: str,
+    instrument_type: str,
     is_credit: bool,
 ) -> list[str]:
     """Return month keys that are considered a 'gap' in ``range_months``."""
@@ -142,7 +142,7 @@ def _candidates_zero_months(
     if not zeroes:
         return []
 
-    if is_credit or source_type == "credit_card":
+    if is_credit or instrument_type == "credit_card":
         # Credit cards may be quiet for 1-2 months — flag only 3+ consecutive.
         return _long_streaks_only(zeroes, min_len=3)
 
@@ -206,7 +206,7 @@ class _PerSource:
     max_ym: str
     counts: dict[str, int] = field(default_factory=dict)  # ym -> txn count
     source_label: str = ""
-    source_type: str = "savings"
+    instrument_type: str = "savings"
     expected_cadence: str = "per_transaction"
     total_count: int = 0
 
@@ -265,10 +265,10 @@ def detect_gaps(
     for source_key, ps in sorted(by_src.items(), key=lambda kv: kv[0]):
         m = meta.get(source_key) or {}
         label = m.get("display_name") or source_key
-        st = (m.get("source_type") or "savings").lower()
+        st = (m.get("instrument_type") or "savings").lower()
         ec = (m.get("expected_cadence") or "per_transaction").lower()
         ps.source_label = label
-        ps.source_type = st
+        ps.instrument_type = st
         ps.expected_cadence = ec
 
         y0, m0 = _parse_ym(ps.min_ym)
@@ -281,7 +281,7 @@ def detect_gaps(
                 {
                     "source": source_key,
                     "source_label": label,
-                    "source_type": st,
+                    "instrument_type": st,
                     "expected_cadence": ec,
                     "date_range_start": d0.isoformat(),
                     "date_range_end": d1.isoformat(),
@@ -301,7 +301,7 @@ def detect_gaps(
                 {
                     "source": source_key,
                     "source_label": label,
-                    "source_type": st,
+                    "instrument_type": st,
                     "expected_cadence": ec,
                     "date_range_start": d0.isoformat(),
                     "date_range_end": d1.isoformat(),
@@ -318,7 +318,7 @@ def detect_gaps(
             if is_cc:
                 raw_zero = set(_long_streaks_only(list(raw_zero), min_len=3))
         else:
-            raw = _candidates_zero_months(active, rmonths, source_type=st, is_credit=is_cc)
+            raw = _candidates_zero_months(active, rmonths, instrument_type=st, is_credit=is_cc)
             raw_zero = set(raw)
 
         # Merge consecutive for cleaner UI
@@ -339,7 +339,7 @@ def detect_gaps(
             {
                 "source": source_key,
                 "source_label": label,
-                "source_type": st,
+                "instrument_type": st,
                 "expected_cadence": ec,
                 "date_range_start": d0.isoformat(),
                 "date_range_end": d1.isoformat(),
@@ -352,7 +352,7 @@ def detect_gaps(
 
 
 def _gap_reason(
-    source_type: str, cadence: str, is_cc: bool, label: str
+    instrument_type: str, cadence: str, is_cc: bool, label: str
 ) -> str:
     if is_cc:
         return (
@@ -392,7 +392,7 @@ def filter_onboarding_alert_ids_after_statements(
     *,
     had_statement_ids_at_init: bool,
 ) -> list[str]:
-    """After statement-phase import, decide which InstaAlert / alert emails still need parsing.
+    """After statement-phase import, decide which transaction-alert emails still need parsing.
 
     ``alert_items`` entries must include ``id`` (Gmail message id) and ``received_at``
     (ISO-8601 string).  Returns message ids **oldest first**.
@@ -479,10 +479,10 @@ def _earliest_txn_date_for_source(
     user_id: str,
     source_key: str,
 ) -> dt.date | None:
-    """Oldest transaction date for this pipeline ``source_key`` (any ``source_type``).
+    """Oldest transaction date for this pipeline ``source_key`` (any import path).
 
-    Used to anchor **pre-statement** InstaAlert windows: statement PDFs parsed from email
-    still store ``source_type='email'``, so this date is the start of “known good”
+    Used to anchor **pre-statement** transaction-alert windows: statement PDFs parsed from email
+    still store ``Transaction.source_type='email'``, so this date is the start of “known good”
     statement-backed coverage; alerts *before* this day may be the only history.
     """
     q = (
@@ -535,7 +535,7 @@ def compute_alert_backfill_windows(
     gmail_before_exclusive: dt.date,
     had_statement_ids_at_init: bool,
 ) -> list[dict[str, Any]]:
-    """Plan small Gmail date windows for InstaAlert import after statement PDFs ran.
+    """Plan small Gmail date windows for transaction-alert import after statement PDFs ran.
 
     **Order**
       1. **Gap** windows — months :func:`detect_gaps` marks as missing coverage (statement
@@ -553,7 +553,7 @@ def compute_alert_backfill_windows(
     ``GmailClient.search_messages`` query semantics).
 
     When (2) and (3) both apply, gap windows still come first; uncertain slices are a
-    fallback so onboarding never fires one giant unbounded InstaAlert search.
+    fallback so onboarding never fires one giant unbounded transaction-alert search.
     """
     windows: list[dict[str, Any]] = []
     reports = detect_gaps(session, user_id, bank)

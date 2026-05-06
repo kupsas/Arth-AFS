@@ -80,6 +80,7 @@ import type {
   OnboardingGapsResponse,
   OnboardingGoalTemplatesResponse,
   OnboardingStateResponse,
+  OnboardingHasDataResponse,
   OnboardingPreclassificationSavedResponse,
   OnboardingBackfillSourceRow,
   OnboardingPortfolioDeriveResponse,
@@ -989,6 +990,22 @@ export function fetchOnboardingState(): Promise<OnboardingStateResponse> {
   return get<OnboardingStateResponse>("/api/onboarding/state");
 }
 
+/** GET /api/onboarding/has-data — whether the user has at least one transaction row. */
+export function fetchOnboardingHasData(opts?: {
+  signal?: AbortSignal;
+  /**
+   * When the API has ``ARTH_MOCK_ONBOARDING_ZERO_HAS_DATA`` enabled, pass true so this call
+   * returns real database counts (the wizard uses this after a statement upload to clear the gate).
+   */
+  truth?: boolean;
+}): Promise<OnboardingHasDataResponse> {
+  return get<OnboardingHasDataResponse>(
+    "/api/onboarding/has-data",
+    opts?.truth ? { truth: true } : undefined,
+    { signal: opts?.signal },
+  );
+}
+
 /** GET /api/onboarding/preclassification — raw fields last POSTed (empty until first save). */
 export function fetchOnboardingPreclassificationSaved(): Promise<OnboardingPreclassificationSavedResponse> {
   return get<OnboardingPreclassificationSavedResponse>("/api/onboarding/preclassification");
@@ -1010,7 +1027,9 @@ export function patchOnboardingState(
 export type OnboardingDiscoveryStreamRow = {
   sender_email: string
   display_name: string
-  source_type: string
+  instrument_type: string
+  /** Legacy persisted discovery snapshots only */
+  source_type?: string
   email_count_estimate: number
 }
 

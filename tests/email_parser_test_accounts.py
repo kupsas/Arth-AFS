@@ -7,7 +7,7 @@ keeps ``accounts: {}`` so fixtures must supply explicit last-4 → account_id ro
 
 from __future__ import annotations
 
-# HDFC InstaAlerts — matches fixtures under ``tests/fixtures/email_samples/`` (3703 UPI, 1905 CC).
+# HDFC transaction-alert fixtures — matches ``tests/fixtures/email_samples/`` (3703 UPI, 1905 CC).
 HDFC_ALERT_ACCOUNTS: dict[str, dict[str, str]] = {
     "3703": {"account_id": "HDFC_SAL_3703", "source_key": "hdfc_savings"},
     "1905": {"account_id": "HDFC_CC_1905", "source_key": "hdfc_cc_1905"},

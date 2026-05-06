@@ -10,7 +10,7 @@ Steps:
   2. Decrypt attachment with passwords from :mod:`scraper.pdf_passwords` (see ``.env``).
   3. Parse with :class:`~parsers.uploads.hdfc_savings_pdf.HDFCSavingsPdfParser`.
   4. Stamp ``account_id`` / ``source_key`` for savings **3703** from the scraper config
-     (same tail-key pattern as InstaAlerts).
+     (same tail-key pattern as transaction-alert mail).
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 class HDFCCombinedStatementEmailParser(BaseStatementEmailParser):
     """Decrypt and parse HDFC combined monthly statement PDFs."""
 
-    parse_type: ClassVar[str] = "attachment"
+    parse_type: ClassVar[str] = "statement"
 
     def can_parse(self, sender: str, subject: str) -> bool:
         sl = subject.lower()

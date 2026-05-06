@@ -29,6 +29,8 @@
 
 import * as React from "react";
 
+import { useQueryClient } from "@tanstack/react-query";
+
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -51,7 +53,7 @@ import {
   PdfPasswordConfigFields,
   type PdfPasswordConfigFieldsHandle,
 } from "@/components/onboarding/pdf-password-config-fields";
-import { useOnboardingBackfillSources } from "@/hooks/use-onboarding";
+import { useOnboardingBackfillSources, onboardingPreclassificationSavedKey } from "@/hooks/use-onboarding";
 import {
   guardMultilineText,
   guardSingleLineText,
@@ -60,6 +62,14 @@ import {
 } from "@/lib/onboarding-input-validation";
 import { getUserFacingErrorMessage, userMessageFromApiResponseBody } from "@/lib/user-facing-api-error";
 import { ChevronDown } from "lucide-react";
+
+export type PreClassificationFormProps = {
+  /**
+   * Fires when first + last name (trimmed) are both filled in the form — optional parent hooks.
+   * The wizard **Continue** on Config instead looks at what is already **saved** via **Save config**.
+   */
+  onIdentityCompletenessChange?: (complete: boolean) => void
+}
 
 type PreviewResponse = { self_name: string; self_aliases: string[] };
 
@@ -148,7 +158,9 @@ async function savePreclassification(payload: {
   }
 }
 
-export function PreClassificationForm() {
+export function PreClassificationForm(props: PreClassificationFormProps = {}) {
+  const { onIdentityCompletenessChange } = props
+  const queryClient = useQueryClient()
   const { value: d, setValue: setD, clearDraft, restoredFromLocalStorage } = useFormDraft(
     PRECLASS_STORAGE_KEY,
     PRECLASS_DEFAULT,
@@ -183,8 +195,17 @@ export function PreClassificationForm() {
   }, [setD]);
 
   const firstNameInvalid = !d.firstName.trim();
+  const lastNameInvalid = !d.lastName.trim();
   const firstNameLen = d.firstName.length;
   const lastNameLen = d.lastName.length;
+
+  React.useEffect(() => {
+    const ok = Boolean(d.firstName.trim() && d.lastName.trim())
+    onIdentityCompletenessChange?.(ok)
+    return () => {
+      onIdentityCompletenessChange?.(false)
+    }
+  }, [d.firstName, d.lastName, onIdentityCompletenessChange])
 
   // Same splitting rules as save — keeps preview in sync with POST /preclassification.
   const extrasList = React.useMemo(() => splitHintLines(d.extrasRaw), [d.extrasRaw]);
@@ -272,6 +293,10 @@ export function PreClassificationForm() {
       setSaveError("First name is required — add how your bank usually prints your given name(s).");
       return;
     }
+    if (!d.lastName.trim()) {
+      setSaveError("Last name is required too — we use it with your first name to build safe bank-text aliases.");
+      return;
+    }
     setSaving(true);
     try {
       // Identity must succeed first so the PDF preview APIs see your saved name strings.
@@ -283,6 +308,7 @@ export function PreClassificationForm() {
         family_names: familyLines,
         friend_names: friendLines,
       });
+      void queryClient.invalidateQueries({ queryKey: [...onboardingPreclassificationSavedKey] })
       try {
         const payload = pdfSecretsRef.current?.getPayload() ?? {
           pan: null,
@@ -357,7 +383,8 @@ export function PreClassificationForm() {
             placeholder='e.g. "Kuppa"'
             maxLength={ONBOARDING_INPUT_LIMITS.preclassFirstLastChars}
             value={d.lastName}
-            aria-describedby="pc-last-hint"
+            aria-invalid={lastNameInvalid}
+            aria-describedby={lastNameInvalid ? "pc-last-hint pc-last-err" : "pc-last-hint"}
             onChange={(e) =>
               setD((p) => ({
                 ...p,
@@ -370,10 +397,16 @@ export function PreClassificationForm() {
             autoComplete="family-name"
           />
           <p id="pc-last-hint" className="text-xs text-muted-foreground">
-            Optional. Max {ONBOARDING_INPUT_LIMITS.preclassFirstLastChars} characters (
-            {lastNameLen}/{ONBOARDING_INPUT_LIMITS.preclassFirstLastChars}). Do not worry about your
-            last name matching your family — we handle it.
+            Required. Max {ONBOARDING_INPUT_LIMITS.preclassFirstLastChars} characters (
+            {lastNameLen}/{ONBOARDING_INPUT_LIMITS.preclassFirstLastChars}). We pair it with your first
+            name so a bare surname never acts as a risky catch-all in bank text.
           </p>
+          {lastNameInvalid && (
+            <p id="pc-last-err" className="text-xs text-destructive" role="alert">
+              Add your surname here too, then tap <strong>Save config</strong> — we pair it with your first name so
+              we don&apos;t mix you up with someone else who shares the same family name.
+            </p>
+          )}
         </div>
         <div className="grid gap-2">
           <Label htmlFor="pc-extras">Extra aliases (optional)</Label>
@@ -588,7 +621,11 @@ export function PreClassificationForm() {
         )}
       </CardContent>
       <CardFooter>
-        <Button type="button" onClick={() => void onSave()} disabled={saving || !d.firstName.trim()}>
+        <Button
+          type="button"
+          onClick={() => void onSave()}
+          disabled={saving || !d.firstName.trim() || !d.lastName.trim()}
+        >
           {saving ? "Saving…" : "Save config"}
         </Button>
       </CardFooter>

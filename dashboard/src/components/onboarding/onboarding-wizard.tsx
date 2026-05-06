@@ -19,16 +19,21 @@ import { OnboardingOptionalLlmKeys } from "@/components/onboarding/onboarding-op
 import { PreClassificationForm } from "@/components/onboarding/pre-classification-form"
 import { ClassificationBatchReview } from "@/components/onboarding/classification-batch-review"
 import { OnboardingErrorCallout } from "@/components/onboarding/onboarding-error-callout"
-import { StepBackfill, type BackfillProgressSnapshot } from "@/components/onboarding/step-backfill"
+import {
+  StepEmailImport,
+  type BackfillProgressSnapshot,
+} from "@/components/onboarding/step-email-import"
 import { StepDiscovery } from "@/components/onboarding/step-discovery"
 import { StepGapDetection } from "@/components/onboarding/step-gap-detection"
 import { StepPortfolioSummary } from "@/components/onboarding/step-portfolio-summary"
 import { StepPasswordIngredients } from "@/components/onboarding/step-password-ingredients"
 import { StepSummary } from "@/components/onboarding/step-summary"
+import { StepUploadFallback } from "@/components/onboarding/step-upload-fallback"
 import { StepWelcome } from "@/components/onboarding/step-welcome"
 import { Button } from "@/components/ui/button"
 import {
   ApiError,
+  fetchOnboardingHasData,
   fetchOnboardingUnknowns,
   patchOnboardingState,
   postOnboardingBackfillResume,
@@ -37,11 +42,13 @@ import {
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { humanizeSourceKey } from "@/lib/source-label"
+import { metricsKeys } from "@/hooks/use-metrics"
 import {
   onboardingBackfillSourcesKey,
   onboardingStateKey,
   useOnboardingBackfillSources,
   useOnboardingClassifierStatus,
+  useOnboardingPreclassificationSaved,
   useOnboardingState,
 } from "@/hooks/use-onboarding"
 import { getUserFacingErrorMessage } from "@/lib/user-facing-api-error"
@@ -161,7 +168,7 @@ export function OnboardingWizard({
   const sourcesQ = useOnboardingBackfillSources()
   const classifierStatusQ = useOnboardingClassifierStatus()
   const hasBrokerSource = React.useMemo(
-    () => (sourcesQ.data ?? []).some((s) => (s.source_type || "").toLowerCase() === "broker"),
+    () => (sourcesQ.data ?? []).some((s) => (s.instrument_type || "").toLowerCase() === "broker"),
     [sourcesQ.data],
   )
   const stepMeta = React.useMemo(
@@ -200,8 +207,19 @@ export function OnboardingWizard({
   const [bfError, setBfError] = React.useState<string | null>(null)
   const [resumeBusy, setResumeBusy] = React.useState(false)
   const [persistRetryBusy, setPersistRetryBusy] = React.useState(false)
+  /**
+   * Set when the user tries to move past **Import mail** but ``GET /has-data`` reports zero
+   * transactions — we highlight the statement upload card and keep them on this step.
+   */
+  const [txnGateBlocked, setTxnGateBlocked] = React.useState(false)
 
   const queryClient = useQueryClient()
+
+  /** Saved Config identity from the server — **Continue** stays off until first name is stored (via **Save config**). */
+  const preSavedQ = useOnboardingPreclassificationSaved({
+    enabled: panel === "preclass",
+  })
+  const preclassConfigHasFirstNameSaved = Boolean(preSavedQ.data?.first_name?.trim())
 
   const handleDiscoveryContinue = React.useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: [...onboardingBackfillSourcesKey] })
@@ -228,6 +246,36 @@ export function OnboardingWizard({
     }
   }, [queryClient])
 
+  /** Skip mail → Coverage / Portfolio, but only if at least one transaction exists for this user. */
+  const handleSkipTowardCoverage = React.useCallback(async () => {
+    setBfError(null)
+    try {
+      const hd = await fetchOnboardingHasData()
+      if (hd.transaction_count === 0) {
+        setTxnGateBlocked(true)
+        window.requestAnimationFrame(() => {
+          document
+            .getElementById("onboarding-statement-fallback")
+            ?.scrollIntoView({ behavior: "smooth", block: "center" })
+        })
+        return
+      }
+      setTxnGateBlocked(false)
+      setUserPanel(hasBrokerSource ? "portfolio_summary" : "gaps")
+      await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
+    } catch (e) {
+      setBfError(
+        getUserFacingErrorMessage(e) || "Couldn't verify your imported data. Try again.",
+      )
+    }
+  }, [hasBrokerSource, queryClient])
+
+  React.useEffect(() => {
+    if (panel !== "backfill") {
+      setTxnGateBlocked(false)
+    }
+  }, [panel])
+
   const activeSourceKey = sourcesQ.data?.[bfSourceIdx]?.source_key ?? null
   const activeSourceLabel = activeSourceKey ? humanizeSourceKey(activeSourceKey) : null
 
@@ -246,6 +294,39 @@ export function OnboardingWizard({
     backfillSourcesLen > 0 &&
     bfSourceIdx === backfillSourcesLen - 1 &&
     bfProgress?.status === "complete"
+
+  /** After a successful statement upload during onboarding, refresh counts and maybe clear the gate. */
+  const handleStatementImportComplete = React.useCallback(async () => {
+    await queryClient.invalidateQueries({ queryKey: metricsKeys.all })
+    await queryClient.invalidateQueries({ queryKey: ["transactions"] })
+    try {
+      // ``truth`` bypasses the optional dev mock on ``GET /has-data`` so we see rows just written.
+      const hd = await fetchOnboardingHasData({ truth: true })
+      if (hd.transaction_count > 0) {
+        setTxnGateBlocked(false)
+        /**
+         * Advance when there is nothing left to wait on from **mail**:
+         * - No configured mail sources → upload was the only path.
+         * - Or every mail source finished → same gate as auto-advance after SSE.
+         * Then require zero classification unknowns so we do not skip the review pause.
+         */
+        const mailPipelineQuiet =
+          backfillSourcesLen === 0 || allMailSourcesFinished
+        if (!mailPipelineQuiet) return
+        try {
+          const unknownSnap = await fetchOnboardingUnknowns({ limit: 1, offset: 0 })
+          if (unknownSnap.pending_total === 0) {
+            setUserPanel(hasBrokerSource ? "portfolio_summary" : "gaps")
+            await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
+          }
+        } catch {
+          /* non-fatal — user can use Continue to coverage */
+        }
+      }
+    } catch {
+      /* non-fatal — user can retry */
+    }
+  }, [queryClient, allMailSourcesFinished, hasBrokerSource, backfillSourcesLen])
 
   /** Matches server ``effective_onboarding_unknown_threshold`` (pause ~20). */
   const unknownPauseThreshold = classifierStatusQ.data?.unknown_threshold ?? 20
@@ -352,15 +433,40 @@ export function OnboardingWizard({
       setBfError(null)
       const currentList = sourcesQ.data
       if (!currentList?.length) {
-        setUserPanel("gaps")
-        return
-      }
-      const sk = currentList[bfSourceIdx]?.source_key
-      if (!sk) {
-        setUserPanel("gaps")
         return
       }
 
+      /**
+       * Wizard rule: do not send someone to Coverage with **zero** transactions — they would
+       * only see empty charts. Mail import alone might yield nothing; statement upload fixes that.
+       */
+      async function requireTransactionsOrGate(): Promise<boolean> {
+        try {
+          const hd = await fetchOnboardingHasData({ signal })
+          if (signal.aborted) return false
+          if (hd.transaction_count === 0) {
+            setTxnGateBlocked(true)
+            return false
+          }
+          setTxnGateBlocked(false)
+          return true
+        } catch {
+          if (signal.aborted) return false
+          setTxnGateBlocked(true)
+          return false
+        }
+      }
+
+      const sk = currentList[bfSourceIdx]?.source_key
+      if (!sk) {
+        if (!(await requireTransactionsOrGate())) {
+          await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
+          return
+        }
+        setUserPanel(hasBrokerSource ? "portfolio_summary" : "gaps")
+        await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
+        return
+      }
       /**
        * When this run advances to the next source (setBfSourceIdx), the finally block must
        * NOT clear bfChunkPosting — the new source's run() sets it true and the old finally
@@ -419,6 +525,10 @@ export function OnboardingWizard({
             }
             if (signal.aborted) return
             if (pendingGlobal > 0) {
+              await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
+              return
+            }
+            if (!(await requireTransactionsOrGate())) {
               await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
               return
             }
@@ -670,7 +780,7 @@ export function OnboardingWizard({
                     onSaved={() => void handlePasswordGateResolved()}
                   />
                 )}
-                <StepBackfill
+                <StepEmailImport
                   title={activeSourceLabel ?? activeSourceKey ?? "…"}
                   progress={bfProgress}
                   error={bfError}
@@ -679,6 +789,7 @@ export function OnboardingWizard({
                   onResumeFromPause={bfProgress?.status === "paused" ? handleResumePause : undefined}
                   resumeBusy={resumeBusy}
                   importBusy={bfChunkPosting}
+                  showStatementUploadLink
                 />
                 <ClassificationBatchReview
                   importAwaitingClassification={bfProgress?.status === "needs_classification"}
@@ -699,21 +810,22 @@ export function OnboardingWizard({
                   type="button"
                   variant="ghost"
                   size="sm"
-                  onClick={() =>
-                    setUserPanel(hasBrokerSource ? "portfolio_summary" : "gaps")
-                  }
+                  onClick={() => void handleSkipTowardCoverage()}
                 >
                   Skip remaining mail → gap check
                 </Button>
               </>
             )}
+            {!sourcesQ.isLoading && !persistSourcesWait && (
+              <StepUploadFallback
+                gateBlocked={txnGateBlocked}
+                mailImportBusy={mailImportActivelyProcessing}
+                onImportComplete={() => void handleStatementImportComplete()}
+              />
+            )}
             {!sourcesQ.data?.length && !persistSourcesWait && (
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => setUserPanel(hasBrokerSource ? "portfolio_summary" : "gaps")}
-              >
-                Skip to gap check
+              <Button type="button" variant="secondary" onClick={() => void handleSkipTowardCoverage()}>
+                Continue to coverage
               </Button>
             )}
           </div>
@@ -729,11 +841,32 @@ export function OnboardingWizard({
           <Button type="button" variant="ghost" onClick={() => goBack()} disabled={!canBack}>
             Back
           </Button>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             {panel === "preclass" && (
-              <Button type="button" onClick={() => setUserPanel("apikey")}>
-                Continue
-              </Button>
+              <>
+                {!preclassConfigHasFirstNameSaved && !preSavedQ.isLoading && (
+                  <p
+                    id="preclass-continue-hint"
+                    className="basis-full text-right text-sm text-muted-foreground sm:basis-auto sm:mr-auto sm:text-left"
+                  >
+                    Add your first name above, then tap <strong>Save config</strong> once — after that,{" "}
+                    <strong>Continue</strong> is ready. We use it to recognise how your bank spells you in
+                    transaction descriptions and PDFs.
+                  </p>
+                )}
+                <Button
+                  type="button"
+                  onClick={() => setUserPanel("apikey")}
+                  disabled={!preclassConfigHasFirstNameSaved || preSavedQ.isLoading}
+                  aria-describedby={
+                    !preclassConfigHasFirstNameSaved && !preSavedQ.isLoading
+                      ? "preclass-continue-hint"
+                      : undefined
+                  }
+                >
+                  Continue
+                </Button>
+              </>
             )}
             {panel === "apikey" && (
               <Button type="button" onClick={() => setUserPanel("backfill")}>
