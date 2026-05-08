@@ -901,7 +901,9 @@ def update_goal(
 
     goal.updated_at = datetime.datetime.now(datetime.UTC)
     session.add(goal)
-    session.flush()
+    # Commit the goal update first so the write transaction is closed before
+    # the activation check, which may do its own reads and writes.
+    session.commit()
 
     new_activation = goal.activation_status
     if new_activation == "COMPLETED" and old_activation != "COMPLETED":

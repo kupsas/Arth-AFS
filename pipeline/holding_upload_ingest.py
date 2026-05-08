@@ -14,7 +14,6 @@ from sqlmodel import Session
 
 from pipeline.holding_pipeline import ingest_holdings, ingest_investment_transactions
 from pipeline.holding_parsers import HOLDING_PARSER_REGISTRY
-from parsers.holdings.icici_direct_contract_note import parse_icici_direct_trade_pdf
 from parsers.holdings.icici_direct_equity_statement_pdf import (
     parse_icici_direct_equity_statement_pdf,
 )
@@ -26,12 +25,10 @@ logger = logging.getLogger(__name__)
 
 _VALID_HOLDING_UPLOAD_TYPES = frozenset(
     {
-        "icici_direct_equity",
         "icici_direct_mf",
         "icici_ppf",
         "icici_direct_equity_statement_pdf",
         "icici_direct_mf_statement_pdf",
-        "icici_direct_contract_note",
         "icici_ppf_pdf",
     }
 )
@@ -74,11 +71,6 @@ def ingest_portfolio_file(
         txns = parse_icici_direct_mf_statement_pdf(path)
         holdings = derive_mf_holdings(txns)
         h_stats = ingest_holdings(session, holdings, user_id=user_id, dry_run=False)
-        inv_stats = ingest_investment_transactions(session, txns, user_id=user_id, dry_run=False)
-        return {"holdings": h_stats, "investment_txns": inv_stats}
-
-    if sk == "icici_direct_contract_note":
-        txns = parse_icici_direct_trade_pdf(path)
         inv_stats = ingest_investment_transactions(session, txns, user_id=user_id, dry_run=False)
         return {"holdings": h_stats, "investment_txns": inv_stats}
 

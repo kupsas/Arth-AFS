@@ -668,13 +668,13 @@ def test_holdings_import_multipart(client: TestClient, engine):
         Path(__file__).resolve().parent
         / "fixtures"
         / "holdings"
-        / "icici_portfolio_summary_min.csv"
+        / "icici_mf_min.csv"
     )
     raw = csv_path.read_bytes()
-    files = {"files": ("icici_portfolio_summary_min.csv", io.BytesIO(raw), "text/csv")}
-    data = {"source": "icici_direct_equity", "user_id": "sashank"}
+    files = {"files": ("icici_mf_min.csv", io.BytesIO(raw), "text/csv")}
+    data = {"source": "icici_direct_mf", "user_id": "sashank"}
     r = client.post("/api/holdings/import", files=files, data=data)
     assert r.status_code == 200
     out = r.json()
-    assert out["source"] == "icici_direct_equity"
+    assert out["source"] == "icici_direct_mf"
     assert "holdings_stats" in out

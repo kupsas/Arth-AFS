@@ -23,7 +23,7 @@ import type {
   ToolCallUi,
 } from "@/lib/chat-types";
 import { normalizeOpenAiMessagesToUi } from "@/lib/chat-types";
-import { fetchChatSession, fetchWsTicket } from "@/lib/api";
+import { fetchChatSession, fetchWsTicket, type ProviderFailurePayload } from "@/lib/api";
 
 export type ChatConnectionStatus =
   | "idle"
@@ -73,6 +73,12 @@ export function useChat(
   /** Tools in the current ReAct step after ``toolsMarkRef`` (in-flight, for the live lane). */
   const [liveWipTools, setLiveWipTools] = useState<ToolCallUi[]>([]);
   const [lastError, setLastError] = useState<string | null>(null);
+  /** Every LiteLLM model in the chain failed — structured reasons from ``agent_paused`` WS frame. */
+  const [agentPausedFailures, setAgentPausedFailures] = useState<ProviderFailurePayload[] | null>(
+    null,
+  );
+  /** Last user message text — used to retry after fixing keys without retyping. */
+  const lastUserMessageRef = useRef<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   /**
@@ -449,6 +455,25 @@ export function useChat(
           return;
         }
 
+        if (typ === "agent_paused") {
+          const raw = (data as { failures?: unknown }).failures;
+          const failures = Array.isArray(raw)
+            ? (raw as ProviderFailurePayload[])
+            : [];
+          setAgentPausedFailures(failures.length ? failures : null);
+          setIsGenerating(false);
+          setIsResponseStreaming(false);
+          setLiveTools([]);
+          isThinkingLiveRef.current = false;
+          setLiveThinking("");
+          setIsThinking(false);
+          turnThinkingRef.current = "";
+          resetTurnActivity();
+          liveAssistantRef.current = null;
+          streamDraftIdRef.current = null;
+          return;
+        }
+
         if (typ === "error") {
           const msg = String(data.message ?? "Error");
           liveAssistantRef.current = null;
@@ -518,6 +543,9 @@ export function useChat(
     const content = raw.trim();
     if (!content) return;
 
+    lastUserMessageRef.current = content;
+    setAgentPausedFailures(null);
+
     setMessages((prev) => [
       ...prev,
       { id: uuid(), role: "user", content },
@@ -538,6 +566,15 @@ export function useChat(
     ws.send(JSON.stringify(payload));
   }, [resetTurnActivity]);
 
+  const clearAgentPaused = useCallback(() => {
+    setAgentPausedFailures(null);
+  }, []);
+
+  const retryLastUserMessage = useCallback(() => {
+    const t = lastUserMessageRef.current;
+    if (t) sendMessage(t);
+  }, [sendMessage]);
+
   const stopGenerating = useCallback(() => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -556,6 +593,9 @@ export function useChat(
     liveActivitySegments,
     liveWipTools,
     lastError,
+    agentPausedFailures,
+    clearAgentPaused,
+    retryLastUserMessage,
     sendMessage,
     stopGenerating,
   };

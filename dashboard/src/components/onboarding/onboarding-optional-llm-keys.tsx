@@ -84,7 +84,7 @@ const PROVIDER_ROWS: Array<{
 }> = [
   {
     field: "google",
-    label: "Google AI (optional)",
+    label: "Google AI",
     hint: "Google AI Studio / Cloud console.",
     inputId: "llm-google",
     placeholder: "Google API key",
@@ -92,7 +92,7 @@ const PROVIDER_ROWS: Array<{
   },
   {
     field: "anthropic",
-    label: "Anthropic (optional)",
+    label: "Anthropic",
     hint: (
       <>
         console.anthropic.com (often <span className="font-mono">sk-ant-</span>).
@@ -104,7 +104,7 @@ const PROVIDER_ROWS: Array<{
   },
   {
     field: "openai",
-    label: "OpenAI (optional)",
+    label: "OpenAI",
     hint: (
       <>
         platform.openai.com (<span className="font-mono">sk-</span>…).
@@ -164,7 +164,7 @@ export function OnboardingOptionalLlmKeys() {
     if (g) body.google_api_key = g;
     if (Object.keys(body).length === 0) {
       setMsg(
-        "Paste your API key in the field you opened with “Add”, then click “Save key”.",
+        "Open a provider above with “Add”, paste the key, then click “Save key”.",
       );
       return;
     }
@@ -177,7 +177,7 @@ export function OnboardingOptionalLlmKeys() {
       setGoogle("");
       setAddExpanded(null);
       setMsg(
-        "Saved — keys are encrypted at rest. Use “Remove” if you want to delete one.",
+        "Saved. Key is encrypted at rest — use “Remove” if you ever need to delete it.",
       );
     } catch (e) {
       setErr(getUserFacingErrorMessage(e) || "Couldn't save keys. Try again.");
@@ -231,10 +231,11 @@ export function OnboardingOptionalLlmKeys() {
   return (
     <Card className="mx-auto w-full max-w-2xl">
       <CardHeader className="space-y-2">
-        <CardTitle>Optional: smarter auto-labels</CardTitle>
+        <CardTitle>Add an AI key to continue</CardTitle>
         <CardDescription>
-          Add an API key if you want cloud help labeling messy bank text. Skip to stay fully local
-          (more manual fixes later).
+          Auto-labelling without an AI key is genuinely bad. Our built-in sorting rules handle
+          clear cases, but messy merchant names and edge cases trip them up — badly. One key below
+          fixes this. Takes 30 seconds, costs almost nothing.
         </CardDescription>
       </CardHeader>
 
@@ -246,51 +247,27 @@ export function OnboardingOptionalLlmKeys() {
         )}
         {statusQ.isError && (
           <p className="text-sm text-destructive" role="alert">
-            Couldn&apos;t load saved-key status. You can still paste keys and save — nothing was blocked.
+            Couldn&apos;t load key status. You can still paste a key and save.
           </p>
         )}
         {!loadingStatus && st?.has_any_api_key && (
           <p className="text-sm text-muted-foreground rounded-md border border-border bg-muted/40 px-3 py-2">
-            You already have a classifier key on file — you don&apos;t need to paste again unless you
-            replace it (remove first, then add).
+            Key saved — you&apos;re good to go. Remove and re-add below if you want to swap providers.
           </p>
         )}
 
-        <div className="space-y-3 text-sm text-muted-foreground leading-relaxed">
+        <div className="space-y-1 text-sm text-muted-foreground leading-relaxed">
           <p>
-            When you continue, Arth will fetch bank alert emails and parse transactions.{" "}
-            Every classification starts with a{" "}
-            <strong className="text-foreground">local rules engine</strong>. If you add an API key below,
-            only rows that still need help may be sent to a cloud model; if you skip keys, we never
-            call an external model for this step.
-          </p>
-          <p>
-            <strong className="text-foreground">Without a cloud key,</strong> we never call an
-            external model: you still get an automatic first pass, but you&apos;ll spend more time in
-            the review step fixing labels.
-
-            <strong className="text-foreground">With a key,</strong> a small cloud model fills the
-            fuzzy bits (weird merchant text, edge cases). Same pipeline — the difference is how much
-            automation you get before you touch the rows yourself.
-          </p>
-          <p>
-            <strong className="text-foreground">Overall classification quality (indicative):</strong>{" "}
-            think <strong className="text-foreground">~{acc.rulesOnly}%</strong> of labels looking right
-            without any cloud help vs <strong className="text-foreground">~{acc.withCloudModel}%</strong>{" "}
-            when the cloud step runs.
-          </p>
-          <p>
-            <strong className="text-foreground">Cost (indicative):</strong> expect on the order of{" "}
-            <strong className="text-foreground">~{cloudRowsPer1k}</strong> cloud-classified rows per{" "}
-            <strong className="text-foreground">1,000</strong> transactions; classifying that slice is
-            about <strong className="text-foreground">{formatUsd(costForCloudSlice, 3)}</strong> at
-            March 2026 API rates.
+            Cost:{" "}
+            <strong className="text-foreground">~{cloudRowsPer1k}</strong> AI-assisted rows per
+            1,000 transactions ≈{" "}
+            <strong className="text-foreground">{formatUsd(costForCloudSlice, 3)}</strong>.
           </p>
         </div>
 
         <section className="space-y-3" aria-labelledby="llm-keys-form-heading">
           <h3 id="llm-keys-form-heading" className="text-sm font-semibold">
-            Add a key (optional)
+            Choose a provider
           </h3>
           <div className="grid gap-4">
             {PROVIDER_ROWS.map(({ field, label, hint, inputId, placeholder, shortName }) => {

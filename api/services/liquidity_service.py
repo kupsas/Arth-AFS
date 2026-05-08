@@ -21,6 +21,7 @@ from api.models import Goal, Holding
 from api.services.net_worth import holding_value
 from api.services.nps_exit_projection import nps_normal_exit_date, parse_subscriber_dob_from_env
 from api.services.ppf_maturity import effective_ppf_maturity_date
+from pipeline.isin_nse_resolver import is_curated_ignored_holding_row
 from pipeline.models import AssetClass
 
 # Conservative sentinel when we cannot infer a real liquidity date (under-count accessible).
@@ -280,6 +281,7 @@ def refresh_all_liquidity_dates(session: Session, user_id: str, today: datetime.
             )
         ).all()
     )
+    rows = [h for h in rows if not is_curated_ignored_holding_row(h)]
 
     updated = 0
     unchanged = 0
@@ -356,6 +358,7 @@ def liquidity_summary(session: Session, user_id: str, today: datetime.date | Non
             )
         ).all()
     )
+    rows = [h for h in rows if not is_curated_ignored_holding_row(h)]
 
     totals: dict[str, float] = {k: 0.0 for k in _SUMMARY_BUCKET_META}
     counts: dict[str, int] = {k: 0 for k in _SUMMARY_BUCKET_META}
@@ -417,6 +420,7 @@ def match_holdings_to_goal(session: Session, goal_id: int, user_id: str, today: 
             )
         ).all()
     )
+    rows = [h for h in rows if not is_curated_ignored_holding_row(h)]
 
     matched: list[HoldingLiquidityDetail] = []
     total = 0.0

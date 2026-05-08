@@ -27,6 +27,7 @@ from agent.events import (
 )
 from agent.llm import chat_completion, streaming_chat_completion
 from agent.memory import ConversationMemory
+from pipeline.llm_errors import AgentPausedError
 from agent.prompts import load_system_prompt
 from agent.run_logger import AgentRunLogger
 from agent.security.output_sanitizer import wrap_tool_output
@@ -247,6 +248,8 @@ async def run_agent_turn(
                 on_thinking_delta=_emit_thinking_delta,
                 on_thinking_done=_emit_thinking_done,
             )
+        except AgentPausedError:
+            raise
         except Exception as e:
             logger.warning(
                 "Streaming completion failed (%s) — falling back to non-streaming",

@@ -55,6 +55,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  ClassifierPausedApiError,
   fetchOnboardingUnknowns,
   fetchPipelineRunUnknowns,
   postOnboardingClassify,
@@ -62,6 +63,7 @@ import {
   streamOnboardingBackfill,
   type OnboardingClassifyItem,
   type OnboardingUnknownTxnBrief,
+  type ProviderFailurePayload,
 } from "@/lib/api";
 import { COUNTERPARTY_CATEGORY_OPTIONS } from "@/lib/counterparty-categories";
 import {
@@ -201,6 +203,11 @@ export type ClassificationBatchReviewProps = {
    * Use to sync external UI (e.g. the statement upload summary) with the live review backlog.
    */
   onPendingTotalChange?: (pendingTotal: number) => void;
+  /**
+   * Resume-after-classify SSE hit ``classifier_paused`` — every smart-label provider failed.
+   * Parent shows ``ProviderPausedDialog`` so the user can fix keys or retry.
+   */
+  onClassifierImportPaused?: (failures: ProviderFailurePayload[]) => void;
 };
 
 export function ClassificationBatchReview({
@@ -218,6 +225,7 @@ export function ClassificationBatchReview({
   pauseThresholdForShortcuts,
   lastKnownProgress = null,
   onPendingTotalChange,
+  onClassifierImportPaused,
 }: ClassificationBatchReviewProps) {
   const scopedSource = source?.trim() || undefined;
   const reviewRunId = pipelineRunId != null && pipelineRunId > 0 ? pipelineRunId : null;
@@ -483,7 +491,11 @@ export function ClassificationBatchReview({
         onQueueCleared?.();
       }
     } catch (e) {
-      setError(getUserFacingErrorMessage(e) || "Couldn't save your changes.");
+      if (e instanceof ClassifierPausedApiError && e.failures.length) {
+        onClassifierImportPaused?.(e.failures);
+      } else {
+        setError(getUserFacingErrorMessage(e) || "Couldn't save your changes.");
+      }
       // Reload the real state so the user can retry.
       void reloadQueueAfterMutation();
     } finally {
@@ -532,7 +544,11 @@ export function ClassificationBatchReview({
         onQueueCleared?.();
       }
     } catch (e) {
-      setError(getUserFacingErrorMessage(e) || "Couldn't apply that bulk change.");
+      if (e instanceof ClassifierPausedApiError && e.failures.length) {
+        onClassifierImportPaused?.(e.failures);
+      } else {
+        setError(getUserFacingErrorMessage(e) || "Couldn't apply that bulk change.");
+      }
       void reloadQueueAfterMutation();
     } finally {
       setBusy(false);

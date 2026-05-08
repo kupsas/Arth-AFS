@@ -61,7 +61,7 @@ Please do the following:
 
 3. From the repo root, if `.env` doesn’t exist yet, copy the template:
    cp .env.example .env
-   Tell me I can edit `.env` later if I want Ask Arth or auto-categorisation (optional API keys are documented in the comments there).
+   Tell me that the onboarding will ask for an AI API key (Google, Anthropic, or OpenAI) — this is required for auto-labelling to work well. If I also want Ask Arth (the chat), I can add those keys in `.env` (documented in the comments there).
 
 4. Start the stack (first run builds images — it may take a few minutes):
    docker compose up --build
@@ -80,7 +80,7 @@ If anything errors, show me the command and the message, fix what you can, and e
 ```bash
 git clone https://github.com/kupsas/Arth-AFS.git
 cd Arth-AFS
-cp .env.example .env   # optional: edit for Ask Arth / auto-categorisation
+cp .env.example .env   # optional: edit for Ask Arth (onboarding handles auto-labelling keys)
 docker compose up --build
 ```
 

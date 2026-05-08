@@ -1,8 +1,9 @@
 """
 Optional ICICI ↔ NSE symbol overrides (manual JSON).
 
-- **NSE bhavcopy** (see :func:`pipeline.isin_nse_resolver.lookup_isin_from_nse_bhav`) is
-  the primary ISIN → symbol source for new imports.
+- **Consolidated bhav map** (see :func:`pipeline.isin_nse_resolver.lookup_isin_from_nse_bhav`)
+  is the primary ISIN → symbol source for new imports (built from ``data/.nse_cache`` and
+  refreshed on each price run).
 - **Overrides** in ``data/icici_nse_symbol_overrides.json`` (gitignored — copy from
   ``*.example.json``) pin exceptions: ISINs missing from bhav (delisted), or ICICI short
   codes not in :data:`parsers.holdings.icici_direct_equity.ICICI_SHORT_TO_NSE`.

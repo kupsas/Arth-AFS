@@ -35,6 +35,7 @@ from pipeline.models import (
     TxnType,
     UPIType,
 )
+from pipeline.llm_errors import ClassifierPausedError, ProviderFailure, classify_provider_sdk_error
 from pipeline.prompts import batch_classify_prompt
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,32 @@ def _has_any_provider_api_key() -> bool:
         or (_cfg.ANTHROPIC_API_KEY or "").strip()
         or (_cfg.GOOGLE_API_KEY or "").strip()
     )
+
+
+def _provider_has_api_key(provider: str) -> bool:
+    """True if ``provider`` has a non-empty API key on :mod:`pipeline.config` (call time)."""
+    if provider == "openai":
+        return bool((_cfg.OPENAI_API_KEY or "").strip())
+    if provider == "anthropic":
+        return bool((_cfg.ANTHROPIC_API_KEY or "").strip())
+    if provider == "google":
+        return bool((_cfg.GOOGLE_API_KEY or "").strip())
+    return False
+
+
+def _auto_fallback_chain() -> list[str]:
+    """``LLM_FALLBACK_CHAIN`` restricted to providers that actually have keys.
+
+    In ``auto`` mode we historically tried Gemini → Claude → OpenAI on every batch.
+    Users who only pasted an OpenAI key still paid three warning logs (and latency)
+    before the working model.  Filter so we only attempt providers we can authenticate.
+    """
+    chain: list[str] = []
+    for model_key in LLM_FALLBACK_CHAIN:
+        provider, _model_id = LLM_MODEL_MAP[model_key]
+        if _provider_has_api_key(provider):
+            chain.append(model_key)
+    return chain
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +100,9 @@ def classify_llm(
 
     Supports three modes via ``LLM_MODEL``:
       - ``"none"``  — skip LLM entirely (rules-only)
-      - ``"auto"``  — use the fallback chain (try models in order)
+      - ``"auto"``  — try models in :data:`~pipeline.config.LLM_FALLBACK_CHAIN` order,
+        but **only** for providers that have a non-empty API key (no wasted Gemini/Claude
+        attempts when you only configured OpenAI, and vice versa).
       - a specific model key — use exactly that model, no fallback
 
     ``on_batch_complete(processed, total)`` is invoked after each batch (including
@@ -110,7 +139,14 @@ def classify_llm(
                 len(work), num_batches)
 
     if llm_model == "auto":
-        model_chain = LLM_FALLBACK_CHAIN
+        model_chain = _auto_fallback_chain()
+        if not model_chain:
+            logger.warning(
+                "LLM: auto mode but no fallback models match configured API keys — skipping"
+            )
+            if on_batch_complete:
+                on_batch_complete(0, 0)
+            return txns
         logger.debug("LLM: auto mode — fallback chain: %s", " → ".join(model_chain))
     else:
         if llm_model not in LLM_MODEL_MAP:
@@ -138,11 +174,8 @@ def classify_llm(
             continue
 
         results = _call_with_fallback(model_chain, items)
-        if results is not None:
-            _save_cache_for_key(cache_key, results)
-            _apply_results(txns, indices, items, results)
-        else:
-            logger.warning("LLM: all models failed for batch starting at index %d", batch_start)
+        _save_cache_for_key(cache_key, results)
+        _apply_results(txns, indices, items, results)
         processed += len(batch)
         if on_batch_complete:
             on_batch_complete(processed, total_work)
@@ -153,9 +186,14 @@ def classify_llm(
 def _call_with_fallback(
     model_chain: list[str],
     items: list[dict],
-) -> list[dict] | None:
-    """Try each model in the chain until one returns valid results."""
+) -> list[dict]:
+    """Try each model in the chain until one returns valid JSON results.
+
+    Collects a :class:`ProviderFailure` for each attempt (HTTP errors and empty parses).
+    If every model fails, raises :class:`ClassifierPausedError` with the full list.
+    """
     system_msg, user_msg = batch_classify_prompt(items)
+    failures: list[ProviderFailure] = []
 
     for model_key in model_chain:
         provider, model_id = LLM_MODEL_MAP[model_key]
@@ -171,10 +209,18 @@ def _call_with_fallback(
                 )
                 return results
             logger.warning("LLM: %s returned empty/unparseable response, trying next...", model_key)
+            failures.append(
+                ProviderFailure(
+                    provider,
+                    "other",
+                    "The provider returned empty or unreadable text — try another provider or wait and retry.",
+                )
+            )
         except Exception as e:
             logger.warning("LLM: %s failed: %s, trying next...", model_key, e)
+            failures.append(classify_provider_sdk_error(e, provider))
 
-    return None
+    raise ClassifierPausedError(failures)
 
 
 # ---------------------------------------------------------------------------

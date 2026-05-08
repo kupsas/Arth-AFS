@@ -15,7 +15,9 @@ from __future__ import annotations
 import argparse
 import datetime
 import logging
+import math
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -33,8 +35,10 @@ from parsers.holdings.nps import NPS_CANONICAL_HOLDING_NAME, PLATFORM as NPS_CRA
 from pipeline.investment_txn_linking import (
     find_holding_id_for_parsed_txn,
     link_unlinked_investment_transactions,
+    parse_mf_txn_notes,
 )
 from pipeline.models import AssetClass, InvestmentTxnType, LiquidityClass, ValuationMethod
+from pipeline.isin_nse_resolver import is_curated_ignored_security
 
 logger = logging.getLogger(__name__)
 
@@ -200,29 +204,194 @@ def _upsert_holding_value_snapshot(
     session.add(row)
 
 
+# --- Investment dedupe (email vs CSV / statement upload) -----------------
+# ``price_per_unit`` is intentionally *not* part of the key — parsers round differently
+# for the same trade (e.g. 313.58 vs 313.584106) which must still count as one row.
+_INV_QTY_REL_TOL = 1e-5
+_INV_QTY_ABS_TOL = 1e-4
+_INV_AMT_REL_TOL = 1e-4
+_INV_AMT_ABS_TOL = 1.0  # rupees — covers tiny NAV / fee drift between mail vs statement
+
+# Strip boilerplate so "ELSS … Growth" vs "ELSS … Regular Plan - Growth" still match.
+_MF_DEDUPE_NOISE_TOKENS = frozenset(
+    {
+        "regular",
+        "direct",
+        "plan",
+        "growth",
+        "idcw",
+        "dividend",
+        "mutual",
+        "fund",
+        "ltd",
+        "limited",
+        "managers",
+        "mf",
+    }
+)
+
+
+def _inv_norm_symbol(sym: str | None) -> str | None:
+    s = (sym or "").strip()
+    return s.upper() if s else None
+
+
+def _inv_qty_total_match(parsed_qty: float, parsed_amt: float, row_qty: float, row_amt: float) -> bool:
+    return math.isclose(
+        float(parsed_qty),
+        float(row_qty),
+        rel_tol=_INV_QTY_REL_TOL,
+        abs_tol=_INV_QTY_ABS_TOL,
+    ) and math.isclose(
+        float(parsed_amt),
+        float(row_amt),
+        rel_tol=_INV_AMT_REL_TOL,
+        abs_tol=_INV_AMT_ABS_TOL,
+    )
+
+
+def _folio_from_parsed_txn(t: ParsedInvestmentTxn) -> str | None:
+    """Folio from CSV metadata or ``Folio …`` line in name/notes (same idea as stored MF notes)."""
+    meta = t.metadata or {}
+    raw = meta.get("folio")
+    if raw is not None and str(raw).strip():
+        return str(raw).strip()
+    blob = "\n".join(x for x in (t.name, t.notes) if x and str(x).strip())
+    folio, _hint = parse_mf_txn_notes(blob)
+    return folio.strip() if folio and str(folio).strip() else None
+
+
+def _mf_scheme_token_bag(text: str) -> tuple[str, ...]:
+    """Sorted unique tokens after lowercasing and dropping common scheme boilerplate."""
+    s = re.sub(r"[^a-z0-9]+", " ", (text or "").lower())
+    toks = sorted(
+        {
+            w
+            for w in s.split()
+            if len(w) > 1 and w not in _MF_DEDUPE_NOISE_TOKENS
+        }
+    )
+    return tuple(toks)
+
+
+def _parsed_mf_identity_blob(t: ParsedInvestmentTxn) -> str:
+    """Combined name + notes for MF fingerprinting (folio line stripped downstream)."""
+    return "\n".join(x for x in (t.name, t.notes) if x and str(x).strip())
+
+
+def _mf_folio_or_fingerprint_match(t: ParsedInvestmentTxn, r: InvestmentTransaction) -> bool:
+    """Same MF line from Gmail vs CSV: folio when both sides have it; else scheme token-bag (+ folio substring check)."""
+    fp = _folio_from_parsed_txn(t)
+    fr, db_hint = parse_mf_txn_notes(r.notes)
+    fr = fr.strip() if fr and str(fr).strip() else None
+
+    if fp and fr:
+        return fp == fr
+
+    _, p_hint = parse_mf_txn_notes(_parsed_mf_identity_blob(t))
+    p_key = (p_hint or _parsed_mf_identity_blob(t)).strip()
+    d_key = (db_hint or (r.notes or "")).strip()
+    if _mf_scheme_token_bag(p_key) != _mf_scheme_token_bag(d_key):
+        return False
+    if fp and not fr:
+        return fp in re.sub(r"\s+", "", d_key)
+    if fr and not fp:
+        return fr in re.sub(r"\s+", "", p_key)
+    return True
+
+
+def _is_mf_duplicate_style(t: ParsedInvestmentTxn, parsed_sym: str | None, db_sym: str | None) -> bool:
+    plat = (t.account_platform or "").upper()
+    if " MF" in plat or plat.endswith("MF") or "MUTUAL" in plat:
+        return True
+    if "PPF" in plat:
+        return True
+    if parsed_sym and parsed_sym.isdigit():
+        return True
+    if db_sym and db_sym.isdigit():
+        return True
+    return False
+
+
+def _parsed_isin_upper(t: ParsedInvestmentTxn) -> str | None:
+    """ISIN from parser metadata (ICICI equity statement PDF legs carry this when NSE symbol is blank)."""
+    raw = (t.metadata or {}).get("isin")
+    if raw is None or not str(raw).strip():
+        return None
+    s = str(raw).strip().upper()
+    # Indian ISINs: equities ``INE*``, ETFs / funds ``INF*``, etc. (ISO 6166, 12 chars).
+    if len(s) == 12 and s.startswith("IN") and s[2].isalpha() and s[2].isascii():
+        return s
+    return None
+
+
+def _is_icici_direct_equity_blank_symbol(t: ParsedInvestmentTxn, ps: str | None, rs: str | None) -> bool:
+    """ICICI Direct equity rows where the NSE ticker never resolved — overlap across statement PDFs."""
+    if ps or rs:
+        return False
+    return (t.account_platform or "").strip().upper() == "ICICI DIRECT"
+
+
+def _equity_icici_blank_symbol_identity_match(t: ParsedInvestmentTxn, r: InvestmentTransaction) -> bool:
+    """Match statement orphans: ISIN line in DB notes, else same company-name token bag as MF logic."""
+    p_isin = _parsed_isin_upper(t)
+    db_blob = (r.notes or "").strip().upper()
+    if p_isin and p_isin in db_blob.replace(" ", ""):
+        return True
+    p_blob = "\n".join(x for x in (t.name, t.notes) if x and str(x).strip())
+    d_blob = (r.notes or "").strip()
+    bag_p = _mf_scheme_token_bag(p_blob)
+    bag_d = _mf_scheme_token_bag(d_blob)
+    if len(bag_p) < 2 or len(bag_d) < 2:
+        return False
+    return bag_p == bag_d
+
+
+def _investment_txn_row_matches_parsed(t: ParsedInvestmentTxn, r: InvestmentTransaction) -> bool:
+    """True when ``r`` is the same economic event as parsed ``t`` (skip insert, log duplicate)."""
+    if not _inv_qty_total_match(t.quantity, t.total_amount, r.quantity, r.total_amount):
+        return False
+
+    ps = _inv_norm_symbol(t.symbol)
+    rs = _inv_norm_symbol(r.symbol)
+
+    if ps and rs and ps == rs:
+        return True
+
+    if _is_mf_duplicate_style(t, ps, rs):
+        if ps and rs and ps != rs:
+            return False
+        return _mf_folio_or_fingerprint_match(t, r)
+
+    if _is_icici_direct_equity_blank_symbol(t, ps, rs):
+        return _equity_icici_blank_symbol_identity_match(t, r)
+
+    return False
+
+
 def investment_txn_exists(session: Session, t: ParsedInvestmentTxn) -> bool:
-    """Dedup: date + platform + type + amounts + symbol (or notes when symbol is null)."""
+    """Return True if an equivalent ledger row already exists (any ``source_type``).
+
+    Dedupe key (aggressive, email vs statement upload):
+      * Same ``txn_date``, ``account_platform``, ``txn_type``
+      * Quantity + ``total_amount`` close (tolerances — not ``price_per_unit``)
+      * **Equity / symbol rows:** same normalized ``symbol``
+      * **ICICI Direct equity, blank ticker:** same **ISIN** (from parsed metadata vs ``notes``) or
+        same **name token fingerprint** (overlapping ICICI PDFs often repeat the same line with no
+        NSE symbol resolved)
+      * **MF-style (platform name, AMFI digit symbol, or blank symbol):** same folio when both
+        sides have it; otherwise same **scheme fingerprint** (token bag after stripping boilerplate)
+
+    When this returns True, :func:`ingest_investment_transactions` skips the insert — no merge /
+    reconciliation of the existing row.
+    """
     stmt = select(InvestmentTransaction).where(
         InvestmentTransaction.txn_date == t.txn_date,
         InvestmentTransaction.account_platform == t.account_platform,
         InvestmentTransaction.txn_type == t.txn_type,
-        InvestmentTransaction.quantity == t.quantity,
-        InvestmentTransaction.total_amount == t.total_amount,
-        InvestmentTransaction.price_per_unit == t.price_per_unit,
     )
-    if t.symbol:
-        stmt = stmt.where(InvestmentTransaction.symbol == t.symbol)
     rows = list(session.exec(stmt).all())
-    if not rows:
-        return False
-    if not t.symbol:
-        n = (t.name or "").strip()
-        for r in rows:
-            rn = (r.notes or "").strip()
-            if n and (n in rn or rn.endswith(n)):
-                return True
-        return False
-    return True
+    return any(_investment_txn_row_matches_parsed(t, r) for r in rows)
 
 
 def ingest_holdings(
@@ -285,9 +454,10 @@ def ingest_holdings(
             session.add(h)
             inserted += 1
             target_row = h
-        # So the next row in this batch can ``SELECT`` what we just attached (NPS: same scheme × FY files).
+        # Commit so the next row in this loop can SELECT what we just inserted,
+        # and so the write transaction is closed before any NSE enrichment calls.
         if not dry_run:
-            session.flush()
+            session.commit()
             if target_row.id is not None:
                 _upsert_holding_value_snapshot(
                     session,
@@ -319,6 +489,12 @@ def ingest_investment_transactions(
 ) -> dict[str, Any]:
     """Insert deduped ledger rows. When ``user_id`` is set, resolve ``holding_id`` (MF + equity).
 
+    Duplicate detection is **aggressive** (same economic line from Gmail vs CSV upload, or two
+    overlapping ICICI equity statement PDFs): same date/platform/type, quantity + total within
+    tolerances, symbol or MF folio / scheme fingerprint or **ICICI blank-symbol equity** identity
+    — **not** exact ``price_per_unit`` equality. When a duplicate exists, the row is **skipped**
+    (no merge / reconciliation of the existing row).
+
     When ``source_type=\"email\"`` (Gmail scraper / statement PDF attachment path), new rows
     get ``is_reviewed=False`` so they surface on the investment review queue — same rule as
     :func:`pipeline.db_writer.write_to_db` for bank transactions.
@@ -336,6 +512,7 @@ def ingest_investment_transactions(
     _max_sample = 8
     _n_validate_logged = 0
     _n_dup_logged = 0
+    _n_ignored_logged = 0
 
     if import_flow_log:
         import_flow_log.write(
@@ -355,6 +532,25 @@ def ingest_investment_transactions(
                 )
                 _n_validate_logged += 1
             continue
+        meta_pre = t.metadata or {}
+        isin_chk = (meta_pre.get("isin") or "").strip().upper()
+        sym_chk = (t.symbol or "").strip().upper()
+        if is_curated_ignored_security(symbol=t.symbol, isin=meta_pre.get("isin")):
+            skipped += 1
+            logger.info(
+                "Skip inv txn (ignored security): date=%s type=%s symbol=%r isin=%r",
+                t.txn_date,
+                t.txn_type,
+                t.symbol,
+                isin_chk or None,
+            )
+            if import_flow_log and _n_ignored_logged < _max_sample:
+                import_flow_log.write(
+                    "inv_skip_ignored_security",
+                    f"date={t.txn_date} type={t.txn_type} symbol={sym_chk!r} isin={isin_chk!r}",
+                )
+                _n_ignored_logged += 1
+            continue
         if investment_txn_exists(session, t):
             skipped += 1
             if import_flow_log and _n_dup_logged < _max_sample:
@@ -372,6 +568,12 @@ def ingest_investment_transactions(
             notes_parts.append(t.name)
         if t.notes:
             notes_parts.append(t.notes)
+        meta = t.metadata or {}
+        isin_meta = (meta.get("isin") or "").strip().upper()
+        if len(isin_meta) == 12 and isin_meta.startswith("IN"):
+            joined = "\n".join(notes_parts).upper()
+            if isin_meta not in joined.replace(" ", ""):
+                notes_parts.append(f"ISIN {isin_meta}")
         hid: int | None = None
         if uid:
             hid = find_holding_id_for_parsed_txn(session, uid, t)
@@ -395,7 +597,9 @@ def ingest_investment_transactions(
         )
         session.add(it)
         inserted += 1
-        session.flush()
+        # Commit immediately to get it.id and close the write transaction before
+        # the post-loop linking and holding-sync work below.
+        session.commit()
         inserted_rows.append(it)
 
     orphan_backfill = {"examined": 0, "linked": 0, "still_orphan": 0, "ambiguous": 0}
@@ -487,7 +691,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument(
         "--source",
         required=True,
-        help="icici_direct_equity | icici_direct_mf | icici_ppf | nps | liability_bike | liability_term_insurance",
+        help="icici_direct_mf | icici_ppf | nps | liability_bike | liability_term_insurance",
     )
     p.add_argument("--input", required=True, type=Path, help="File or directory path")
     p.add_argument(

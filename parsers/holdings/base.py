@@ -90,7 +90,7 @@ class BaseHoldingParser(ABC):
     @property
     @abstractmethod
     def source_id(self) -> str:
-        """Registry key, e.g. ``icici_direct_equity``."""
+        """Registry key, e.g. ``icici_direct_mf``."""
         ...
 
     @abstractmethod

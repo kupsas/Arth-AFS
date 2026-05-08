@@ -17,11 +17,13 @@ from sqlmodel import Session, col, select
 
 from api.models import Holding, HoldingValueSnapshot, InvestmentTransaction
 from api.services.holding_enrichment import enrich_single_equity_classification
+from api.services.holdings_sync import sync_holdings_for_user
 from parsers.holdings.base import ParsedInvestmentTxn
 from parsers.holdings.derived_equity import derive_equity_holdings
 from parsers.holdings.icici_direct_mf import derive_mf_holdings
 from pipeline.holding_pipeline import ingest_holdings
 from pipeline.investment_txn_linking import link_unlinked_investment_transactions, parse_mf_txn_notes
+from pipeline.isin_nse_resolver import is_curated_ignored_holding_row
 from pipeline.models import AssetClass
 
 logger = logging.getLogger(__name__)
@@ -91,17 +93,25 @@ def run_onboarding_portfolio_derivation(session: Session, user_id: str) -> dict[
     if combined:
         ingest_stats = ingest_holdings(session, combined, user_id=user_id, dry_run=False)
 
+    # Recompute every holding from linked ledger rows so fully sold positions become
+    # inactive (derive_equity_holdings only emits symbols with qty > 0).
+    sync_stats = sync_holdings_for_user(session, user_id)
+
     # Point-in-time marks for historical chart seeding (best-effort).
     today = datetime.date.today()
     n_snap = 0
-    br_rows = list(
-        session.exec(
-            select(Holding)
-            .where(Holding.user_id == user_id)
-            .where(col(Holding.account_platform).in_((_BROKER_EQUITY_PLATFORM, _BROKER_MF_PLATFORM)))
-            .where(Holding.is_active == True)  # noqa: E712
-        ).all()
-    )
+    br_rows = [
+        h
+        for h in list(
+            session.exec(
+                select(Holding)
+                .where(Holding.user_id == user_id)
+                .where(col(Holding.account_platform).in_((_BROKER_EQUITY_PLATFORM, _BROKER_MF_PLATFORM)))
+                .where(Holding.is_active == True)  # noqa: E712
+            ).all()
+        )
+        if not is_curated_ignored_holding_row(h)
+    ]
     for h in br_rows:
         if h.id is None:
             continue
@@ -140,6 +150,7 @@ def run_onboarding_portfolio_derivation(session: Session, user_id: str) -> dict[
         "derived_mf_positions": len(ph_mf),
         "ingest_inserted": ingest_stats.get("inserted", 0),
         "ingest_updated": ingest_stats.get("updated", 0),
+        "holdings_sync": sync_stats,
         "snapshots_upserted": n_snap,
     }
     logger.info(
@@ -174,6 +185,7 @@ def portfolio_snapshot_summary(session: Session, user_id: str) -> dict[str, Any]
         .order_by(col(Holding.current_value).desc())
     )
     rows = list(session.exec(stmt).all())
+    rows = [h for h in rows if not is_curated_ignored_holding_row(h)]
     total = sum(float(h.current_value or 0) for h in rows)
     top = []
     for h in rows[:12]:

@@ -55,6 +55,7 @@ from api.services.equity_holding_period import (
 from api.services.returns_calculator import compute_returns
 from pipeline.holding_parsers import HOLDING_PARSER_REGISTRY
 from pipeline.holding_pipeline import ingest_holdings, ingest_investment_transactions
+from pipeline.isin_nse_resolver import is_curated_ignored_holding_row
 from pipeline.models import AssetClass, LiquidityClass, MutualFundType as MFTypeEnum, ValuationMethod
 
 logger = logging.getLogger(__name__)
@@ -387,6 +388,7 @@ def list_holdings(
     q = q.order_by(Holding.name)
     uid = user_id
     rows = list(session.exec(q).all())
+    rows = [h for h in rows if not is_curated_ignored_holding_row(h)]
     # Archived rows are not in total_portfolio_value(); mix active+inactive needs a local denominator.
     if include_inactive:
         total_v = sum(holding_value(session, h, None) for h in rows)
@@ -591,7 +593,10 @@ def create_holding(
     if body.account_identifier:
         h.account_identifier_encrypted = body.account_identifier
     session.add(h)
-    session.flush()
+    # Commit immediately to get h.id and close the write transaction before the
+    # NSE enrichment call below (which can take ~100 ms and should not hold an
+    # open write lock on the DB).
+    session.commit()
     enrich_single_equity_classification(session, h)
     session.commit()
     session.refresh(h)
@@ -643,7 +648,7 @@ def patch_holding(
 def import_holdings(
     *,
     session: Session = Depends(get_session),
-    source: str = Form(..., description="Registry key, e.g. icici_direct_equity"),
+    source: str = Form(..., description="Registry key, e.g. icici_direct_mf"),
     skip_investment_txns: bool = Form(default=False),
     files: list[UploadFile] = File(...),
     current_user: str = Depends(get_current_user),

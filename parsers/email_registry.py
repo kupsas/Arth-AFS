@@ -18,7 +18,6 @@ from parsers.statements.hdfc_combined import HDFCCombinedStatementEmailParser
 from parsers.statements.icici import ICICIStatementEmailParser
 from parsers.statements.icici_direct_equity import ICICIDirectEquityStatementEmailParser
 from parsers.statements.icici_direct_mf import ICICIDirectMFStatementEmailParser
-from parsers.statements.icici_direct_trade import ICICIDirectTradeEmailParser
 
 
 def _hdfc_parser_list(accounts: dict) -> list[BaseEmailParser]:
@@ -48,7 +47,6 @@ def build_email_parser_registry(
     icici_stmt = _acct("estatement@icicibank.com")
     hdfc_cc = _acct("emailstatements.cards@hdfcbank.net")
     hdfc_comb = _acct("hdfcbanksmartstatement@hdfcbank.net")
-    icici_trade = _acct("nse-direct@nse.co.in")
     icici_sec_svc = _acct("service@icicisecurities.com")
 
     return {
@@ -77,15 +75,6 @@ def build_email_parser_registry(
         ],
         "hdfcbanksmartstatement@hdfcbank.bank.in": [
             HDFCCombinedStatementEmailParser(hdfc_comb),
-        ],
-        "ebix@nse.co.in": [
-            ICICIDirectTradeEmailParser(icici_trade),
-        ],
-        "nseinvest@nse.co.in": [
-            ICICIDirectTradeEmailParser(icici_trade),
-        ],
-        "nse-direct@nse.co.in": [
-            ICICIDirectTradeEmailParser(icici_trade),
         ],
         "service@icicisecurities.com": [
             ICICIDirectEquityStatementEmailParser(icici_sec_svc),

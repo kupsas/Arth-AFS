@@ -359,7 +359,13 @@ def filter_redundant_nse_broker_sources(sources: list[Any]) -> list[Any]:
             sender_raw = raw.get("sender_email")
             if isinstance(sender_raw, str) and sender_raw.strip():
                 sender_norm = _normalise_sender(sender_raw)
-                if _is_nse_co_in_broker_sender(sender_norm):
+                # Also catch NSE senders that arrived via discovery (not in BANK_SENDERS)
+                # when the raw row itself advertises instrument_type == "broker".
+                raw_is_nse_broker = (
+                    "@nse.co.in" in sender_norm.lower()
+                    and raw.get("instrument_type") == "broker"
+                )
+                if _is_nse_co_in_broker_sender(sender_norm) or raw_is_nse_broker:
                     dropped += 1
                     continue
         out.append(raw)
@@ -528,8 +534,6 @@ def _collect_last4s_from_text(
     # "hdfcbanksmartstatement@*" alphabetically and each sender is committed before
     # the next one starts).
     if pk == "hdfc_combined_statement" and not found and session is not None and user_id:
-        from api.models import ScraperAccountMapping
-
         rows = session.exec(
             select(ScraperAccountMapping).where(
                 ScraperAccountMapping.user_id == user_id,
@@ -549,6 +553,31 @@ def _collect_last4s_from_text(
             logger.warning(
                 "persist-sources: hdfc_combined_statement — no last-4 in email text and "
                 "no hdfc_savings rows in DB yet; cannot infer account mapping"
+            )
+
+    # ICICI e-statement notification mail is usually a PDF shell (digits live in the attachment).
+    # Same idea as ``hdfc_combined_statement``: reuse last-4 keys already written from
+    # ``icici_bank`` transaction alerts when those senders run first (see persist loop sort).
+    if pk == "icici_statement" and not found and session is not None and user_id:
+        rows = session.exec(
+            select(ScraperAccountMapping).where(
+                ScraperAccountMapping.user_id == user_id,
+                ScraperAccountMapping.source_key == "icici_savings",
+            )
+        ).all()
+        for r in rows:
+            if len(r.last_4_digits) == 4 and r.last_4_digits.isdigit():
+                found.add(r.last_4_digits)
+        if found:
+            logger.debug(
+                "persist-sources: icici_statement — no last-4 in email text; "
+                "resolved %s from existing icici_savings DB mappings",
+                sorted(found),
+            )
+        else:
+            logger.warning(
+                "persist-sources: icici_statement — no last-4 in email text and "
+                "no icici_savings rows in DB yet; cannot infer account mapping"
             )
 
     return found
@@ -607,8 +636,8 @@ def _infer_accounts_dict(
     parser_key = str(cfg.get("parser_key") or "")
     blob = _normalise_sample_chunks(parser_key, sample_texts)
 
-    # Broker NSE PDFs — always use template placeholder (body is not reliable for last-4).
-    if parser_key == "icici_direct_trade":
+    # Broker ICICI Direct PDFs — template placeholder (statement bodies are not reliable for last-4).
+    if parser_key == "icici_direct_statement":
         tmpl = cfg.get("accounts") or {}
         accounts: dict[str, dict[str, str]] = {}
         if isinstance(tmpl, dict):
@@ -766,6 +795,24 @@ def persist_scraper_sources_from_discovery(
     if not isinstance(sources, list):
         raise ValueError("discovery envelope must contain a 'sources' list")
     sources = filter_redundant_nse_broker_sources(sources)
+
+    def _persist_sender_sort_key(raw: Any) -> tuple[int, str]:
+        """Process ICICI transaction alerts before e-statement shells so statement persist can reuse last-4."""
+        if not isinstance(raw, dict):
+            return (9, "")
+        se = raw.get("sender_email")
+        if not isinstance(se, str) or not se.strip():
+            return (9, "")
+        sn = _normalise_sender(se)
+        cfg_row = BANK_SENDERS.get(sn)
+        pk = str(cfg_row.get("parser_key") or "") if cfg_row else ""
+        if pk == "icici_bank":
+            return (0, sn)
+        if pk == "icici_statement":
+            return (1, sn)
+        return (2, sn)
+
+    sources.sort(key=_persist_sender_sort_key)
 
     uid = (user_id or "").strip()
     if not uid:

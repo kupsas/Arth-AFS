@@ -40,9 +40,8 @@ from scraper.pdf_passwords import (  # noqa: E402
     HDFC_CC_STATEMENT_PASSWORD_KEYS,
     HDFC_COMBINED_STATEMENT_PASSWORD_KEYS,
     ICICI_ANNUAL_STATEMENT_PASSWORD_KEYS,
-    ICICI_DIRECT_TRADE_PASSWORD_KEYS,
+    ICICI_DIRECT_STATEMENT_PASSWORD_KEYS,
     ICICI_MONTHLY_STATEMENT_PASSWORD_KEYS,
-    NSE_TRADES_EXECUTED_PASSWORD_KEYS,
     resolve_pdf_password_chain,
 )
 from scraper.pdf_utils import decrypt_pdf  # noqa: E402
@@ -77,19 +76,9 @@ PROBES: list[tuple[str, str, tuple[str, ...]]] = [
         HDFC_CC_STATEMENT_PASSWORD_KEYS,
     ),
     (
-        "ICICI Direct — NSE Equity Digital Contract Note (ICICI email / password)",
-        'subject:"NSE Equity Digital Contract Note"',
-        ICICI_DIRECT_TRADE_PASSWORD_KEYS,
-    ),
-    (
-        "ICICI Direct — Order and Trade confirmations (ICICI email / password)",
-        'subject:"Order and Trade confirmations"',
-        ICICI_DIRECT_TRADE_PASSWORD_KEYS,
-    ),
-    (
-        "ICICI Direct — Trades executed at NSE (NSE email / different PDF password)",
-        'subject:"Trades executed at NSE"',
-        NSE_TRADES_EXECUTED_PASSWORD_KEYS,
+        "ICICI Securities — Equity Transaction Statement (broker PDF)",
+        'from:service@icicisecurities.com subject:"Equity Transaction Statement"',
+        ICICI_DIRECT_STATEMENT_PASSWORD_KEYS,
     ),
 ]
 

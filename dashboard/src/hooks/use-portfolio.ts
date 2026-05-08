@@ -8,6 +8,7 @@
 
 "use client";
 
+import * as React from "react";
 import {
   useMutation,
   useQuery,
@@ -25,10 +26,12 @@ import {
   fetchLiabilities,
   fetchLiabilitySummary,
   fetchNetWorthHistory,
+  fetchOnboardingPortfolioPriceBackfillStatus,
   fetchPortfolioValueTrend,
   refreshPrices,
   updateHoldingValue,
 } from "@/lib/api";
+import { buildApiUrl } from "@/lib/api-base";
 import type {
   BatchReturnsResponse,
   Holding,
@@ -43,6 +46,7 @@ import type {
   NetWorthGranularity,
   NetWorthHistory,
   PaginatedResponse,
+  OnboardingPriceBackfillStatus,
   PortfolioValueTrend,
   PortfolioValueTrendRange,
   RefreshPricesResult,
@@ -81,6 +85,10 @@ export const portfolioKeys = {
   /** Monthly portfolio value series for the holdings area chart (range + user). */
   valueTrend: (range: PortfolioValueTrendRange, userId?: string) =>
     [...portfolioKeys.all, "value-trend", range, userId ?? ""] as const,
+
+  /** POST /portfolio-derive background historical prices (current session user). */
+  onboardingPriceBackfill: () =>
+    [...portfolioKeys.all, "onboarding-price-backfill"] as const,
 
   /** Cached batch XIRR / returns map for all holdings. */
   batchReturns: (userId?: string) =>
@@ -137,6 +145,86 @@ export function usePortfolioValueTrend(
     staleTime: 60_000,
     ...options,
   });
+}
+
+/** GET /api/onboarding/portfolio-price-backfill-status — trend chart price import progress. */
+export function useOnboardingPortfolioPriceBackfillStatus(
+  enabled: boolean,
+  options?: Partial<UseQueryOptions<OnboardingPriceBackfillStatus>>,
+) {
+  return useQuery<OnboardingPriceBackfillStatus>({
+    queryKey: portfolioKeys.onboardingPriceBackfill(),
+    queryFn: () => fetchOnboardingPortfolioPriceBackfillStatus(),
+    enabled,
+    staleTime: 15_000,
+    refetchInterval: (q) =>
+      q.state.data?.status === "running" ? 5000 : false,
+    ...options,
+  });
+}
+
+/**
+ * SSE-backed real-time price backfill status.
+ *
+ * Opens ``GET /api/onboarding/portfolio-price-backfill-stream`` as an
+ * ``EventSource``; yields a live ``OnboardingPriceBackfillStatus`` on every
+ * server-side change (≤ 0.5 s lag).  The stream closes automatically when
+ * the job reaches ``complete`` or ``error``; this hook then holds the final
+ * snapshot.
+ *
+ * Falls back to ``null`` in environments where ``EventSource`` is unavailable
+ * (SSR / tests).  Callers should pair with
+ * ``useOnboardingPortfolioPriceBackfillStatus`` for the initial seed value.
+ */
+export function useOnboardingPriceBackfillSSE(
+  enabled: boolean,
+): OnboardingPriceBackfillStatus | null {
+  const [status, setStatus] =
+    React.useState<OnboardingPriceBackfillStatus | null>(null);
+
+  // Stable URL — derived from compile-time env vars, never changes at runtime.
+  const url = buildApiUrl("/api/onboarding/portfolio-price-backfill-stream");
+
+  React.useEffect(() => {
+    if (!enabled || typeof EventSource === "undefined") return;
+
+    let es: EventSource | null = null;
+    let closed = false;
+
+    function open() {
+      if (closed) return;
+      es = new EventSource(url, { withCredentials: true });
+
+      es.onmessage = (evt) => {
+        try {
+          const data = JSON.parse(evt.data) as OnboardingPriceBackfillStatus;
+          setStatus(data);
+          if (data.status === "complete" || data.status === "error") {
+            closed = true;
+            es?.close();
+          }
+        } catch {
+          // ignore malformed frames
+        }
+      };
+
+      es.onerror = () => {
+        es?.close();
+        if (!closed) {
+          // Brief back-off before reconnect (e.g. server restart mid-job).
+          setTimeout(open, 2000);
+        }
+      };
+    }
+
+    open();
+    return () => {
+      closed = true;
+      es?.close();
+    };
+  }, [enabled, url]);
+
+  return status;
 }
 
 /** One round-trip XIRR / return dict for every active holding (server-cached). */

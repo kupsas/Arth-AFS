@@ -18,6 +18,8 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from api.models import UserSecrets
 from api.services import classifier_runtime as cr
 from pipeline import config as pc
+import pipeline.llm_classifier as llm_classifier_mod
+from pipeline.config import LLM_FALLBACK_CHAIN
 from pipeline.llm_classifier import classify_llm
 from pipeline.models import CanonicalTransaction, Channel, Direction, TxnType
 
@@ -38,6 +40,34 @@ def _minimal_work_item() -> CanonicalTransaction:
         counterparty_category=None,
         raw_description="UPI/SOME UNKNOWN MERCHANT/xyz@okaxis",
     )
+
+
+def test_auto_fallback_chain_only_includes_providers_with_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``LLM_MODEL=auto`` must not schedule Gemini/Claude when those keys are absent."""
+    monkeypatch.setattr(llm_classifier_mod._cfg, "OPENAI_API_KEY", "sk-test-openai")
+    monkeypatch.setattr(llm_classifier_mod._cfg, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(llm_classifier_mod._cfg, "GOOGLE_API_KEY", "")
+    assert llm_classifier_mod._auto_fallback_chain() == ["gpt-5-mini"]
+
+    monkeypatch.setattr(llm_classifier_mod._cfg, "OPENAI_API_KEY", "")
+    monkeypatch.setattr(llm_classifier_mod._cfg, "ANTHROPIC_API_KEY", "sk-ant-test")
+    monkeypatch.setattr(llm_classifier_mod._cfg, "GOOGLE_API_KEY", "")
+    assert llm_classifier_mod._auto_fallback_chain() == ["claude-haiku-4-5"]
+
+    monkeypatch.setattr(llm_classifier_mod._cfg, "OPENAI_API_KEY", "")
+    monkeypatch.setattr(llm_classifier_mod._cfg, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(llm_classifier_mod._cfg, "GOOGLE_API_KEY", "AIza-test")
+    assert llm_classifier_mod._auto_fallback_chain() == [
+        "gemini-3.1-flash-lite",
+        "gemini-2.5-flash",
+    ]
+
+    monkeypatch.setattr(llm_classifier_mod._cfg, "OPENAI_API_KEY", "sk-o")
+    monkeypatch.setattr(llm_classifier_mod._cfg, "ANTHROPIC_API_KEY", "sk-a")
+    monkeypatch.setattr(llm_classifier_mod._cfg, "GOOGLE_API_KEY", "AIza")
+    assert llm_classifier_mod._auto_fallback_chain() == list(LLM_FALLBACK_CHAIN)
 
 
 def test_classify_llm_with_model_none_is_noop() -> None:

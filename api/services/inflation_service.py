@@ -233,7 +233,6 @@ def sync_imf_cpi_history(session: Session) -> dict[str, Any]:
     ).all()
     for row in existing:
         session.delete(row)
-    session.flush()
 
     for period, rate in pairs:
         session.add(

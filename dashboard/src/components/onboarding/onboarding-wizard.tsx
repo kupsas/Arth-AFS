@@ -30,8 +30,11 @@ import { StepSummary } from "@/components/onboarding/step-summary"
 import { StepUploadFallback } from "@/components/onboarding/step-upload-fallback"
 import { StepWelcome } from "@/components/onboarding/step-welcome"
 import { Button } from "@/components/ui/button"
+import { ProviderPausedDialog } from "@/components/shared/provider-paused-dialog"
 import {
   ApiError,
+  ClassifierPausedApiError,
+  type ProviderFailurePayload,
   fetchOnboardingHasData,
   fetchOnboardingUnknowns,
   patchOnboardingState,
@@ -247,6 +250,10 @@ export function OnboardingWizard({
    */
   const backfillStreamGenerationRef = React.useRef(0)
   const [bfError, setBfError] = React.useState<string | null>(null)
+  /** All smart-label providers failed for a batch — show structured dialog (SSE ``classifier_paused``). */
+  const [bfClassifierPaused, setBfClassifierPaused] = React.useState<ProviderFailurePayload[] | null>(
+    null,
+  )
   const [resumeBusy, setResumeBusy] = React.useState(false)
   const [persistRetryBusy, setPersistRetryBusy] = React.useState(false)
   /**
@@ -497,6 +504,7 @@ export function OnboardingWizard({
 
     async function run() {
       setBfError(null)
+      setBfClassifierPaused(null)
       const currentList = sourcesQ.data
       if (!currentList?.length) {
         return
@@ -612,6 +620,10 @@ export function OnboardingWizard({
         await queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
       } catch (e) {
         if (signal.aborted) return
+        if (e instanceof ClassifierPausedApiError) {
+          setBfClassifierPaused(e.failures.length ? e.failures : null)
+          return
+        }
         if (e instanceof ApiError && e.status === 409) {
           // Wait before retry, but if the user left the backfill step, ``ac.abort()`` fires —
           // we must not wake up and bump ``bfTick`` or the effect keeps hammering 409s forever.
@@ -668,6 +680,7 @@ export function OnboardingWizard({
     if (!sk) return
     setResumeBusy(true)
     setBfError(null)
+    setBfClassifierPaused(null)
     try {
       await postOnboardingBackfillResume(sk)
       setBfChunkPosting(true)
@@ -681,7 +694,11 @@ export function OnboardingWizard({
       setBfTick((t) => t + 1)
       void queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
     } catch (e) {
-      setBfError(getUserFacingErrorMessage(e) || "We couldn't resume the import. Try again.")
+      if (e instanceof ClassifierPausedApiError) {
+        setBfClassifierPaused(e.failures.length ? e.failures : null)
+      } else {
+        setBfError(getUserFacingErrorMessage(e) || "We couldn't resume the import. Try again.")
+      }
     } finally {
       setBfChunkPosting(false)
       setResumeBusy(false)
@@ -693,6 +710,7 @@ export function OnboardingWizard({
     if (!sk) return
     setBfChunkPosting(true)
     setBfError(null)
+    setBfClassifierPaused(null)
     try {
       await streamOnboardingBackfill(sk, {
         resume_after_password: true,
@@ -704,7 +722,11 @@ export function OnboardingWizard({
       setBfTick((t) => t + 1)
       void queryClient.invalidateQueries({ queryKey: [...onboardingStateKey] })
     } catch (e) {
-      setBfError(getUserFacingErrorMessage(e) || "Couldn't retry that import.")
+      if (e instanceof ClassifierPausedApiError) {
+        setBfClassifierPaused(e.failures.length ? e.failures : null)
+      } else {
+        setBfError(getUserFacingErrorMessage(e) || "Couldn't retry that import.")
+      }
     } finally {
       setBfChunkPosting(false)
     }
@@ -747,6 +769,22 @@ export function OnboardingWizard({
         className,
       )}
     >
+      <ProviderPausedDialog
+        open={bfClassifierPaused !== null}
+        onOpenChange={(open) => {
+          if (!open) setBfClassifierPaused(null)
+        }}
+        failures={bfClassifierPaused ?? []}
+        context="import"
+        onSwitchProvider={() => {
+          setBfClassifierPaused(null)
+          setUserPanel("apikey")
+        }}
+        onTryAgain={() => {
+          setBfClassifierPaused(null)
+          setBfTick((t) => t + 1)
+        }}
+      />
       <header>
         {/*
           Vertical rhythm: keep eyebrow + title as one tight block, then the same nominal gap
@@ -895,6 +933,7 @@ export function OnboardingWizard({
                   pauseThresholdForShortcuts={unknownPauseThreshold}
                   lastKnownProgress={stickyMailImportProgress as unknown as Record<string, unknown>}
                   unknownsTrigger={`${bfSourceIdx}:${bfProgress?.status ?? "none"}:${bfProgress?.unknowns_pending ?? 0}`}
+                  onClassifierImportPaused={(f) => setBfClassifierPaused(f)}
                   onSubmitted={() => setBfTick((t) => t + 1)}
                   onImportProgress={(snap) => {
                     const shot = recordToBackfillSnapshot(snap)
@@ -969,9 +1008,22 @@ export function OnboardingWizard({
               </>
             )}
             {panel === "apikey" && (
-              <Button type="button" onClick={() => setUserPanel("backfill")}>
-                Start importing mail
-              </Button>
+              <div className="flex flex-col items-end gap-1">
+                {!classifierStatusQ.isLoading && !classifierStatusQ.data?.has_any_api_key && (
+                  <p className="text-xs text-muted-foreground">
+                    Add a key above to continue.
+                  </p>
+                )}
+                <Button
+                  type="button"
+                  onClick={() => setUserPanel("backfill")}
+                  disabled={
+                    classifierStatusQ.isLoading || !classifierStatusQ.data?.has_any_api_key
+                  }
+                >
+                  Start importing mail
+                </Button>
+              </div>
             )}
             {panel === "gaps" && (
               <Button type="button" onClick={() => setUserPanel("goals")}>

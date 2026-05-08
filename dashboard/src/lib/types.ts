@@ -1425,6 +1425,25 @@ export interface OnboardingPortfolioDeriveResponse {
   ingest_inserted: number;
   ingest_updated: number;
   snapshots_upserted: number;
+  /** Present after server recomputes holdings from transactions (fully sold → inactive). */
+  holdings_sync?: Record<string, unknown>;
+  /** Background historical price import for portfolio trend (may show ``started: false`` if already running). */
+  price_backfill?: { started: boolean; reason?: string };
+}
+
+/** GET /api/onboarding/portfolio-price-backfill-status — historical price job after portfolio derive. */
+export interface OnboardingPriceBackfillStatus {
+  status: "idle" | "running" | "complete" | "error";
+  symbols_total: number;
+  symbols_done: number;
+  /** NSE session walk: Mon–Fri days in the backfill range (when set by the server). */
+  days_total?: number;
+  days_done?: number;
+  current_symbol: string | null;
+  message: string | null;
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
 }
 
 /** GET /api/metrics/classification-stats — coarse automation provenance mix. */

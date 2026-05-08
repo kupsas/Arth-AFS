@@ -16,6 +16,7 @@ to read real counts while the mock is enabled.
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import json
 import logging
@@ -63,6 +64,10 @@ from api.services.onboarding_portfolio_derive import (
     portfolio_snapshot_summary,
     run_onboarding_portfolio_derivation,
 )
+from api.services.onboarding_price_backfill import (
+    get_price_backfill_status,
+    start_onboarding_price_backfill_background,
+)
 from api.services.preclassification_identity import (
     build_self_aliases_from_names,
     display_and_aliases_for_contact_line,
@@ -72,6 +77,7 @@ from api.services.user_classification import (
     merge_starter_pack_for_user,
 )
 from pipeline import config as pipeline_cfg
+from pipeline.llm_errors import ClassifierPausedError
 from pipeline.rules_classifier import apply_spend_category_heuristics
 from scraper.config_loader import BankSendersConfig, get_bank_senders_config
 from scraper.discovery import (
@@ -1174,6 +1180,25 @@ def onboarding_backfill_stream(
                     except _BackfillCancelledError:
                         flow.write("sse_stream_end", "client_cancelled")
                         return
+                    except ClassifierPausedError as exc:
+                        flow.write(
+                            "sse_stream_end",
+                            f"classifier_paused providers={[f.provider for f in exc.failures]}",
+                        )
+                        event_queue.put(
+                            {
+                                "type": "classifier_paused",
+                                "failures": [
+                                    {
+                                        "provider": f.provider,
+                                        "error_type": f.error_type,
+                                        "message": f.message,
+                                    }
+                                    for f in exc.failures
+                                ],
+                            }
+                        )
+                        return
                     except ValueError as e:
                         event_queue.put({"type": "error", "detail": str(e), "terminal": True})
                         return
@@ -1891,8 +1916,66 @@ def onboarding_portfolio_derive(
 
     Idempotent — safe to call after broker Gmail backfill or when the user lands on the
     portfolio summary step.
+
+    After holdings are aligned, a **background** job loads historical NSE / MF prices
+    (for portfolio trend charts). Check status via :func:`onboarding_portfolio_price_backfill_status`.
     """
-    return run_onboarding_portfolio_derivation(session, current_user)
+    out = run_onboarding_portfolio_derivation(session, current_user)
+    price_backfill = start_onboarding_price_backfill_background(current_user)
+    return {**out, "price_backfill": price_backfill}
+
+
+@router.get("/portfolio-price-backfill-status")
+def onboarding_portfolio_price_backfill_status(
+    *,
+    current_user: str = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Progress of the post-derive historical price import (trend chart data)."""
+    return get_price_backfill_status(current_user)
+
+
+@router.get("/portfolio-price-backfill-stream")
+async def portfolio_price_backfill_stream(
+    *,
+    current_user: str = Depends(get_current_user),
+) -> StreamingResponse:
+    """
+    SSE stream for the post-derive historical price import.
+
+    Yields ``data: <json>\\n\\n`` on every status change at most every 0.5 s.
+    Closes automatically when the job reaches ``complete``, ``error``, or
+    ``idle`` (so the browser EventSource does **not** reconnect).
+
+    Client should open this with ``EventSource`` when the overlay is mounted;
+    on ``complete`` / ``error`` it will receive a final event then the stream
+    closes cleanly.
+    """
+    uid = current_user
+
+    async def _generate() -> AsyncIterator[str]:
+        last_raw: str | None = None
+        # Max 2 hours — long NSE history backfill can exceed 5 minutes.
+        deadline = asyncio.get_event_loop().time() + 7200
+        while asyncio.get_event_loop().time() < deadline:
+            status = get_price_backfill_status(uid)
+            raw = json.dumps(status, default=str)
+            if raw != last_raw:
+                yield f"data: {raw}\n\n"
+                last_raw = raw
+            terminal = status.get("status") in ("complete", "error", "idle")
+            if terminal:
+                break
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable nginx / proxy buffering
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.get("/portfolio-snapshot")

@@ -11,6 +11,5 @@ export const TRANSACTION_UPLOAD_TYPE_LABELS: readonly string[] = [
   "ICICI Bank Savings Account Statement (PDF)",
   "ICICI Direct Equity Transaction Statement (PDF)",
   "ICICI Direct Mutual Fund Statement (PDF)",
-  "NSE Contract Note / Trade Confirmation (PDF)",
   "ICICI PPF Account Statement (PDF)",
 ]

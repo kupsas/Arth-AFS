@@ -29,6 +29,7 @@ import datetime
 import logging
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Iterable, cast
 
@@ -41,6 +42,7 @@ from api.models import Holding, Price
 from pipeline.config import REPO_ROOT
 from parsers.holdings.icici_direct_equity import ICICI_SHORT_TO_NSE
 from pipeline.icici_symbol_overrides import merge_with_disk
+from pipeline.isin_nse_resolver import is_curated_ignored_holding_row
 from pipeline.models import AssetClass, ValuationMethod
 
 logger = logging.getLogger(__name__)
@@ -50,8 +52,8 @@ AMFI_NAV_ALL_URL = "https://www.amfiindia.com/spages/NAVAll.txt"
 
 NSE_DOWNLOAD_DIR = REPO_ROOT / "data" / ".nse_cache"
 
-# Space NSE bhav downloads slightly — the ``nse`` client also throttles (~3 rps).
-_NSE_BACKFILL_SLEEP_SEC = 0.35
+# Legacy sleep between bhav days — redundant with ``nse`` ``mthrottle`` (~3 rps).
+_NSE_BACKFILL_SLEEP_SEC = 0.0
 
 # Market-priced sleeves we try to mark automatically.
 _MARKET_ASSET_CLASSES = frozenset(
@@ -298,6 +300,58 @@ def _bhav_symbol_to_close(path: Path) -> dict[str, float]:
 _MIN_EQUITY_BHAV_SYMBOL_ROWS = 200
 
 
+def weekday_count_inclusive(start_date: datetime.date, end_date: datetime.date) -> int:
+    """Mon–Fri calendar days in ``[start_date, end_date]`` (holidays still counted as weekdays)."""
+    if start_date > end_date:
+        return 0
+    n = 0
+    d = start_date
+    while d <= end_date:
+        if d.weekday() < 5:
+            n += 1
+        d += datetime.timedelta(days=1)
+    return n
+
+
+def bhav_cached_csv_candidates(trade_date: datetime.date) -> list[Path]:
+    """Paths where ``nse.NSE.equityBhavcopy`` leaves the extracted CSV (matches upstream naming)."""
+    base = NSE_DOWNLOAD_DIR
+    # Same switching rule as the ``nse`` package (``UDIFF`` format from 2024-07-08).
+    if trade_date < NSE.UDIFF_SWITCH_DATE:
+        date_str = datetime.datetime.combine(
+            trade_date, datetime.time.min
+        ).strftime("%d%b%Y").upper()
+        return [base / f"cm{date_str}bhav.csv"]
+    ymd = trade_date.strftime("%Y%m%d")
+    return [base / f"BhavCopy_NSE_CM_0_0_0_{ymd}_F_0000.csv"]
+
+
+def bhav_cached_csv_path(trade_date: datetime.date) -> Path | None:
+    """Return a path to an on-disk equity bhavcopy if it already exists (``data/.nse_cache``)."""
+    for p in bhav_cached_csv_candidates(trade_date):
+        if p.is_file():
+            return p
+    return None
+
+
+def load_nse_equity_bhav_map_cached_first(
+    trade_date: datetime.date,
+) -> dict[str, float] | None:
+    """Load one session's full equity map — prefer a cached CSV, else download like :func:`load_nse_equity_bhav_map`."""
+    cp = bhav_cached_csv_path(trade_date)
+    if cp is not None:
+        m = _bhav_symbol_to_close(cp)
+        if m and len(m) >= _MIN_EQUITY_BHAV_SYMBOL_ROWS:
+            logger.debug(
+                "NSE bhavcopy cache hit %s → %s (%s symbols)",
+                trade_date,
+                cp.name,
+                len(m),
+            )
+            return m
+    return load_nse_equity_bhav_map(trade_date)
+
+
 def load_nse_equity_bhav_map(trade_date: datetime.date) -> dict[str, float] | None:
     """Download and parse the full NSE equity bhavcopy for ``trade_date``.
 
@@ -513,6 +567,115 @@ def backfill_prices(
     return {"symbol": canonical_nse_symbol(symbol), "inserted": inserted, "status": "ok"}
 
 
+def backfill_prices_bulk(
+    session: Session,
+    symbols: list[str],
+    start_date: datetime.date,
+    end_date: datetime.date,
+    *,
+    batch_commit_every_days: int = 50,
+    progress_callback: Callable[[int, int, datetime.date], None] | None = None,
+    still_current: Callable[[], bool] | None = None,
+) -> dict[str, int | str]:
+    """Fill ``prices`` for **many** NSE symbols over ``[start_date, end_date]``.
+
+    Walks **calendar days** (like :func:`fetch_equity_prices_nse`) but downloads **one**
+    bhavcopy per session and extracts every requested symbol — avoids downloading the
+    same daily file once per ticker.
+
+    Commits every ``batch_commit_every_days`` **weekdays** (plus a final commit) so
+    SQLite writer locks stay bounded.
+
+    ``progress_callback(done_weekdays, total_weekdays, session_date)`` fires after each
+    weekday row is processed (``done_weekdays`` is 1-based).
+    """
+    norm_syms = sorted({canonical_nse_symbol(s) for s in symbols if s.strip()})
+    if start_date > end_date or not norm_syms:
+        return {
+            "status": "ok",
+            "inserted": 0,
+            "trading_days_walked": 0,
+            "symbols": ",".join(norm_syms),
+        }
+
+    weekday_total = weekday_count_inclusive(start_date, end_date)
+    accum: list[Price] = []
+    total_inserted = 0
+    weekdays_done = 0
+    pending_bhav_days = 0
+    d = start_date
+
+    while d <= end_date:
+        if d.weekday() >= 5:
+            d += datetime.timedelta(days=1)
+            continue
+
+        if still_current is not None and not still_current():
+            if accum:
+                total_inserted += upsert_prices(session, accum)
+                accum.clear()
+            # flush_and_commit() holds _SQLITE_WRITER_LOCK across flush+commit so
+            # there is no window where another thread can see an open write transaction.
+            _flush_and_commit = getattr(session, "flush_and_commit", None)
+            if _flush_and_commit is not None:
+                _flush_and_commit()
+            else:
+                session.commit()
+            return {
+                "status": "superseded",
+                "inserted": total_inserted,
+                "trading_days_walked": weekdays_done,
+                "symbols": ",".join(norm_syms),
+            }
+
+        weekdays_done += 1
+        if progress_callback is not None:
+            progress_callback(weekdays_done, weekday_total, d)
+
+        bhav = load_nse_equity_bhav_map_cached_first(d)
+        if bhav:
+            for sym in norm_syms:
+                if sym in bhav:
+                    accum.append(
+                        Price(
+                            symbol=sym,
+                            date=d,
+                            close_price=bhav[sym],
+                            source="nse",
+                        )
+                    )
+
+        pending_bhav_days += 1
+        if pending_bhav_days >= max(1, batch_commit_every_days):
+            if accum:
+                total_inserted += upsert_prices(session, accum)
+                accum.clear()
+            _flush_and_commit = getattr(session, "flush_and_commit", None)
+            if _flush_and_commit is not None:
+                _flush_and_commit()
+            else:
+                session.commit()
+            pending_bhav_days = 0
+
+        d += datetime.timedelta(days=1)
+
+    if accum:
+        total_inserted += upsert_prices(session, accum)
+        accum.clear()
+    _flush_and_commit = getattr(session, "flush_and_commit", None)
+    if _flush_and_commit is not None:
+        _flush_and_commit()
+    else:
+        session.commit()
+
+    return {
+        "status": "ok",
+        "inserted": total_inserted,
+        "trading_days_walked": weekdays_done,
+        "symbols": ",".join(norm_syms),
+    }
+
+
 def _select_market_priced_holdings(
     session: Session, *, user_id: str | None = None
 ) -> list[Holding]:
@@ -524,7 +687,8 @@ def _select_market_priced_holdings(
     )
     if user_id:
         q = q.where(Holding.user_id == user_id)
-    return list(session.exec(q).all())
+    rows = list(session.exec(q).all())
+    return [h for h in rows if not is_curated_ignored_holding_row(h)]
 
 
 def latest_bhav_target_date(as_of: datetime.date | None = None) -> datetime.date:
@@ -730,6 +894,26 @@ def refresh_all_prices(session: Session, *, user_id: str | None = None) -> dict[
             preferred,
         )
     d = session_d
+
+    # Merge the session bhav into the local ISIN→symbol map (no extra network hop).
+    bhav_path = bhav_cached_csv_path(session_d)
+    if bhav_path is not None:
+        try:
+            from pipeline.isin_nse_resolver import update_consolidated_map_from_bhav
+
+            n_merged = update_consolidated_map_from_bhav(bhav_path)
+            if n_merged:
+                logger.debug(
+                    "Consolidated ISIN map updated from %s (%d equity rows)",
+                    bhav_path.name,
+                    n_merged,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Could not merge %s into consolidated ISIN map: %s",
+                bhav_path.name,
+                exc,
+            )
 
     nse_symbols: list[str] = []
     mf_codes: list[str] = []

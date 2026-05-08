@@ -1,6 +1,6 @@
 # Privacy — Arth and your data
 
-**Short version:** YOUR financial story stays on YOUR machine. We don’t run a hosted vault that holds your numbers for you. Anything that leaves your laptop is something **you** switched on — mail sync, or Ask Arth / auto-categorisation talking to an AI provider **you** picked with **your** API keys.
+**Short version:** YOUR financial story stays on YOUR machine. We don’t run a hosted vault that holds your numbers for you. Anything that leaves your laptop is something **you** chose — mail sync, auto-labelling, or Ask Arth, each talking to an AI provider **you** picked with **your** own API keys.
 
 ---
 
@@ -16,7 +16,7 @@ Rough picture of what Arth keeps locally:
 
 - **Your money diary** — spends, credits, categories, goals, reminders, and the bits that power **Simulate**.
 - **Holdings** — what you own, marks, investment activity, loans you’ve told Arth about.
-- **Sign-ins you’ve set up** — app login, optional mail connection, optional keys if you use Ask Arth or auto-categorisation (from **Settings** or the local config you copied from the template)
+- **Sign-ins you’ve set up** — app login, optional mail connection, your AI key for auto-labelling (added during onboarding), and any key you added for Ask Arth (from **Settings** or the local config you copied from the template)
 
 Sometimes Arth caches **public-ish helpers** (think price or inflation lookups) so the app feels snappy offline; that still lives next to your diary on disk.
 
@@ -43,13 +43,13 @@ We don’t run Gmail; Google’s rules still apply to mail on their side.
 
 ---
 
-## Ask Arth and auto-categorisation (optional)
+## Ask Arth and auto-labelling
 
-If you **don’t** turn these on, Arth never needs to phone an external AI.
+Auto-labelling requires an AI key (set during onboarding). Ask Arth is separate and optional. If you only want the diary without Ask Arth, you don’t need a second key.
 
 If you **do**:
 
-- **Auto-categorisation** sends **small bundles per transaction** — things like the description your bank wrote, amount, date, in/out — so the model can suggest a category or merchant. Bank text can still accidentally include awkward fragments; that’s why this stays **optional**.
+- **Auto-labelling** sends **small bundles per transaction** — things like the description your bank wrote, amount, date, in/out — so the model can suggest a category or merchant. Bank text can still accidentally include awkward fragments; Arth sends only what the model needs to label the row.
 - **Ask Arth** sends **your question** and whatever **tiny excerpts** the assistant needs to answer (think: selected rows, not “here’s my entire life.csv”).
 
 **The honest bit:** Arth runs on **your** PC or Docker on **your** desk. So “local” means **no Arth-owned cloud** — not “magically invisible to OpenAI / Anthropic / Google” if **you** plug those in. You’re choosing to share **snippets** with **them**, not with us.

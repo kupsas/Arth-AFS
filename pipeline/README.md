@@ -1,6 +1,6 @@
 # Imports & sorting (`pipeline/`)
 
-**What this folder does:** Turns bank **statement exports** into saved rows in your local money diary — with **sorting rules** doing the heavy lifting and optional **smart labels** (your API keys) catching the fuzzy bits.
+**What this folder does:** Turns bank **statement exports** into saved rows in your local money diary — with **sorting rules** doing the heavy lifting and **smart labels** (your AI key) catching the fuzzy bits.
 
 If you’re day‑to‑day using Arth, you’ll mostly live in **onboarding + Settings**. You open this doc when you’re **adding a bank**, **running bulk imports from the terminal**, or **debugging a weird row**.
 
@@ -11,7 +11,7 @@ If you’re day‑to‑day using Arth, you’ll mostly live in **onboarding + Se
 1. **Read the file** — Each bank has its own reader; only that piece knows CSV vs PDF quirks.
 2. **Put rows in one shape** — Dates, amounts, and “money in vs out” line up the same for everyone after this step.
 3. **Sorting rules** — Pattern-style logic fills channel (UPI, card, bank transfer…), transaction type, and UPI flavour where we can do it deterministically.
-4. **Smart labels (optional)** — For merchants and categories still ambiguous, we ask an AI provider **you** configure — see `prompts/` for the templates (nothing secret there).
+4. **Smart labels** — For merchants and categories still ambiguous, we ask the AI provider **you** configure during onboarding — see `prompts/` for the templates (nothing secret there).
 5. **Save** — Same real-world line never lands twice; re‑runs only fill empty cells — **your corrections stay put.**
 
 Bank-specific file readers live in `**parsers/uploads/`** (statements you import) and `**parsers/holdings/`** (brokers, PPF, NPS). Legacy import paths `pipeline.parsers` / `pipeline.holding_parsers` still work as thin shims. Everything after step 1 is shared across banks.
@@ -29,6 +29,10 @@ python3 -m pipeline.run --all-sources
 
 # Fast dry pass — rules only, no smart-label API calls
 python3 -m pipeline.run --all-sources --llm none
+
+# Bootstrap ISIN → NSE symbol map from cached NSE bhav CSVs (data/.nse_cache, gitignored).
+# After the first run, ``refresh_all_prices`` merges each new session file automatically.
+python3 -m pipeline.consolidate_bhav_cache
 
 # Pick a specific model for smart labels (when not using “auto” chain)
 python3 -m pipeline.run --source hdfc_savings --llm gemini-3.1-flash-lite

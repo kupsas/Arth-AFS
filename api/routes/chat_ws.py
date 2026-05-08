@@ -40,6 +40,7 @@ from agent.events import (
 from agent.memory import ConversationMemory
 from agent.profile import generate_user_profile
 from agent.security import CostTracker, SessionRateLimiter, screen_message
+from pipeline.llm_errors import AgentPausedError
 from api.auth import COOKIE_NAME, create_session_token, get_current_user, verify_session_token
 from api.constants import DEFAULT_LOCAL_USER
 from api.database import SQLiteSerializingSession, get_engine, get_session
@@ -351,6 +352,22 @@ async def chat_websocket(websocket: WebSocket) -> None:
                     )
                     await websocket.send_json({"type": "done"})
                     raise
+                except AgentPausedError as exc:
+                    await websocket.send_json(
+                        {
+                            "type": "agent_paused",
+                            "recoverable": True,
+                            "failures": [
+                                {
+                                    "provider": f.provider,
+                                    "error_type": f.error_type,
+                                    "message": f.message,
+                                }
+                                for f in exc.failures
+                            ],
+                        }
+                    )
+                    await websocket.send_json({"type": "done"})
                 except Exception:
                     logger.exception("Chat WebSocket turn failed")
                     await websocket.send_json(

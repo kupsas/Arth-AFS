@@ -127,7 +127,9 @@ def trigger_pipeline_run(
     else:
         source_keys = [body.source_key]
 
-    # Create placeholder PipelineRun rows so we can return IDs immediately
+    # Create placeholder PipelineRun rows so we can return IDs immediately.
+    # Commit per-iteration so run.id is assigned and the write transaction is
+    # closed before the next iteration (or the background thread launch below).
     run_ids = []
     for sk in source_keys:
         run = PipelineRun(
@@ -136,10 +138,8 @@ def trigger_pipeline_run(
             status="running",
         )
         session.add(run)
-        session.flush()
+        session.commit()
         run_ids.append(run.id)
-
-    session.commit()
 
     # Kick off the actual pipeline work in a background thread
     thread = threading.Thread(

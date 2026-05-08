@@ -22,9 +22,7 @@ PARSER_LABELS: dict[str, str] = {
     # Holding / portfolio (PDF modules + registry keys)
     "icici_direct_equity_statement_pdf": "ICICI Direct Equity Transaction Statement (PDF)",
     "icici_direct_mf_statement_pdf": "ICICI Direct Mutual Fund Statement (PDF)",
-    "icici_direct_contract_note": "NSE Contract Note / Trade Confirmation (PDF)",
     "icici_ppf_pdf": "ICICI PPF Account Statement (PDF)",
-    "icici_direct_equity": "ICICI Direct Equity (CSV export)",
     "icici_direct_mf": "ICICI Direct Mutual Fund (CSV export)",
     "icici_ppf": "ICICI PPF (CSV export)",
 }
@@ -104,8 +102,7 @@ def detect_holding_file(path: Path) -> list[DetectionResult]:
         if res is not None:
             results.append(res)
 
-    # PDF helpers not tied to HOLDING_PARSER_REGISTRY rows (statement PDFs, contract notes).
-    from parsers.holdings import icici_direct_contract_note as cn_mod
+    # PDF helpers not tied to HOLDING_PARSER_REGISTRY rows (statement PDFs).
     from parsers.holdings import icici_direct_equity_statement_pdf as eq_pdf_mod
     from parsers.holdings import icici_direct_mf_statement_pdf as mf_pdf_mod
     from parsers.holdings import icici_ppf_pdf as ppf_pdf_mod
@@ -113,7 +110,6 @@ def detect_holding_file(path: Path) -> list[DetectionResult]:
     for fn in (
         eq_pdf_mod.detect_icici_equity_statement_pdf,
         mf_pdf_mod.detect_icici_mf_statement_pdf,
-        cn_mod.detect_icici_contract_note_pdf,
         ppf_pdf_mod.detect_icici_ppf_pdf,
     ):
         res = fn(path)

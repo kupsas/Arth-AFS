@@ -159,7 +159,7 @@ def _heuristic_format_label(combined_text: str) -> str:
     if "SCHEME" in t and "FOLIO" in t and "NAV" in t:
         return "likely_MF_statement_table (map columns to icici_direct_mf CSV-like fields)"
     if "NSE" in t or "BSE" in t or "ISIN" in t:
-        return "likely_equity_ledger_table (map to icici_direct_equity / NSE symbol resolution)"
+        return "likely_equity_ledger_table (ICICI equity statement PDF; ISIN + NSE symbol resolution)"
     return "unknown — open the .txt dump and classify by hand"
 
 

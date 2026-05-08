@@ -14,6 +14,7 @@ import litellm
 from litellm import acompletion, stream_chunk_builder
 
 from agent import config as cfg
+from pipeline.llm_errors import AgentPausedError, ErrorType, ProviderFailure
 
 # Must run after ``import litellm`` (library reads this flag at call time).
 litellm.suppress_debug_info = True
@@ -118,6 +119,76 @@ def _api_key_for_litellm_model(model: str) -> str | None:
     return None
 
 
+def _provider_slug_for_litellm_model(model: str) -> str:
+    """Map a LiteLLM model id to a stable provider key for user-facing copy."""
+    m = model.strip().lower()
+    if (
+        m.startswith("openai/")
+        or m.startswith("azure/")
+        or m.startswith("gpt-")
+        or m.startswith("o1")
+        or m.startswith("o3")
+        or m.startswith("o4")
+    ):
+        return "openai"
+    if m.startswith("anthropic/") or m.startswith("claude"):
+        return "anthropic"
+    if m.startswith("gemini/") or m.startswith("google/") or m.startswith("vertex_ai/"):
+        return "google"
+    return "other"
+
+
+def _litellm_billing_hint(lower: str) -> bool:
+    return any(
+        x in lower
+        for x in (
+            "insufficient_quota",
+            "billing",
+            "credit balance",
+            "exceeded your current quota",
+            "payment required",
+        )
+    )
+
+
+def _classify_litellm_error(exc: BaseException, model: str) -> ProviderFailure:
+    """
+    Map LiteLLM + underlying provider errors to :class:`ProviderFailure`.
+    """
+    provider = _provider_slug_for_litellm_model(model)
+    msg = str(exc).strip()[:500] or type(exc).__name__
+    lower = msg.lower()
+
+    try:
+        import litellm.exceptions as lex
+    except ImportError:
+        lex = None  # type: ignore[assignment]
+
+    if lex is not None:
+        auth_cls = getattr(lex, "AuthenticationError", None)
+        if auth_cls and isinstance(exc, auth_cls):
+            return ProviderFailure(provider, "auth", msg)
+        rlim_cls = getattr(lex, "RateLimitError", None)
+        if rlim_cls and isinstance(exc, rlim_cls):
+            et: ErrorType = "billing" if _litellm_billing_hint(lower) else "rate_limit"
+            return ProviderFailure(provider, et, msg)
+        for name in ("ServiceUnavailableError", "APIConnectionError", "Timeout"):
+            cls = getattr(lex, name, None)
+            if cls and isinstance(exc, cls):
+                return ProviderFailure(provider, "other", msg)
+
+    # OpenAI-shaped errors sometimes surface without the litellm wrapper
+    if "402" in msg or ("payment" in lower and "required" in lower):
+        return ProviderFailure(provider, "billing", msg)
+    if "401" in msg or "invalid api key" in lower or "incorrect api key" in lower:
+        return ProviderFailure(provider, "auth", msg)
+    if "429" in msg or "rate limit" in lower or "too many requests" in lower:
+        et2: ErrorType = "billing" if _litellm_billing_hint(lower) else "rate_limit"
+        return ProviderFailure(provider, et2, msg)
+
+    return ProviderFailure(provider, "other", msg)
+
+
 def _model_expects_agent_api_key(model: str) -> bool:
     """True when this model id clearly needs one of the *_FOR_SINGLE_AGENT keys."""
     m = model.strip().lower()
@@ -187,6 +258,7 @@ async def chat_completion(
 
     api_messages = messages_for_llm(messages)
     last_err: Exception | None = None
+    failures: list[ProviderFailure] = []
     for m in chain:
         kwargs: dict[str, Any] = {
             "model": m,
@@ -230,11 +302,14 @@ async def chat_completion(
                     response=resp, call_type=usage_call_type, model=m
                 )
             return resp
+        except RuntimeError:
+            raise
         except Exception as e:
             last_err = e
+            failures.append(_classify_litellm_error(e, m))
             logger.warning("LLM call failed for model=%s: %s — trying fallback", m, e)
     assert last_err is not None
-    raise last_err
+    raise AgentPausedError(failures)
 
 
 # --- Streaming (final assistant text only; see ``agent.core``) ----------------

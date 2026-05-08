@@ -217,10 +217,9 @@ def detect_and_upsert(session: Session) -> dict[str, int]:
             created += 1
 
     # ── Step 6: Deactivate overdue patterns ────────────────────────────────────
-    # Flush newly created / updated patterns so the SELECT below sees them
-    # (autoflush=False on SQLiteSerializingSession means session.exec() won't
-    # flush automatically).
-    session.flush()
+    # Commit newly created / updated patterns so the SELECT below sees them and
+    # the write transaction is closed before the deactivation read+loop.
+    session.commit()
     all_patterns = session.exec(select(RecurringPattern)).all()
     deactivated = 0
     for pat in all_patterns:

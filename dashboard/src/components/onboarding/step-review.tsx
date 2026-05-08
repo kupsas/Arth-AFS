@@ -19,6 +19,7 @@ import { UploadButton } from "@/components/dashboard/upload-button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { holdingsCoverageKey, useHoldingsCoverage, useOnboardingGaps } from "@/hooks/use-onboarding-gaps"
+import { portfolioKeys } from "@/hooks/use-portfolio"
 import {
   fetchCategoryBreakdown,
   fetchCategoryTrend,
@@ -27,6 +28,7 @@ import {
   fetchNegativeSurplusMonths,
   fetchOnboardingPortfolioSnapshot,
   fetchSpendCategoryBreakdown,
+  postOnboardingPortfolioDerive,
 } from "@/lib/api"
 import type { CategoryBreakdown, MonthlyTrend, SpendCategoryBreakdown } from "@/lib/types"
 import { cn, formatCurrency } from "@/lib/utils"
@@ -214,7 +216,23 @@ export function StepReview({ hasBrokerSource }: StepReviewProps) {
     void queryClient.invalidateQueries({ queryKey: [...holdingsCoverageKey] })
     void refetchHoldingsCov()
     void queryClient.invalidateQueries({ queryKey: ["onboarding", "review-insights"] })
-  }, [queryClient, refetch, refetchHoldingsCov])
+    /** Broker ledger may have new rows — re-derive holdings + restart historical price job. */
+    if (hasBrokerSource) {
+      void postOnboardingPortfolioDerive()
+        .then(() => {
+          void queryClient.invalidateQueries({
+            queryKey: ["onboarding", "portfolio-snapshot-review"],
+          })
+          void queryClient.invalidateQueries({
+            queryKey: portfolioKeys.onboardingPriceBackfill(),
+          })
+          void queryClient.invalidateQueries({
+            queryKey: [...portfolioKeys.all, "value-trend"],
+          })
+        })
+        .catch(() => {})
+    }
+  }, [queryClient, refetch, refetchHoldingsCov, hasBrokerSource])
 
   const insightsQ = useQuery({
     queryKey: ["onboarding", "review-insights"] as const,

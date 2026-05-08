@@ -148,13 +148,12 @@ The `scripts/` folder has many **one-off** maintenance tools. Read the top of ea
 | `backup_db.sh`, `com.arth.backup.plist`                                                        | Scheduled or manual SQLite backups                                                       |
 | `scrape_historical.py`, `POST /api/scraper/backfill`                                           | **Preferred** Gmail historical import (date range + optional `--preset` / `gmail_query`) |
 | `backfill_`* (deprecated wrappers + `investment_txn_holding_ids`, `ppf_nps_cost_and_links`, …) | Legacy aliases; use `scrape_historical.py` for statement/trade email sweeps              |
-| `validate_email_statement.py`, `validate_icici_direct_trade_email.py`                          | Validate a single email or PDF against parsers                                           |
+| `validate_email_statement.py`                                                                  | Validate a single email or PDF against parsers                                           |
 | `diagnose_portfolio_prices.py`, `validate_price_sources.py`                                    | Debug missing marks or bad symbols                                                       |
 | `enrich_holdings.py`, `sync_all_holdings.py`                                                   | Holdings enrichment / sync                                                               |
 | `weekly_market_data_refresh.py`                                                                | Same weekly chain as the API scheduler (manual / cron if no server)                      |
 | `migrate_db.py`, `migrate_goals_v2.py`                                                         | Schema migrations (run with care; backup first)                                          |
 | `migrate_phase45.py`, `remove_duplicate_pdf_email_transactions.py`                             | **Moved to** `[archive/](archive/README.md)`                                             |
-| `compare_icici_trade_emails_to_db.py`                                                          | Reconciliation helper (ICICI trade emails vs DB)                                         |
 
 
 Operator runbooks for **historical price backfill** and **test→prod price merge** are documented above (`backfill_price_history.py`, `merge_prices_from_db.py`).

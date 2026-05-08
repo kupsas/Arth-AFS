@@ -2,12 +2,11 @@
 """
 Phase 3 — Compare **ICICI Direct equity / MF account statement** PDFs to ``investment_transactions``.
 
-This is the statement-PDF sibling of :mod:`scripts.compare_icici_trade_emails_to_db` (NSE trade
-mailers). It reads **local decrypted PDFs** (for example from ``data/samples/icici_direct_*``),
+It reads **local decrypted PDFs** (for example from ``data/samples/icici_direct_*``),
 runs the same parsers the email path uses, and checks rows already stored in your Arth DB.
 
 **Equity (``ICICI Direct``)**  
-  Match keys mirror the trade script: ``(txn_date, canonical NSE symbol, txn_type)``, then
+  Match keys: ``(txn_date, canonical NSE symbol, txn_type)``, then
   compare quantity / ``total_amount`` / ``price_per_unit`` with tolerances.
 
 **Mutual funds (``ICICI Direct MF``)**  
@@ -139,7 +138,7 @@ def _compare_equity(
     db_rows: list[InvestmentTransaction],
     args: argparse.Namespace,
 ) -> tuple[list[str], bool]:
-    """Same aggregation-key comparison as ``compare_icici_trade_emails_to_db``."""
+    """Compare parsed equity legs to DB rows by (date, symbol, side)."""
     parsed_by_key = {_match_key_equity(t): t for t in parsed}
     db_by_key: dict[tuple, InvestmentTransaction] = {}
     dupes = 0

@@ -121,7 +121,9 @@ def patch_life_event(
 
     row.updated_at = datetime.datetime.now(datetime.UTC)
     session.add(row)
-    session.flush()
+    # Commit the life-event update first so the write transaction is closed
+    # before the activation check, which may do its own reads and writes.
+    session.commit()
 
     # When an event flips to True, dependent PENDING goals may become ACTIVE.
     if data.get("occurred") is True and not prev_occurred:

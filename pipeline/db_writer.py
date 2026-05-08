@@ -361,7 +361,7 @@ def write_to_db(
         run.llm_model = llm_model
         run.status = "running"
         session.add(run)
-        session.flush()
+        session.commit()
     else:
         run = PipelineRun(
             source_key=source_key,
@@ -369,8 +369,10 @@ def write_to_db(
             status="running",
         )
         session.add(run)
-        session.flush()  # assigns run.id without committing
-    assert run.id is not None  # flush guarantees this; tells mypy the id is set
+        # Commit immediately so run.id is assigned and the write transaction is
+        # closed before the (potentially long) transaction-processing loop below.
+        session.commit()
+    assert run.id is not None  # commit guarantees this; tells mypy the id is set
 
     new_count = 0
     updated_count = 0

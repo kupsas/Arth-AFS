@@ -37,6 +37,7 @@ from api.services.historical_portfolio import (
     market_position_quantities_as_of,
 )
 from api.services.price_feed import canonical_nse_symbol
+from pipeline.isin_nse_resolver import is_curated_ignored_holding_row
 from pipeline.models import AssetClass, ValuationMethod
 
 Granularity = Literal["daily", "weekly", "monthly"]
@@ -48,7 +49,8 @@ def _active_holdings(session: Session, user_id: str | None) -> list[Holding]:
     )
     if user_id:
         q = q.where(Holding.user_id == user_id)
-    return list(session.exec(q).all())
+    rows = list(session.exec(q).all())
+    return [h for h in rows if not is_curated_ignored_holding_row(h)]
 
 
 def _active_liabilities(session: Session, user_id: str | None) -> list[Liability]:

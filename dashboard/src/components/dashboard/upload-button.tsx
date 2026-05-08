@@ -99,7 +99,14 @@ type UploadState =
       sourceKey: string
     }
   | { phase: "done"; fileName: string; txnCount: number; newCount: number; unknownsCount: number; sourceKey: string }
-  | { phase: "holdings_done"; summary: string }
+  | {
+      phase: "holdings_done"
+      fileName: string
+      /** Present when the server returned the usual counter object. */
+      portfolioStats: PortfolioImportSummary | null
+      /** Short sentence if we could not parse stats (never raw JSON). */
+      note?: string
+    }
   | { phase: "holdings_type_pick"; file: File; options: StatementUploadOption[]; serverMessage: string }
   | { phase: "error"; message: string }
 
@@ -181,6 +188,154 @@ type ImportSummaryFields = {
   txnCount: number
   newCount: number
   unknownsCount: number
+}
+
+/** Normalised counters from ``POST …/upload`` portfolio branch (``ingest_portfolio_file``). */
+type PortfolioImportSummary = {
+  holdingsInserted: number
+  holdingsUpdated: number
+  holdingsErrors: number
+  tradesInserted: number
+  tradesSkippedDuplicate: number
+  tradesErrors: number
+  tradesLinkedInline: number
+  orphansLinked: number
+}
+
+function numFromStats(v: unknown): number {
+  if (typeof v === "number" && Number.isFinite(v)) return Math.max(0, v)
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v)
+    if (Number.isFinite(n)) return Math.max(0, n)
+  }
+  return 0
+}
+
+/** Turn API ``import_stats`` into fixed fields; returns null if payload is not the expected shape. */
+function parsePortfolioImportStats(raw: unknown): PortfolioImportSummary | null {
+  if (raw == null || typeof raw !== "object") return null
+  const root = raw as Record<string, unknown>
+  const h = root.holdings
+  const t = root.investment_txns
+  const hb = h != null && typeof h === "object" ? (h as Record<string, unknown>) : {}
+  const tb = t != null && typeof t === "object" ? (t as Record<string, unknown>) : {}
+  const hasAny =
+    ["inserted", "updated", "errors"].some((k) => k in hb) ||
+    ["inserted", "skipped_duplicate", "errors"].some((k) => k in tb)
+  if (!hasAny) return null
+  return {
+    holdingsInserted: numFromStats(hb.inserted),
+    holdingsUpdated: numFromStats(hb.updated),
+    holdingsErrors: numFromStats(hb.errors),
+    tradesInserted: numFromStats(tb.inserted),
+    tradesSkippedDuplicate: numFromStats(tb.skipped_duplicate),
+    tradesErrors: numFromStats(tb.errors),
+    tradesLinkedInline: numFromStats(tb.linked_inline),
+    orphansLinked: numFromStats(tb.orphans_linked),
+  }
+}
+
+/** Portfolio / MF statement import — mirrors ``StatementImportSummaryBody`` layout (no raw JSON). */
+function PortfolioImportSummaryBody({
+  fileName,
+  stats,
+}: {
+  fileName: string
+  stats: PortfolioImportSummary
+}) {
+  const hTotal = stats.holdingsInserted + stats.holdingsUpdated + stats.holdingsErrors
+  const tTotal =
+    stats.tradesInserted + stats.tradesSkippedDuplicate + stats.tradesErrors
+  return (
+    <>
+      <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground flex-wrap px-1">
+        <FileText className="size-3.5 shrink-0" aria-hidden />
+        <span className="font-medium text-foreground truncate max-w-[min(220px,100%)]">{fileName}</span>
+        <span aria-hidden>·</span>
+        <span className="font-medium text-foreground">Portfolio</span>
+      </div>
+
+      <div className="grid w-full max-w-xs gap-5 text-center sm:max-w-sm">
+        <div>
+          <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Holdings
+          </p>
+          <div className="grid grid-cols-3 gap-2 sm:gap-4">
+            <div>
+              <p className="text-lg font-semibold tabular-nums">{stats.holdingsInserted}</p>
+              <p className="text-[11px] leading-tight text-muted-foreground">new</p>
+            </div>
+            <div>
+              <p className="text-lg font-semibold tabular-nums text-foreground">{stats.holdingsUpdated}</p>
+              <p className="text-[11px] leading-tight text-muted-foreground">updated</p>
+            </div>
+            <div>
+              <p
+                className={cn(
+                  "text-lg font-semibold tabular-nums",
+                  stats.holdingsErrors > 0 ? "text-amber-600" : "",
+                )}
+              >
+                {stats.holdingsErrors}
+              </p>
+              <p className="text-[11px] leading-tight text-muted-foreground">issues</p>
+            </div>
+          </div>
+          {hTotal === 0 && (
+            <p className="mt-1.5 text-[10px] text-muted-foreground">No position rows in this file.</p>
+          )}
+        </div>
+
+        <div>
+          <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            Trades &amp; activity
+          </p>
+          <div className="grid grid-cols-3 gap-2 sm:gap-4">
+            <div>
+              <p className="text-lg font-semibold tabular-nums text-green-600">{stats.tradesInserted}</p>
+              <p className="text-[11px] leading-tight text-muted-foreground">new</p>
+            </div>
+            <div>
+              <p className="text-lg font-semibold tabular-nums">{stats.tradesSkippedDuplicate}</p>
+              <p className="text-[11px] leading-tight text-muted-foreground">skipped (already saved)</p>
+            </div>
+            <div>
+              <p
+                className={cn(
+                  "text-lg font-semibold tabular-nums",
+                  stats.tradesErrors > 0 ? "text-amber-600" : "",
+                )}
+              >
+                {stats.tradesErrors}
+              </p>
+              <p className="text-[11px] leading-tight text-muted-foreground">issues</p>
+            </div>
+          </div>
+          {tTotal === 0 && (
+            <p className="mt-1.5 text-[10px] text-muted-foreground">No trade rows in this file.</p>
+          )}
+        </div>
+      </div>
+
+      {(stats.tradesLinkedInline > 0 || stats.orphansLinked > 0) && (
+        <p className="max-w-xs px-2 text-center text-[11px] leading-snug text-muted-foreground">
+          {stats.tradesLinkedInline > 0 && (
+            <>
+              Linked {stats.tradesLinkedInline} new trade{stats.tradesLinkedInline === 1 ? "" : "s"} to
+              your positions.
+            </>
+          )}
+          {stats.tradesLinkedInline > 0 && stats.orphansLinked > 0 && " "}
+          {stats.orphansLinked > 0 && (
+            <>
+              Matched {stats.orphansLinked} older trade{stats.orphansLinked === 1 ? "" : "s"} to
+              holdings.
+            </>
+          )}
+        </p>
+      )}
+    </>
+  )
 }
 
 /** Shared layout for import-complete stats (live summary + history cards). */
@@ -458,7 +613,7 @@ function UploadDialog({
   const helpText =
     variant === "transactions"
       ? "We detect HDFC / ICICI statement types automatically from the file contents — any filename works."
-      : "We detect ICICI Direct / NSE / PPF portfolio formats from the file itself."
+      : "We detect ICICI Direct and PPF portfolio formats from the file itself."
 
   function rememberWorkingPdfPassword(usedPassword?: string) {
     if (usedPassword) pdfSessionPasswordRef.current = usedPassword
@@ -728,9 +883,16 @@ function UploadDialog({
       }
       if (result.outcome === "holdings_success") {
         rememberWorkingPdfPassword(mergedPw)
-        const stats = result.import_stats
-        const summary = stats ? JSON.stringify(stats, null, 2) : result.message
-        setState({ phase: "holdings_done", summary })
+        const portfolioStats = parsePortfolioImportStats(result.import_stats)
+        setState({
+          phase: "holdings_done",
+          fileName: file.name,
+          portfolioStats,
+          note:
+            portfolioStats == null
+              ? result.message || "Import finished — open Portfolio to see what changed."
+              : undefined,
+        })
         queryClient.invalidateQueries({ queryKey: portfolioKeys.all })
         queryClient.invalidateQueries({ queryKey: [...holdingsCoverageKey] })
         onImportComplete?.()
@@ -776,11 +938,16 @@ function UploadDialog({
       })
       if (result.outcome === "success") {
         rememberWorkingPdfPassword(mergedPw)
-        const stats = result.import_stats
-        const summary = stats
-          ? JSON.stringify(stats, null, 2)
-          : result.message
-        setState({ phase: "holdings_done", summary })
+        const portfolioStats = parsePortfolioImportStats(result.import_stats)
+        setState({
+          phase: "holdings_done",
+          fileName: file.name,
+          portfolioStats,
+          note:
+            portfolioStats == null
+              ? result.message || "Import finished — open Portfolio to see what changed."
+              : undefined,
+        })
         queryClient.invalidateQueries({ queryKey: portfolioKeys.all })
         queryClient.invalidateQueries({ queryKey: [...holdingsCoverageKey] })
         onImportComplete?.()
@@ -1136,15 +1303,20 @@ function UploadDialog({
       )}
 
       {state.phase === "holdings_done" && (
-        <div className="flex flex-col items-center gap-3 py-6 text-center">
-          <div className="flex size-14 items-center justify-center rounded-full bg-green-500/10 text-green-600 text-2xl">
+        <div className="flex flex-col items-center gap-4 px-2 py-6 text-center">
+          <div className="flex size-14 items-center justify-center rounded-full bg-green-500/10 text-2xl text-green-600">
             ✓
           </div>
           <p className="text-sm font-semibold">Portfolio import complete</p>
-          <pre className="text-[10px] text-left bg-muted/40 rounded-md p-3 max-h-40 overflow-auto w-full whitespace-pre-wrap">
-            {state.summary}
-          </pre>
-          <Button size="sm" className="mt-2" onClick={goIdle}>
+          {state.portfolioStats ? (
+            <PortfolioImportSummaryBody fileName={state.fileName} stats={state.portfolioStats} />
+          ) : (
+            <p className="max-w-sm px-2 text-xs leading-relaxed text-muted-foreground">
+              {state.note ??
+                "Import finished — open Portfolio to see what changed."}
+            </p>
+          )}
+          <Button size="sm" className="mt-1" onClick={goIdle}>
             Upload another
           </Button>
         </div>

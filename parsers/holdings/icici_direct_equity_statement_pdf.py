@@ -1,16 +1,16 @@
 """
 ICICI Securities **Equity Transaction Statement** PDF (broker period statement).
 
-These PDFs are **not** NSE *Trades executed at NSE* mailers and **not** annual CSV exports.
+These PDFs are **not** annual CSV exports from ICICI (those lack ISIN and are unsupported).
 They render as table grids with ISIN, security name, B/S, quantities, and **gross** trade
-consideration in the **Total (₹)** column (we use that for ``total_amount`` so it lines up
-with annual CSV / NSE trade PDF ingest; **Net Amount** is optional metadata only).
+consideration in the **Total (₹)** column (we use that for ``total_amount``; **Net Amount**
+is optional metadata only).
 
 We prefer ``pdfplumber`` ``extract_tables()`` because row alignment survives multi-line
 company names better than raw ``extract_text()`` regex alone.
 
-Parsed rows are merged with :func:`parsers.holdings.icici_direct_contract_note.aggregate_icici_direct_trades`
-so ledger grain matches other ICICI Direct equity imports (one row per date × side × symbol).
+Parsed rows are merged with :func:`aggregate_icici_direct_trades` so ledger grain is one row
+per date × side × symbol (same as historical multi-leg statement rows).
 """
 
 from __future__ import annotations
@@ -18,16 +18,16 @@ from __future__ import annotations
 import datetime
 import logging
 import re
+from collections import defaultdict
 from collections.abc import Sequence
 from pathlib import Path
 
 import pdfplumber
 
+from api.services.price_feed import canonical_nse_symbol
 from pipeline.detection import DetectionResult, PARSER_LABELS
-from parsers.holdings.base import ParsedInvestmentTxn
-from parsers.holdings.icici_direct_contract_note import aggregate_icici_direct_trades
+from parsers.holdings.base import ParsedInvestmentTxn, parse_icici_number
 from parsers.holdings.icici_direct_equity import resolve_icici_direct_nse_symbol
-from parsers.holdings.base import parse_icici_number
 from pipeline.models import InvestmentTxnType
 
 logger = logging.getLogger(__name__)
@@ -35,9 +35,85 @@ logger = logging.getLogger(__name__)
 _ACCOUNT = "ICICI Direct"
 _KIND = "icici_equity_transaction_statement_pdf"
 
-# Indian equity ISIN is 12 characters: ``INE`` plus nine NSIN / check body characters
-# (see ISO 6166; Indian listed stocks use the ``INE`` issuer prefix).
-_ISIN = re.compile(r"^INE[A-Z0-9]{9}$")
+# Indian ISIN: ``IN`` + issuer letter + 9 NSIN chars (equities ``INE*``, ETFs ``INF*``, …).
+_ISIN = re.compile(r"^IN[A-Z][A-Z0-9]{9}$")
+
+
+def _merge_bucket_key(t: ParsedInvestmentTxn) -> tuple[datetime.date, str, str] | None:
+    """Group key (date, txn_type, NSE symbol or ISIN) for aggregating split PDF legs.
+
+    Uses canonical NSE symbol when present; else resolves from metadata ``isin``;
+    if resolution still yields no symbol, buckets by **raw ISIN** so split legs still merge.
+    Rows without symbol **and** without ISIN stay as singleton orphans.
+    """
+    meta = t.metadata or {}
+    sym = (t.symbol or "").strip()
+    if sym:
+        cs = canonical_nse_symbol(sym)
+        if cs:
+            return (t.txn_date, t.txn_type, cs)
+    isin = meta.get("isin")
+    if isin:
+        iso = str(isin).strip().upper()
+        cs = resolve_icici_direct_nse_symbol(isin=iso, icici_short="")
+        if cs:
+            return (t.txn_date, t.txn_type, cs)
+        return (t.txn_date, t.txn_type, iso)
+    return None
+
+
+def aggregate_icici_direct_trades(legs: list[ParsedInvestmentTxn]) -> list[ParsedInvestmentTxn]:
+    """Merge split PDF lines into one row per (trade date, BUY/SELL, NSE symbol or ISIN).
+
+    Sums ``quantity`` and ``total_amount``, then sets ``price_per_unit = total / qty``.
+    Legs with neither a resolvable symbol nor an ISIN in metadata pass through unchanged.
+    """
+    if not legs:
+        return []
+    buckets: dict[tuple[datetime.date, str, str], list[ParsedInvestmentTxn]] = defaultdict(list)
+    orphans: list[ParsedInvestmentTxn] = []
+
+    for t in legs:
+        key = _merge_bucket_key(t)
+        if key is None:
+            orphans.append(t)
+            logger.debug(
+                "ICICI Direct: leg not merged (no symbol/ISIN): %s %s qty=%s",
+                t.txn_date,
+                t.txn_type,
+                t.quantity,
+            )
+            continue
+        buckets[key].append(t)
+
+    out: list[ParsedInvestmentTxn] = []
+    for key, group in buckets.items():
+        qty = sum(x.quantity for x in group)
+        total = sum(x.total_amount for x in group)
+        if qty <= 0:
+            continue
+        ppu = total / qty
+        first = group[0]
+        meta = dict(first.metadata or {})
+        meta["aggregated_from_legs"] = len(group)
+        meta["aggregation"] = "icici_direct_pdf"
+        d, txn_type, sym = key
+        out.append(
+            ParsedInvestmentTxn(
+                txn_date=d,
+                symbol=sym,
+                name=first.name,
+                txn_type=txn_type,
+                quantity=round(qty, 6),
+                price_per_unit=round(ppu, 6),
+                total_amount=round(total, 2),
+                account_platform=first.account_platform,
+                notes=first.notes,
+                metadata=meta,
+            )
+        )
+    out.extend(orphans)
+    return out
 
 
 def _norm_cell(c: str | None) -> str:

@@ -85,6 +85,7 @@ import type {
   OnboardingBackfillSourceRow,
   OnboardingPortfolioDeriveResponse,
   OnboardingPortfolioSnapshotResponse,
+  OnboardingPriceBackfillStatus,
   ClassificationStatsResponse,
 } from "@/lib/types";
 
@@ -114,6 +115,24 @@ export class ApiError extends Error {
     this.name = "ApiError";
     this.errorCode = opts?.errorCode;
     this.hint = opts?.hint;
+  }
+}
+
+/** Structured failure from classifier_paused / agent_paused events (matches backend JSON). */
+export type ProviderFailurePayload = {
+  provider: string;
+  error_type: "rate_limit" | "billing" | "auth" | "other";
+  message: string;
+};
+
+/** SSE mail import stopped — every smart-label provider failed for a batch. */
+export class ClassifierPausedApiError extends Error {
+  readonly failures: ProviderFailurePayload[];
+
+  constructor(failures: ProviderFailurePayload[]) {
+    super("Import paused — cloud providers unavailable.");
+    this.name = "ClassifierPausedApiError";
+    this.failures = failures;
   }
 }
 
@@ -1516,12 +1535,13 @@ export type OnboardingBackfillStreamPayload =
   | { type: "status"; progress: Record<string, unknown> }
   | { type: "gate"; progress: Record<string, unknown> }
   | { type: "complete"; progress: Record<string, unknown> }
-  | { type: "error"; detail: string; terminal?: boolean };
+  | { type: "error"; detail: string; terminal?: boolean }
+  | { type: "classifier_paused"; failures: ProviderFailurePayload[] };
 
 /** How ``streamOnboardingBackfill`` finished (wizard uses this instead of chunk polling). */
 export type OnboardingBackfillStreamResult = {
   lastProgress: Record<string, unknown> | null;
-  endReason: "complete" | "gate" | "error" | "closed";
+  endReason: "complete" | "gate" | "error" | "closed" | "classifier_paused";
 };
 
 /**
@@ -1604,6 +1624,11 @@ export async function streamOnboardingBackfill(
     }
     if (t === "gate") {
       endReason = "gate";
+    }
+    if (t === "classifier_paused") {
+      endReason = "classifier_paused";
+      const pf = (payload as { failures?: ProviderFailurePayload[] }).failures;
+      throw new ClassifierPausedApiError(Array.isArray(pf) ? pf : []);
     }
     if (t === "error") {
       endReason = "error";
@@ -1697,6 +1722,13 @@ export function postOnboardingBackfillResume(source: string): Promise<Record<str
 /** POST /api/onboarding/complete */
 export function postOnboardingComplete(): Promise<{ ok: boolean; current_step: string }> {
   return post<{ ok: boolean; current_step: string }>("/api/onboarding/complete", {});
+}
+
+/** GET /api/onboarding/portfolio-price-backfill-status — historical price job (trend chart). */
+export function fetchOnboardingPortfolioPriceBackfillStatus(): Promise<OnboardingPriceBackfillStatus> {
+  return get<OnboardingPriceBackfillStatus>(
+    "/api/onboarding/portfolio-price-backfill-status",
+  );
 }
 
 /** POST /api/onboarding/portfolio-derive — reconcile ledger + derive broker holdings (ICICI Direct slice). */

@@ -16,12 +16,7 @@ os.environ.setdefault("FERNET_KEY", Fernet.generate_key().decode("ascii"))
 
 from api.models import Holding  # noqa: E402
 from parsers.holdings.base import parse_icici_number  # noqa: E402
-from parsers.holdings.icici_direct_equity import (  # noqa: E402
-    parse_annual_trade_csv,
-    parse_icici_direct_equity_dir,
-    parse_portfolio_summary_csv,
-    resolve_icici_direct_nse_symbol,
-)
+from parsers.holdings.icici_direct_equity import resolve_icici_direct_nse_symbol
 from parsers.holdings.icici_direct_mf import parse_icici_direct_mf_path  # noqa: E402
 from parsers.holdings.icici_ppf import parse_icici_ppf_csv  # noqa: E402
 from parsers.holdings.liabilities import parse_bike_loan_txt  # noqa: E402
@@ -39,37 +34,6 @@ def test_parse_icici_number_paren_and_spaced_minus() -> None:
     assert parse_icici_number("(8327.67)") == pytest.approx(-8327.67)
     assert parse_icici_number("- 4.91") == pytest.approx(-4.91)
     assert parse_icici_number("50,000.00") == pytest.approx(50000.0)
-
-
-def test_icici_portfolio_summary_maps_isin_to_nse() -> None:
-    path = FIXTURES / "icici_portfolio_summary_min.csv"
-    holdings, iso = parse_portfolio_summary_csv(path)
-    assert "INE646L01027" in iso
-    indigo = next(h for h in holdings if h.symbol == "INDIGO")
-    assert indigo.quantity == 10
-    assert indigo.asset_class == AssetClass.EQUITY.value
-    sto = next(h for h in holdings if "STONE" in h.name.upper())
-    assert sto.valuation_method == ValuationMethod.MANUAL.value
-    assert sto.notes and "SEBI" in sto.notes
-
-
-def test_icici_annual_trades_use_isin_map() -> None:
-    path = FIXTURES / "icici_annual_trade_min.csv"
-    iso = {"INE646L01027": "INDIGO"}
-    txns = parse_annual_trade_csv(path, iso)
-    assert len(txns) == 2
-    buy = txns[0]
-    assert buy.txn_type == InvestmentTxnType.BUY.value
-    assert buy.symbol == "INDIGO"
-    sell = txns[1]
-    assert sell.symbol == "HDFCBANK"
-
-
-def test_icici_equity_directory_merge() -> None:
-    d = FIXTURES / "icici_equity_dir"
-    h, t = parse_icici_direct_equity_dir(d)
-    assert len(h) >= 2
-    assert len(t) >= 2
 
 
 def test_icici_mf_skips_rejected_and_derives_holding() -> None:
@@ -192,7 +156,7 @@ def test_ingest_holdings_round_trip_encrypted_folio(engine) -> None:
 def test_resolve_icici_direct_nse_symbol_isin_bhav_matches(monkeypatch: pytest.MonkeyPatch) -> None:
     """When ISIN is in NSE bhav, :func:`resolve_icici_direct_nse_symbol` uses that symbol."""
     monkeypatch.setattr(
-        "pipeline.isin_nse_resolver.lookup_isin_from_nse_bhav",
+        "parsers.holdings.icici_direct_equity.lookup_isin_from_nse_bhav",
         lambda isin: "NEWSYM" if isin == "INE999Z01099" else None,
     )
     assert resolve_icici_direct_nse_symbol(isin="INE999Z01099", icici_short="UNKNOWN") == "NEWSYM"
@@ -216,7 +180,7 @@ def test_resolve_icici_direct_nse_symbol_bhav_wins_over_isin_override(
             }
         )
         monkeypatch.setattr(
-            "pipeline.isin_nse_resolver.lookup_isin_from_nse_bhav",
+            "parsers.holdings.icici_direct_equity.lookup_isin_from_nse_bhav",
             lambda isin: "NEWSYM" if isin == "INE999Z01099" else None,
         )
         assert resolve_icici_direct_nse_symbol(isin="INE999Z01099", icici_short="X") == "NEWSYM"

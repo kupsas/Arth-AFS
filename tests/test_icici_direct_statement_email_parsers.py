@@ -14,7 +14,7 @@ from parsers.statements.icici_direct_mf import (
 
 @pytest.fixture
 def accounts() -> dict:
-    return {"0000": {"account_id": "ICICI_DIRECT", "source_key": "icici_direct_equity"}}
+    return {"0000": {"account_id": "ICICI_DIRECT", "source_key": "icici_direct_statement"}}
 
 
 @pytest.fixture

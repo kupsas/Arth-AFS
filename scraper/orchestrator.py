@@ -65,10 +65,6 @@ HISTORICAL_GMAIL_QUERY_PRESETS: dict[str, str] = {
         "from:emailstatements.cards@hdfcbank.bank.in) "
         'subject:"Credit Card Statement"'
     ),
-    "icici-nse-trades": (
-        "(from:ebix@nse.co.in OR from:nseinvest@nse.co.in OR from:nse-direct@nse.co.in) "
-        '"Trades executed at NSE"'
-    ),
 }
 
 

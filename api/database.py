@@ -70,13 +70,33 @@ class SQLiteSerializingSession(Session):
         with _SQLITE_WRITER_LOCK:
             return super().rollback()
 
+    def flush_and_commit(self, objects=None) -> None:  # type: ignore[override]
+        """Flush then commit under a single lock acquisition.
+
+        The normal pattern of calling ``flush()`` followed by ``commit()`` has a
+        brief gap between the two where the Python lock has been released but SQLite
+        still holds an open write transaction on this connection.  If another thread
+        acquires the Python lock during that gap and tries to write on a different
+        pooled connection, SQLite raises ``database is locked``.
+
+        This method holds ``_SQLITE_WRITER_LOCK`` across both operations so there
+        is no gap.  Use it wherever a caller does ``upsert_X(); session.commit()``
+        back-to-back (e.g. the price backfill batch loop).
+
+        ``super()`` calls bypass our per-method lock wrappers; the RLock is
+        reentrant so SQLAlchemy's internal ``commit() → flush()`` re-entry is safe.
+        """
+        with _SQLITE_WRITER_LOCK:
+            super().flush(objects)
+            super().commit()
+
 
 # `check_same_thread=False` is required because FastAPI serves requests
 # across multiple threads, but SQLite's default is single-thread only.
 _engine = create_engine(
     f"sqlite:///{DB_PATH}",
     echo=False,
-    connect_args={"check_same_thread": False, "timeout": 120},
+    connect_args={"check_same_thread": False, "timeout": 30},
 )
 
 
@@ -89,7 +109,7 @@ def _sqlite_enable_wal(dbapi_conn, connection_record) -> None:
     cursor = dbapi_conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
     # Milliseconds to retry on SQLITE_BUSY (matches connect ``timeout`` intent).
-    cursor.execute("PRAGMA busy_timeout=120000")
+    cursor.execute("PRAGMA busy_timeout=30000")
     cursor.close()
 
 
@@ -853,20 +873,6 @@ def _seed_password_templates() -> None:
             "notes": (
                 "FIRST4 from your saved identity and aliases + DOB as DDMM. Same rules as ICICI."
             ),
-        },
-        {
-            "parser_key": "nse_trades_executed",
-            "display_name": "NSE “Trades executed” contract PDF",
-            "required_fields_json": '["pan"]',
-            "password_formula": "{pan}",
-            "notes": "Usually your PAN in uppercase; matches NSE_TRADES_EXECUTED_PASSWORD.",
-        },
-        {
-            "parser_key": "icici_direct_trade",
-            "display_name": "ICICI Direct — NSE trades PDF (PAN)",
-            "required_fields_json": '["pan"]',
-            "password_formula": "{pan}",
-            "notes": "Same as NSE contract-note PDFs; set explicit env keys if your broker differs.",
         },
     ]
 

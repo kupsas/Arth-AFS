@@ -163,9 +163,22 @@ function ChatPageInner() {
     liveActivitySegments,
     liveWipTools,
     lastError,
+    agentPausedFailures,
+    clearAgentPaused,
+    retryLastUserMessage,
     sendMessage,
     stopGenerating,
   } = useChat(sessionId, onSessionReady);
+
+  const onSwitchProviderKeys = useCallback(() => {
+    clearAgentPaused();
+    router.push("/settings");
+  }, [clearAgentPaused, router]);
+
+  const onRetryAgentPaused = useCallback(() => {
+    clearAgentPaused();
+    retryLastUserMessage();
+  }, [clearAgentPaused, retryLastUserMessage]);
 
   const { data: sessions = [], isLoading: sessionsLoading } = useChatSessionsQuery();
   const archive = useArchiveChatSessionMutation();
@@ -241,6 +254,10 @@ function ChatPageInner() {
         liveActivitySegments={liveActivitySegments}
         liveWipTools={liveWipTools}
         lastError={lastError}
+        agentPausedFailures={agentPausedFailures}
+        onDismissAgentPaused={clearAgentPaused}
+        onRetryAgentPaused={onRetryAgentPaused}
+        onSwitchProviderKeys={onSwitchProviderKeys}
         onNewChat={onNewChat}
         onSelectSession={onSelectSession}
         onArchiveSession={onArchiveSession}

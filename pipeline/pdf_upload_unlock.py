@@ -19,7 +19,6 @@ from scraper.pdf_passwords import (
     resolve_hdfc_cc_pdf_password_candidates,
     resolve_hdfc_combined_pdf_password_candidates,
     resolve_icici_statement_pdf_password_candidates,
-    resolve_nse_pdf_password_candidates,
 )
 from scraper.pdf_utils import decrypt_pdf_with_password_candidates
 from scraper.secrets_context import statement_secrets_context
@@ -58,7 +57,6 @@ def _merged_password_candidates(session: Session, user_id: str) -> list[str]:
             resolve_icici_statement_pdf_password_candidates,
             resolve_hdfc_combined_pdf_password_candidates,
             resolve_hdfc_cc_pdf_password_candidates,
-            resolve_nse_pdf_password_candidates,
         ):
             for p in fn():
                 s = (p or "").strip()

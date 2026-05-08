@@ -341,7 +341,7 @@ def test_collect_pending_queue_uses_gmail_subject_keywords_for_icici_direct() ->
             "accounts": {
                 "0000": {
                     "account_id": "ICICI_DIRECT",
-                    "source_key": "icici_direct_equity",
+                    "source_key": "icici_direct_statement",
                 },
             },
             "gmail_subject_filter_keywords": [
@@ -354,7 +354,7 @@ def test_collect_pending_queue_uses_gmail_subject_keywords_for_icici_direct() ->
         _collect_pending_queue(
             client,
             bank,
-            "icici_direct_equity",
+            "icici_direct_statement",
             after=datetime.date(2020, 1, 1),
             before=datetime.date(2026, 1, 1),
             session=MagicMock(),

@@ -393,7 +393,8 @@ def create_investment_transaction(
     uid = _inv_txn_user_id_for_sync(session, it, current_user)
     if it.holding_id is None:
         ensure_holding_for_transaction(session, it, user_id=uid)
-    session.flush()
+    # Commit to close the write transaction before the holding sync reads+writes.
+    session.commit()
     if it.holding_id is not None:
         sync_holding_from_transactions(session, it.holding_id)
         session.commit()

@@ -30,8 +30,6 @@ HDFC_COMBINED_STATEMENT_PASSWORD_KEYS = ("HDFC_STATEMENT_PASSWORD",)
 HDFC_CC_STATEMENT_PASSWORD_KEYS = ("HDFC_CC_STATEMENT_PASSWORD", "HDFC_STATEMENT_PASSWORD")
 ICICI_MONTHLY_STATEMENT_PASSWORD_KEYS = ("ICICI_STATEMENT_MONTHLY_PASSWORD", "ICICI_STATEMENT_PASSWORD")
 ICICI_ANNUAL_STATEMENT_PASSWORD_KEYS = ("ICICI_STATEMENT_ANNUAL_PASSWORD",)
-ICICI_DIRECT_TRADE_PASSWORD_KEYS = ("ICICI_DIRECT_EMAIL_PASSWORD", "ICICI_DIRECT_TRADE_PASSWORD")
-NSE_TRADES_EXECUTED_PASSWORD_KEYS = ("NSE_TRADES_EXECUTED_PASSWORD", "ICICI_DIRECT_TRADE_PASSWORD")
 # ICICI Direct / ICICI Sec equity + MF **statement** PDFs from email (Phase WS1).
 ICICI_DIRECT_STATEMENT_PASSWORD_KEYS = (
     "ICICI_STATEMENT_MONTHLY_PASSWORD",
@@ -64,8 +62,6 @@ EMAIL_PARSER_KEY_TO_PASSWORD_TEMPLATE_KEYS: dict[str, tuple[str, ...]] = {
     "icici_statement": ("icici_statement_monthly", "icici_statement_annual"),
     "hdfc_combined_statement": ("hdfc_combined_statement",),
     "hdfc_cc_statement": ("hdfc_cc_statement",),
-    # NSE + ICICI Direct trade PDFs both use PAN-style secrets; list both template rows.
-    "icici_direct_trade": ("nse_trades_executed", "icici_direct_trade"),
     # ICICI Securities equity/MF statement PDFs — same name+DDMM family as ICICI Bank PDFs.
     "icici_direct_statement": ("icici_statement_monthly",),
 }
@@ -302,7 +298,7 @@ def resolve_icici_statement_pdf_password_candidates() -> list[str]:
 
     Order: explicit env/UserSecrets keys (see :data:`ICICI_STATEMENT_PDF_ENV_KEYS`), then
     template-derived strings (when DB recipes exist), then name+DDMM permutations from
-    onboarding ingredients. (:func:`resolve_nse_pdf_password_candidates` is for NSE PAN PDFs.)
+    onboarding ingredients.
     """
     ordered: list[str] = []
     seen: set[str] = set()
@@ -387,28 +383,6 @@ def resolve_hdfc_cc_pdf_password_candidates() -> list[str]:
                 for v in _derive_name_dob_variants_from_secrets(session, user_id, raw_secrets):
                     _add(v)
 
-    return ordered
-
-
-def resolve_nse_pdf_password_candidates() -> list[str]:
-    """NSE *Trades executed* PDF — env keys, then PAN from templates / UserSecrets."""
-    ordered: list[str] = []
-    seen: set[str] = set()
-
-    def _add(p: str) -> None:
-        s = (p or "").strip()
-        if s and s not in seen:
-            seen.add(s)
-            ordered.append(s)
-
-    for key in NSE_TRADES_EXECUTED_PASSWORD_KEYS:
-        _add(resolve_secret_env(key, ""))
-
-    session, uid = get_statement_secrets_scope()
-    user_id = (uid or "").strip()
-    if session is not None and user_id:
-        for pk in ("nse_trades_executed", "icici_direct_trade"):
-            _add(_derive_password_from_template(session, user_id, pk))
     return ordered
 
 

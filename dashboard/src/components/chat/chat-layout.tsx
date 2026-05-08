@@ -7,6 +7,7 @@ import type {
   LiveTool,
   ToolCallUi,
 } from "@/lib/chat-types";
+import type { ProviderFailurePayload } from "@/lib/api";
 
 import { ChatPanel } from "./chat-panel";
 import { SessionSidebar } from "./session-sidebar";
@@ -25,6 +26,10 @@ export function ChatLayout({
   liveActivitySegments,
   liveWipTools,
   lastError,
+  agentPausedFailures,
+  onDismissAgentPaused,
+  onRetryAgentPaused,
+  onSwitchProviderKeys,
   onNewChat,
   onSelectSession,
   onArchiveSession,
@@ -44,6 +49,10 @@ export function ChatLayout({
   liveActivitySegments?: ActivitySegment[];
   liveWipTools?: ToolCallUi[];
   lastError: string | null;
+  agentPausedFailures: ProviderFailurePayload[] | null;
+  onDismissAgentPaused: () => void;
+  onRetryAgentPaused: () => void;
+  onSwitchProviderKeys: () => void;
   onNewChat: () => void;
   onSelectSession: (id: string) => void;
   onArchiveSession: (id: string) => void;
@@ -72,6 +81,10 @@ export function ChatLayout({
           liveActivitySegments={liveActivitySegments}
           liveWipTools={liveWipTools}
           lastError={lastError}
+          agentPausedFailures={agentPausedFailures}
+          onDismissAgentPaused={onDismissAgentPaused}
+          onRetryAgentPaused={onRetryAgentPaused}
+          onSwitchProviderKeys={onSwitchProviderKeys}
           onSend={onSend}
           onStop={onStop}
         />

@@ -51,8 +51,8 @@ _LEGACY_HDFC_CC_STATEMENT_ACCOUNTS: dict[str, dict[str, str]] = {
     "5778": _LEGACY_HDFC_BANK_ACCOUNTS["5778"],
 }
 
-_LEGACY_ICICI_DIRECT_TRADE_ACCOUNTS: dict[str, dict[str, str]] = {
-    "0000": {"account_id": "ICICI_DIRECT", "source_key": "icici_direct_equity"},
+_LEGACY_ICICI_DIRECT_BROKER_ACCOUNTS: dict[str, dict[str, str]] = {
+    "0000": {"account_id": "ICICI_DIRECT", "source_key": "icici_direct_statement"},
 }
 
 # sender_email -> accounts dict (merged with live BANK_SENDERS metadata in migrate())
@@ -67,9 +67,7 @@ _LEGACY_ACCOUNTS_BY_SENDER: dict[str, dict[str, dict[str, str]]] = {
     "emailstatements.cards@hdfcbank.bank.in": _LEGACY_HDFC_CC_STATEMENT_ACCOUNTS,
     "hdfcbanksmartstatement@hdfcbank.net": {"3703": _LEGACY_HDFC_BANK_ACCOUNTS["3703"]},
     "hdfcbanksmartstatement@hdfcbank.bank.in": {"3703": _LEGACY_HDFC_BANK_ACCOUNTS["3703"]},
-    "ebix@nse.co.in": _LEGACY_ICICI_DIRECT_TRADE_ACCOUNTS,
-    "nseinvest@nse.co.in": _LEGACY_ICICI_DIRECT_TRADE_ACCOUNTS,
-    "nse-direct@nse.co.in": _LEGACY_ICICI_DIRECT_TRADE_ACCOUNTS,
+    "service@icicisecurities.com": _LEGACY_ICICI_DIRECT_BROKER_ACCOUNTS,
 }
 
 # ─── Legacy file-pipeline sources (previously in pipeline/config.py SOURCE_CONFIGS) ─

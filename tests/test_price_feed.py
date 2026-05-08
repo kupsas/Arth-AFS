@@ -41,6 +41,8 @@ def test_canonical_nse_symbol_maps_icici_legacy_codes() -> None:
     assert canonical_nse_symbol("BHAELE") == "BEL"
     assert canonical_nse_symbol("indoil") == "IOC"
     assert canonical_nse_symbol("RELIANCE") == "RELIANCE"
+    assert canonical_nse_symbol("ICICINIFTY") == "NIFTYIETF"
+    assert canonical_nse_symbol("ICINIF") == "NIFTYIETF"
 
 
 def test_latest_bhav_target_date_weekday_unchanged() -> None:

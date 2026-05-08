@@ -25,11 +25,7 @@ export function needsProfileNameDobPdfStyle(sources: OnboardingBackfillSourceRow
   return false;
 }
 
-/** NSE / broker PDFs that use PAN. */
-export function needsPanPdfSource(sources: OnboardingBackfillSourceRow[] | undefined): boolean {
-  for (const s of sources ?? []) {
-    const k = s.source_key;
-    if (k.includes("icici_direct")) return true;
-  }
+/** PAN is shown when the password API marks it required, or during resume-import. */
+export function needsPanPdfSource(_sources: OnboardingBackfillSourceRow[] | undefined): boolean {
   return false;
 }

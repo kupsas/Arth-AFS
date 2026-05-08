@@ -162,6 +162,45 @@ def test_icici_xxxx118_resolves_via_blob_when_full_last4_appears(infer_session: 
     assert "6118" in acct
 
 
+def test_icici_statement_pdf_shell_reuses_icici_savings_mappings(infer_session: tuple[Session, str]) -> None:
+    """E-statement emails often have no account digits in HTML — reuse alert-derived mappings."""
+    session, uid = infer_session
+    session.add(
+        ScraperAccountMapping(
+            user_id=uid,
+            sender_email="customernotification@icici.bank.in",
+            last_4_digits="6118",
+            account_id="ICICI_SAV_6118",
+            source_key="icici_savings",
+        )
+    )
+    session.commit()
+    cfg = {"parser_key": "icici_statement"}
+    shell = "Subject: Your ICICI Bank Account e-statement\n\n<html><body>See PDF attachment.</body></html>"
+    acct = _infer_accounts_dict(cfg, [shell], session=session, user_id=uid)
+    assert "6118" in acct
+    assert acct["6118"]["source_key"] == "icici_savings"
+
+
+def test_icici_direct_statement_uses_template_placeholder_accounts(infer_session: tuple[Session, str]) -> None:
+    session, uid = infer_session
+    cfg = {
+        "parser_key": "icici_direct_statement",
+        "accounts": {
+            "0000": {"account_id": "ICICI_DIRECT", "source_key": "icici_direct_statement"},
+        },
+    }
+    acct = _infer_accounts_dict(
+        cfg,
+        ["Subject: Equity statement\n\n<html><body>PDF attached</body></html>"],
+        session=session,
+        user_id=uid,
+    )
+    assert "0000" in acct
+    assert acct["0000"]["account_id"] == "ICICI_DIRECT"
+    assert acct["0000"]["source_key"] == "icici_direct_statement"
+
+
 def test_hdfc_cc_statement_swiggy_subject_maps_last4(infer_session: tuple[Session, str]) -> None:
     session, uid = infer_session
     cfg = {"parser_key": "hdfc_cc_statement"}

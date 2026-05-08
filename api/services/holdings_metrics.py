@@ -19,6 +19,7 @@ from api.services.historical_portfolio import earliest_user_history_date
 from api.services.net_worth import holding_value
 from api.services.ppf_ledger_basis import ppf_net_contributions_from_ledger
 from api.services.returns_calculator import compute_returns
+from pipeline.isin_nse_resolver import is_curated_ignored_holding_row
 from pipeline.models import AssetClass
 
 # Batch XIRR: cache keyed by (user_id, fingerprint). Invalidates when any active
@@ -62,7 +63,8 @@ def active_holdings_for_user(session: Session, user_id: str) -> list[Holding]:
         )
         .order_by(col(Holding.name))
     )
-    return list(session.exec(q).all())
+    rows = list(session.exec(q).all())
+    return [h for h in rows if not is_curated_ignored_holding_row(h)]
 
 
 def total_portfolio_value(session: Session, user_id: str) -> float:
