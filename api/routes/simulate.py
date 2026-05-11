@@ -18,6 +18,7 @@ from sqlmodel import Session, select
 
 from api.auth import get_current_user
 from api.database import get_session
+from api.demo import is_demo_mode
 from api.models import Goal, UserSimulationSandboxPreferences
 from api.services.inflation_service import cpi_general_yoy_ema_pct, resolve_goal_inflation
 from api.services.priority_scorer import _effective_goal_class, compute_priority_scores
@@ -58,13 +59,15 @@ def _apply_saved_sandbox_macros(
     ).first()
     if row is None:
         return params
+    ms = max(0.0, min(float(row.monthly_surplus_inr), SANDBOX_MONTHLY_SURPLUS_MAX_INR))
+    # Promoted local seeds often carry a placeholder ₹0 row; in public demo that reads as a
+    # broken slider. Treat non-positive saved surplus like "use the sandbox default" instead.
+    if is_demo_mode() and ms <= 0.0:
+        ms = SANDBOX_DEFAULT_MONTHLY_SURPLUS_INR
     meta["sandbox_saved_macros_applied"] = True
     return params.model_copy(
         update={
-            "monthly_surplus": max(
-                0.0,
-                min(float(row.monthly_surplus_inr), SANDBOX_MONTHLY_SURPLUS_MAX_INR),
-            ),
+            "monthly_surplus": ms,
             "salary_growth_rate": max(0.0, min(float(row.salary_growth_rate_pct), 50.0)),
             "general_inflation_rate": max(0.0, min(float(row.general_inflation_rate_pct), 50.0)),
         },

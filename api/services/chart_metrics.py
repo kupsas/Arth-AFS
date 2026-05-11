@@ -74,7 +74,9 @@ def parse_category_chart_key(chart_key: str) -> str | None:
 
 
 def is_known_chart_key(key: str | None) -> bool:
-    return key is not None and key in KNOWN_CHART_KEYS
+    if key is None:
+        return False
+    return normalize_goal_chart_key(key) in KNOWN_CHART_KEYS
 
 
 def validate_chart_key_for_goal(goal_type: str, chart_key: str | None) -> None:
@@ -109,6 +111,20 @@ _LINKED_CATEGORY_TO_SERIES: Final[dict[str, str]] = {
 }
 
 
+def normalize_goal_chart_key(chart_key: str) -> str:
+    """Canonical ``chart_key`` for lookups (fixes mistaken ``category:Food & Dining`` style rows)."""
+    if chart_key in (CHART_KEY_EXPENSE_NEED_WANT_STACK, CHART_KEY_INVESTMENT_NET):
+        return chart_key
+    if parse_category_chart_key(chart_key) is not None:
+        return chart_key
+    if chart_key.startswith(CATEGORY_CHART_PREFIX):
+        suffix = chart_key[len(CATEGORY_CHART_PREFIX) :].strip()
+        series = _LINKED_CATEGORY_TO_SERIES.get(suffix)
+        if series:
+            return f"{CATEGORY_CHART_PREFIX}{series}"
+    return chart_key
+
+
 def suggested_chart_key_for_linked_category(linked_category: str | None) -> str | None:
     """Best-effort chart_key for an EXPENSE_LIMIT that only had linked_category."""
     if not linked_category:
@@ -134,6 +150,8 @@ def expense_limit_sum_for_chart_key(
         _expense_where,
         _for_user,
     )
+
+    chart_key = normalize_goal_chart_key(chart_key)
 
     if chart_key == CHART_KEY_EXPENSE_NEED_WANT_STACK:
         base = _expense_where(

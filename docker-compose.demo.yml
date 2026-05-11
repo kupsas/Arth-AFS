@@ -1,0 +1,56 @@
+# Local demo stack — same shape as production compose, with demo env flags.
+# Prereq: `python3 scripts/generate_demo_seed.py` (or rely on an existing `data/arth_demo_seed.db`).
+#
+# Secrets (LLM keys, AUTH_SECRET_KEY, FERNET_KEY, etc.) are loaded from the root .env file.
+# Copy .env.example → .env and fill in the values you need before running this:
+#
+#   python3 scripts/generate_demo_seed.py   # one-time seed
+#   docker compose -f docker-compose.demo.yml up --build
+#
+# Then open http://localhost:3000 — each browser gets its own temp SQLite copy.
+#
+# dashboard/.env.local is intentionally NOT used here — it is for local dev with
+# the Cloudflare tunnel only. Docker gets all NEXT_PUBLIC_* vars via build args below.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      - "8000:8000"
+      - "8090:8090"
+    # Root .env supplies: LLM keys, AUTH_SECRET_KEY, FERNET_KEY, AGENT_MODEL,
+    # screening vars, etc. Explicit `environment:` keys below take precedence over env_file.
+    env_file:
+      - .env
+    environment:
+      ARTH_DEMO_MODE: "1"
+      ARTH_DEMO_SEED_PATH: /app/data/arth_demo_seed.db
+      ARTH_DEMO_CHAT_LIMIT: "15"
+      ARTH_DEMO_SESSION_TTL_HOURS: "4"
+      # Optional: comma-separated dashboard origins for browser fetches
+      # CORS_EXTRA_ORIGINS: "https://demo.example.com"
+    volumes:
+      - ./data/arth_demo_seed.db:/app/data/arth_demo_seed.db:ro
+      - ./.cursor:/app/.cursor
+
+  web:
+    # All NEXT_PUBLIC_* vars are build-time baked via args below — no env_file needed.
+    # INTERNAL_API_URL is runtime-only (Next.js proxy → api container on the Docker network).
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_URL: same-origin
+        NEXT_PUBLIC_WS_URL: ws://localhost:8000
+        NEXT_PUBLIC_DEMO_MODE: "1"
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: same-origin
+      INTERNAL_API_URL: http://api:8000
+      NEXT_PUBLIC_WS_URL: ws://localhost:8000
+      NEXT_PUBLIC_DEMO_MODE: "1"
+    depends_on:
+      - api

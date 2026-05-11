@@ -8,7 +8,20 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-export function proxy(_request: NextRequest) {
+const DEMO_RAW = (process.env.NEXT_PUBLIC_DEMO_MODE ?? "").trim().toLowerCase();
+const DEMO =
+  DEMO_RAW === "1" ||
+  DEMO_RAW === "true" ||
+  DEMO_RAW === "yes" ||
+  DEMO_RAW === "on";
+
+export function proxy(request: NextRequest) {
+  if (DEMO) {
+    const path = request.nextUrl.pathname;
+    if (path === "/login" || path === "/setup") {
+      return NextResponse.redirect(new URL("/chat", request.url));
+    }
+  }
   return NextResponse.next();
 }
 

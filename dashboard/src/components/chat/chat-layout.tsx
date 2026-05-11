@@ -18,11 +18,11 @@ import { cn } from "@/lib/utils";
 import { ChatPanel } from "./chat-panel";
 import { SessionSidebar } from "./session-sidebar";
 
-/** Three short, distinct prompts that showcase different Arth capabilities. */
+/** Three starter chips: two short prompts + one tier-2 eval question (see ``agent/evals/questions.yaml``, id ``t2_q14``). */
 const LANDING_STARTERS = [
-  "How much did I spend on food this month?",
-  "What's my net worth?",
-  "Where am I overspending?",
+  "How much I spent on food",
+  "Where am I spending",
+  "Which of my goals is most at risk right now?",
 ];
 
 function ChatLanding({

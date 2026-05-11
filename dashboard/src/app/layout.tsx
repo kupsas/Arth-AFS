@@ -20,6 +20,7 @@ import type { Metadata } from "next";
 import { Outfit, Geist_Mono } from "next/font/google";
 
 import { Providers } from "@/components/providers";
+import { DemoBanner } from "@/components/demo-banner";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
 import { MobileBlocker } from "@/components/layout/mobile-blocker";
@@ -63,26 +64,29 @@ export default function RootLayout({
     >
       <body className="h-full font-sans antialiased">
         <Providers>
-          <MobileBlocker>
-            {/*
-             * Full-height flex row:
-             *   - Sidebar is fixed-width on the left
-             *   - The right side takes remaining space (flex-1) and is itself
-             *     a column: Header on top, scrollable content below
-             */}
-            <div className="flex h-full">
-              <Sidebar />
+          <div className="flex h-full min-h-0 flex-col">
+            <DemoBanner />
+            <MobileBlocker>
+              {/*
+               * Full-height flex row:
+               *   - Sidebar is fixed-width on the left
+               *   - The right side takes remaining space (flex-1) and is itself
+               *     a column: Header on top, scrollable content below
+               */}
+              <div className="flex h-full min-h-0 flex-1">
+                <Sidebar />
 
-              <div className="flex flex-1 flex-col overflow-hidden">
-                <Header />
+                <div className="flex flex-1 flex-col overflow-hidden">
+                  <Header />
 
-                {/* Main scrollable content area */}
-                <main className="flex-1 overflow-y-auto bg-background p-6">
-                  {children}
-                </main>
+                  {/* Main scrollable content area */}
+                  <main className="flex-1 overflow-y-auto bg-background p-6">
+                    {children}
+                  </main>
+                </div>
               </div>
-            </div>
-          </MobileBlocker>
+            </MobileBlocker>
+          </div>
         </Providers>
       </body>
     </html>

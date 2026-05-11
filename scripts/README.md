@@ -2,6 +2,31 @@
 
 One-time setup and utility scripts. These are not part of the main pipeline or API — they are tools for migrations, benchmarks, maintenance, and debugging.
 
+## `generate_demo_seed.py`
+
+**When to use:** Building the **public demo** golden SQLite (`data/arth_demo_seed.db`). The API copies this file per browser when `ARTH_DEMO_MODE=1` (see `docs/DEMO_DEPLOY.md`).
+
+```bash
+python3 scripts/generate_demo_seed.py
+```
+
+The file is gitignored like other `data/*.db` blobs; `Dockerfile.demo` runs this script during the image build so deploys do not depend on a committed binary.
+
+**Optional — real NSE / AMFI marks (curvier portfolio trend locally):** the generator still writes a **synthetic** daily grid into `prices` so Docker/CI never depends on the network. To swap in **official bhav + AMFI NAV** for the same demo tickers, then rebuild SIP rows from those closes:
+
+```bash
+python3 scripts/generate_demo_seed.py
+
+sqlite3 data/arth_demo_seed.db "DELETE FROM prices WHERE source = 'demo_seed' AND symbol IN (
+  'HDFCBANK','SBIN','TCS','INFY','RELIANCE','ITC','ASIANPAINT','TATAMOTORS','122639','118551');"
+
+ARTH_DB_PATH=data/arth_demo_seed.db python3 scripts/backfill_price_history.py --user-id demo --days 2000
+
+ARTH_DB_PATH=data/arth_demo_seed.db python3 scripts/materialize_demo_market_from_prices.py
+```
+
+`--days` should cover the demo lookback (~5 years; see `scripts/demo_portfolio_plan.py`). **NSE:** `backfill_price_history.py` loads **one bhav file per trading day** and extracts every portfolio symbol from that map (not once per symbol per day). With a warm `data/.nse_cache`, five years for a handful of tickers is usually **a few minutes** of disk + SQLite; cold cache adds one network fetch per missing session (still one pull per day, not per symbol). **MF** history is separate (AMFI portal chunks + optional mfapi).
+
 ## Buckets
 
 
@@ -46,7 +71,7 @@ Rare upgrades and one-off repairs — see `[archive/README.md](archive/README.md
 - `--user-id` — limit which holdings are considered.
 - `--buffer-days` — extra calendar days before the `--days` window for NSE weekends/holidays (default 14).
 
-**Runtime:** NSE walks **one bhav file per weekday** per symbol (throttled). A full year across many symbols can take **tens of minutes**. MF history uses **AMFI portal** downloads (one large text file per **date chunk** for *all* schemes, not per scheme), so a ~1y window is several chunked requests plus parsing. International Yahoo tickers (`GC=F`, etc.) are **not** included here — refresh-only in the API.
+**Runtime:** NSE walks **one bhav file per weekday** for the whole watch-list at once (see `backfill_price_history.py`). A warm `data/.nse_cache` makes multi-year runs mostly local parsing. MF history uses **AMFI portal** downloads (one large text file per **date chunk** for *all* schemes, not per scheme), so a ~1y window is several chunked requests plus parsing. International Yahoo tickers (`GC=F`, etc.) are **not** included here — refresh-only in the API.
 
 **AMFI scheme codes:** ICICI Direct PDF/CSV statements usually show **folio** and **scheme name**, not the numeric AMFI code. Match the **exact** plan name (Regular vs Direct, Growth vs IDCW) against AMFI’s published `NAVAll.txt` or your AMC factsheet — wrong code = wrong NAV series.
 

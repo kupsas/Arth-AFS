@@ -7,7 +7,6 @@ Mirrors :mod:`api.services.classifier_runtime` — overlays :mod:`agent.config` 
 from __future__ import annotations
 
 import json
-import os
 from contextlib import contextmanager
 from typing import Iterator
 
@@ -18,10 +17,11 @@ from api.models import UserSecrets
 
 
 def _triplet_from_process_env() -> tuple[str, str, str]:
+    """Match :mod:`agent.config` (demo mode uses ``GOOGLE_API_KEY_DEMO_CHAT``)."""
     return (
-        os.getenv("OPENAI_API_KEY_FOR_SINGLE_AGENT", "").strip(),
-        os.getenv("ANTHROPIC_API_KEY_FOR_SINGLE_AGENT", "").strip(),
-        os.getenv("GOOGLE_API_KEY_FOR_SINGLE_AGENT", "").strip(),
+        ac.AGENT_OPENAI_API_KEY,
+        ac.AGENT_ANTHROPIC_API_KEY,
+        ac.AGENT_GOOGLE_API_KEY,
     )
 
 

@@ -44,6 +44,10 @@ _serializer = URLSafeTimedSerializer(_AUTH_SECRET_KEY)
 
 def internal_agent_username() -> str:
     """Identity string used for in-process agent → API calls."""
+    from api.demo import DEMO_USER_ID, is_demo_mode
+
+    if is_demo_mode():
+        return DEMO_USER_ID
     return DEFAULT_LOCAL_USER
 
 
@@ -90,7 +94,15 @@ def verify_session_token(token: str) -> str:
 
 
 def get_current_user() -> str:
-    """Single-user local install — no credential gate."""
+    """Resolve the Arth user id for this request.
+
+    Local installs use :data:`DEFAULT_LOCAL_USER`. Public demo mode uses a fixed
+    ``demo`` id so all seeded rows line up with :func:`get_current_user`.
+    """
+    from api.demo import DEMO_USER_ID, is_demo_mode
+
+    if is_demo_mode():
+        return DEMO_USER_ID
     return DEFAULT_LOCAL_USER
 
 

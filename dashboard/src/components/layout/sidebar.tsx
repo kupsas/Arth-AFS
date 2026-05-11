@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { isDemoMode } from "@/lib/demo";
 
 /** Each entry defines one navigation item in the sidebar. */
 const NAV_ITEMS = [
@@ -87,6 +88,11 @@ export function Sidebar() {
         </div>
         <span className="text-sm font-semibold tracking-tight text-sidebar-foreground">
           Arth
+          {isDemoMode && (
+            <span className="ml-2 rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800 dark:text-amber-200">
+              Demo
+            </span>
+          )}
         </span>
       </div>
 
@@ -121,7 +127,9 @@ export function Sidebar() {
 
       {/* ── Footer (version) ──────────────────────────────────────── */}
       <div className="border-t border-sidebar-border px-4 py-3">
-        <p className="text-xs text-muted-foreground">Arth v0.5</p>
+        <p className="text-xs text-muted-foreground">
+          {isDemoMode ? "Arth v0.8-demo" : "Arth v0.8"}
+        </p>
       </div>
     </aside>
   );

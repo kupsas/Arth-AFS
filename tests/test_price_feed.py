@@ -56,7 +56,7 @@ def test_latest_bhav_target_date_saturday_rolls_to_friday() -> None:
     assert latest_bhav_target_date(as_of=sat) == datetime.date(2025, 3, 21)
 
 
-@patch("api.services.price_feed.load_nse_equity_bhav_map")
+@patch("api.services.price_feed.load_nse_equity_bhav_map_cached_first")
 def test_resolve_nse_bhav_session_date_returns_preferred_when_probe_hits(
     mock_map: object,
 ) -> None:
@@ -66,7 +66,7 @@ def test_resolve_nse_bhav_session_date_returns_preferred_when_probe_hits(
     assert resolve_nse_bhav_session_date(mon) == mon
 
 
-@patch("api.services.price_feed.load_nse_equity_bhav_map", return_value=None)
+@patch("api.services.price_feed.load_nse_equity_bhav_map_cached_first", return_value=None)
 def test_resolve_nse_bhav_session_date_returns_none_when_no_session_within_window(
     _mock_map: object,
 ) -> None:
@@ -225,7 +225,7 @@ def test_backfill_prices_calls_fetch_and_upserts(mock_fetch) -> None:
     assert got.close_price == pytest.approx(1500.0)
 
 
-@patch("api.services.price_feed.load_nse_equity_bhav_map", return_value=None)
+@patch("api.services.price_feed.load_nse_equity_bhav_map_cached_first", return_value=None)
 @patch(
     "api.services.price_feed.latest_bhav_target_date",
     return_value=datetime.date(2025, 3, 24),

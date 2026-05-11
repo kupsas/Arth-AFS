@@ -102,10 +102,16 @@ LLM_REQUEST_TIMEOUT: float = float(os.getenv("LLM_REQUEST_TIMEOUT", "120"))
 # ---------------------------------------------------------------------------
 # Agent LLM keys — **only** *_FOR_SINGLE_AGENT (no fallback to classifier keys)
 # so provider dashboards bill/trace the agent separately from classification.
+# Public demo (ARTH_DEMO_MODE): use GOOGLE_API_KEY_DEMO_CHAT so Gemini chat/screening bills separately from GOOGLE_API_KEY_DEMO_CLASSIFIER.
 # ---------------------------------------------------------------------------
 AGENT_OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY_FOR_SINGLE_AGENT", "").strip()
 AGENT_ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY_FOR_SINGLE_AGENT", "").strip()
-AGENT_GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY_FOR_SINGLE_AGENT", "").strip()
+_ARTH_DEMO_MODE_AGENT = os.getenv("ARTH_DEMO_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+_GOOGLE_DEMO_CHAT = os.getenv("GOOGLE_API_KEY_DEMO_CHAT", "").strip()
+AGENT_GOOGLE_API_KEY: str = (
+    (_GOOGLE_DEMO_CHAT if _ARTH_DEMO_MODE_AGENT and _GOOGLE_DEMO_CHAT else "")
+    or os.getenv("GOOGLE_API_KEY_FOR_SINGLE_AGENT", "").strip()
+)
 
 # Bundled moderation-only key (``OPENAI_API_KEY_FOR_MODERATION``) — Layer-1 screening; not for chat completions.
 AGENT_MODERATION_API_KEY: str = os.getenv("OPENAI_API_KEY_FOR_MODERATION", "").strip()

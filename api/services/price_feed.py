@@ -439,8 +439,12 @@ def fetch_equity_closes_from_nse_bhav(
     symbols: list[str],
     trade_date: datetime.date,
 ) -> dict[str, float]:
-    """Official NSE closing prices for one session (bhavcopy)."""
-    closes = load_nse_equity_bhav_map(trade_date)
+    """Official NSE closing prices for one session (bhavcopy).
+
+    Uses ``load_nse_equity_bhav_map_cached_first`` so a file already under
+    ``data/.nse_cache`` is parsed without another download when backfilling history.
+    """
+    closes = load_nse_equity_bhav_map_cached_first(trade_date)
     if not closes:
         return {}
     norm = [canonical_nse_symbol(s) for s in symbols]
@@ -464,7 +468,7 @@ def resolve_nse_bhav_session_and_map(
     d = preferred
     for _ in range(max_lookback_calendar_days + 1):
         if d.weekday() < 5:
-            m = load_nse_equity_bhav_map(d)
+            m = load_nse_equity_bhav_map_cached_first(d)
             if m and len(m) >= _MIN_EQUITY_BHAV_SYMBOL_ROWS:
                 return d, m
         d -= datetime.timedelta(days=1)

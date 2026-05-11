@@ -167,6 +167,7 @@ MODEL_PRICING: dict[str, dict[str, float]] = {
 
 # API keys — transaction **classification** pipeline only (separate from conversational agent).
 # Prefer *_FOR_CLASSIFIER so usage is trackable per product; fall back to legacy names for CI/scripts.
+# When ``ARTH_DEMO_MODE`` is set, ``GOOGLE_API_KEY_DEMO_CLASSIFIER`` overrides (demo deployments only).
 # During Gmail ingest or statement-upload background jobs,
 # :func:`api.services.classifier_runtime.user_classifier_runtime` may temporarily overlay
 # these module attributes with per-user values from encrypted ``UserSecrets``
@@ -179,8 +180,13 @@ ANTHROPIC_API_KEY: str = (
     os.getenv("ANTHROPIC_API_KEY_FOR_CLASSIFIER", "").strip()
     or os.getenv("ANTHROPIC_API_KEY", "").strip()
 )
+
+# Public demo: bill/track Gemini for transaction classification separately from chat (see GOOGLE_API_KEY_DEMO_CHAT in agent.config).
+_ARTH_DEMO_MODE = os.getenv("ARTH_DEMO_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+_GOOGLE_DEMO_CLASSIFIER = os.getenv("GOOGLE_API_KEY_DEMO_CLASSIFIER", "").strip()
 GOOGLE_API_KEY: str = (
-    os.getenv("GOOGLE_API_KEY_FOR_CLASSIFIER", "").strip()
+    (_GOOGLE_DEMO_CLASSIFIER if _ARTH_DEMO_MODE and _GOOGLE_DEMO_CLASSIFIER else "")
+    or os.getenv("GOOGLE_API_KEY_FOR_CLASSIFIER", "").strip()
     or os.getenv("GOOGLE_API_KEY", "").strip()
 )
 

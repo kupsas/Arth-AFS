@@ -27,6 +27,7 @@ from starlette.responses import JSONResponse, Response
 
 from api.auth import get_current_user
 from api.database import SQLiteSerializingSession, get_engine, init_db
+from api.demo import DemoSessionASGIMiddleware, is_demo_mode
 from api.routes import metrics, pipeline, transactions, user_config
 from api.services.inflation_service import sync_imf_cpi_history
 from api.services.price_feed import run_startup_price_sync
@@ -50,6 +51,7 @@ from api.routes.scraper import router as scraper_router
 from api.routes.scraper_config import router as scraper_config_router
 from api.routes.onboarding import router as onboarding_router
 from api.routes.setup import router as setup_router
+from api.routes.demo import router as demo_router
 from api.errors import ArthError, arth_internal_error
 from api.middleware import RequestLoggingMiddleware
 from pipeline.logging_config import setup_logging
@@ -131,18 +133,46 @@ async def lifespan(app: FastAPI):
     """
     setup_logging()
     logger.info("Arth is starting…")
-    init_db()
-    start_scheduler()
-    # Schedule maintenance without awaiting — server becomes ready immediately.
-    # Keep a reference on app.state so the task is not GC'd before it runs (asyncio footgun).
-    app.state.startup_db_maintenance_task = asyncio.create_task(
-        _run_startup_db_maintenance_in_thread()
-    )
-    logger.info(
-        "Arth is ready — background refresh and scheduled tasks are running."
-    )
+    if is_demo_mode():
+        logger.info(
+            "Demo mode (ARTH_DEMO_MODE) — skipping global init_db/scheduler; "
+            "each visitor uses an ephemeral SQLite copy."
+        )
+    else:
+        init_db()
+        start_scheduler()
+        # Schedule maintenance without awaiting — server becomes ready immediately.
+        # Keep a reference on app.state so the task is not GC'd before it runs (asyncio footgun).
+        app.state.startup_db_maintenance_task = asyncio.create_task(
+            _run_startup_db_maintenance_in_thread()
+        )
+        logger.info(
+            "Arth is ready — background refresh and scheduled tasks are running."
+        )
+    if is_demo_mode():
+
+        async def _demo_cleanup_loop() -> None:
+            from api.demo import DemoSessionManager
+
+            while True:
+                try:
+                    await asyncio.sleep(1800)
+                    DemoSessionManager.cleanup_stale_files()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("Demo session cleanup failed")
+
+        app.state.demo_cleanup_task = asyncio.create_task(_demo_cleanup_loop())
+        logger.info("Arth demo is ready — ephemeral DB + cleanup task running.")
     yield
     logger.info("Arth is shutting down…")
+    maint = getattr(app.state, "startup_db_maintenance_task", None)
+    if maint is not None:
+        maint.cancel()
+    demo_t = getattr(app.state, "demo_cleanup_task", None)
+    if demo_t is not None:
+        demo_t.cancel()
     shutdown_scheduler()
 
 
@@ -218,11 +248,16 @@ app.add_middleware(
 
 app.add_middleware(RequestLoggingMiddleware)
 
+if is_demo_mode():
+    # Outermost: bind per-visitor SQLite before CORS / routes (HTTP + WebSocket).
+    app.add_middleware(DemoSessionASGIMiddleware)
+
 # ---------------------------------------------------------------------------
 # Auth routes — public (no session required for login/logout)
 # ---------------------------------------------------------------------------
 app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
 app.include_router(setup_router, prefix="/api/setup", tags=["Setup"])
+app.include_router(demo_router)
 app.include_router(chat_router)
 
 # ---------------------------------------------------------------------------

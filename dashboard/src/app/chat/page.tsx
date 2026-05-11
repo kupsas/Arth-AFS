@@ -267,6 +267,10 @@ function ChatPageInner() {
     [queryClient, router],
   );
 
+  const onSessionNotFound = useCallback(() => {
+    router.replace("/chat", { scroll: false });
+  }, [router]);
+
   const {
     messages,
     connection,
@@ -283,7 +287,10 @@ function ChatPageInner() {
     retryLastUserMessage,
     sendMessage,
     stopGenerating,
-  } = useChat(wsSessionId, onSessionReady, { enabled: chatWsEnabled });
+  } = useChat(wsSessionId, onSessionReady, {
+    enabled: chatWsEnabled,
+    onSessionNotFound,
+  });
 
   const onSwitchProviderKeys = useCallback(() => {
     clearAgentPaused();

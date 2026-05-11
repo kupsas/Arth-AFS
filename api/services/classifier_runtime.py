@@ -21,20 +21,12 @@ from pipeline import config as pc
 
 
 def _triplet_from_process_env() -> tuple[str, str, str]:
-    """Mirror ``pipeline.config`` env resolution (keys may be empty strings)."""
-    o = (
-        os.getenv("OPENAI_API_KEY_FOR_CLASSIFIER", "").strip()
-        or os.getenv("OPENAI_API_KEY", "").strip()
+    """Same resolution as :mod:`pipeline.config` (includes demo-only classifier Google key)."""
+    return (
+        pc.OPENAI_API_KEY,
+        pc.ANTHROPIC_API_KEY,
+        pc.GOOGLE_API_KEY,
     )
-    a = (
-        os.getenv("ANTHROPIC_API_KEY_FOR_CLASSIFIER", "").strip()
-        or os.getenv("ANTHROPIC_API_KEY", "").strip()
-    )
-    g = (
-        os.getenv("GOOGLE_API_KEY_FOR_CLASSIFIER", "").strip()
-        or os.getenv("GOOGLE_API_KEY", "").strip()
-    )
-    return o, a, g
 
 
 def _triplet_from_secrets_dict(data: dict[str, str]) -> tuple[str | None, str | None, str | None]:

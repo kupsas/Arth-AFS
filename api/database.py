@@ -12,6 +12,7 @@ injection to point at an in-memory SQLite database instead.
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import os
@@ -44,6 +45,13 @@ logger = logging.getLogger(__name__)
 # kept — multiple simultaneous connections are fine for reads.  Only writes
 # contend, and the RLock handles that.
 _SQLITE_WRITER_LOCK = threading.RLock()
+
+# When set (public demo mode), :func:`get_session` / :func:`get_effective_engine`
+# route to the visitor's ephemeral SQLite copy instead of the global ``_engine``.
+_demo_db_path: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "_demo_db_path",
+    default=None,
+)
 
 
 class SQLiteSerializingSession(Session):
@@ -115,6 +123,16 @@ def _sqlite_enable_wal(dbapi_conn, connection_record) -> None:
 
 def get_engine():
     """Return the module-level engine (useful for tests that need to swap it)."""
+    return _engine
+
+
+def get_effective_engine():
+    """Return the per-request demo engine when demo context is active; else ``_engine``."""
+    p = _demo_db_path.get()
+    if p:
+        from api.demo import DemoSessionManager
+
+        return DemoSessionManager.engine_for_path(p)
     return _engine
 
 
@@ -923,5 +941,6 @@ def init_db() -> None:
 
 def get_session():
     """FastAPI dependency — yields a DB session per request, auto-closes."""
-    with SQLiteSerializingSession(_engine) as session:
+    eng = get_effective_engine()
+    with SQLiteSerializingSession(eng) as session:
         yield session

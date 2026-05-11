@@ -1,0 +1,45 @@
+# Multi-stage image: Next.js production build + FastAPI + baked SQLite seed (`ARTH_DEMO_MODE`).
+# Build: `docker build -f Dockerfile.demo -t arth-demo .`
+# Run:  `docker run --rm -p 3000:3000 -p 8000:8000 -e OPENAI_API_KEY=... arth-demo`
+
+FROM node:22-bookworm-slim AS web
+WORKDIR /build
+COPY dashboard/package.json dashboard/package-lock.json ./
+RUN npm ci
+COPY dashboard .
+ARG NEXT_PUBLIC_DEMO_MODE=1
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    NEXT_PUBLIC_API_URL=same-origin \
+    NEXT_PUBLIC_DEMO_MODE=${NEXT_PUBLIC_DEMO_MODE}
+RUN npm run build
+
+FROM python:3.13-slim-bookworm
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+RUN chmod +x scripts/docker_demo_entrypoint.sh \
+    && python3 scripts/generate_demo_seed.py
+
+COPY --from=web /build/.next ./dashboard/.next
+COPY --from=web /build/public ./dashboard/public
+
+WORKDIR /app/dashboard
+RUN npm ci --omit=dev
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 \
+    ARTH_DEMO_MODE=1 \
+    ARTH_DEMO_SEED_PATH=/app/data/arth_demo_seed.db \
+    INTERNAL_API_URL=http://127.0.0.1:8000
+
+EXPOSE 3000 8000
+ENTRYPOINT ["/app/scripts/docker_demo_entrypoint.sh"]

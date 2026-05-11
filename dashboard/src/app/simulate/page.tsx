@@ -13,6 +13,7 @@ import { SurplusWaterfall } from "@/components/simulation/surplus-waterfall";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSimulation } from "@/hooks/use-simulation";
+import { isDemoMode } from "@/lib/demo";
 import { newSimulationClientRowId } from "@/lib/simulation-goal-identity";
 import type { SimulationGoal } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -106,7 +107,12 @@ export default function SimulatePage() {
           </Button>
           <Button
             type="button"
-            disabled={!isDirty}
+            disabled={!isDirty || isDemoMode}
+            title={
+              isDemoMode
+                ? "Demo mode — simulate is for exploring only; saving to your goals is turned off."
+                : undefined
+            }
             onClick={() => setSaveOpen(true)}
           >
             Save changes

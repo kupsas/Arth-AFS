@@ -14,7 +14,7 @@ from sqlmodel import Session, SQLModel, create_engine
 from api.auth import get_current_user
 from api.database import get_session
 from api.main import app
-from api.models import Goal
+from api.models import Goal, UserSimulationSandboxPreferences
 
 
 @pytest.fixture(name="engine")
@@ -196,4 +196,39 @@ def test_put_sandbox_preferences_overrides_from_current_surplus(
     assert p["monthly_surplus"] == 200_000.0
     assert p["salary_growth_rate"] == 7.5
     assert p["general_inflation_rate"] == 5.25
+    assert r.json()["meta"].get("sandbox_saved_macros_applied") is True
+
+
+def test_demo_mode_zero_saved_surplus_maps_to_default(
+    client: TestClient, session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Public demo promotes a ₹0 sandbox row; treat it as unset so the UI shows ₹1.5L/mo."""
+    monkeypatch.setenv("ARTH_DEMO_MODE", "1")
+    session.add(
+        Goal(
+            name="API sim goal",
+            goal_type="SAVINGS",
+            goal_class="POINT_IN_TIME",
+            user_id="test_user",
+            pyramid_id="SIMD0",
+            target_amount=500_000.0,
+            target_date=datetime.date(2032, 1, 1),
+            activation_status="ACTIVE",
+            allocation_priority=1,
+            expected_return_rate=10.0,
+        )
+    )
+    session.add(
+        UserSimulationSandboxPreferences(
+            user_id="test_user",
+            monthly_surplus_inr=0.0,
+            salary_growth_rate_pct=5.0,
+            general_inflation_rate_pct=6.0,
+        )
+    )
+    session.commit()
+
+    r = client.post("/api/simulate/from-current", json={})
+    assert r.status_code == 200
+    assert r.json()["params"]["monthly_surplus"] == 150_000.0
     assert r.json()["meta"].get("sandbox_saved_macros_applied") is True

@@ -17,6 +17,7 @@ import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { fetchSimulateFromCurrent, runSimulation } from "@/lib/api";
+import { isDemoMode } from "@/lib/demo";
 import { sanitizeSimulationParams } from "@/lib/onboarding-input-validation";
 import { goalKeys, lifeEventKeys } from "@/hooks/use-goals";
 import { newSimulationClientRowId } from "@/lib/simulation-goal-identity";
@@ -141,8 +142,21 @@ export function useSimulation() {
       const merged = applyDerivedSimulationFields(
         sanitizeSimulationParams(withRowIds as SimulationParams),
       );
-      setDraftParams(merged);
-      void runSimulation(merged)
+      // Stale sessionStorage drafts can carry ₹0 surplus while the demo seed/API default is ₹1.5L/mo.
+      const draftSurplus =
+        typeof merged.monthly_surplus === "number" && Number.isFinite(merged.monthly_surplus)
+          ? merged.monthly_surplus
+          : 0;
+      const serverSurplus =
+        typeof bp.monthly_surplus === "number" && Number.isFinite(bp.monthly_surplus)
+          ? bp.monthly_surplus
+          : 0;
+      const mergedForDemo =
+        isDemoMode && draftSurplus <= 0 && serverSurplus > 0
+          ? { ...merged, monthly_surplus: serverSurplus }
+          : merged;
+      setDraftParams(mergedForDemo);
+      void runSimulation(mergedForDemo)
         .then(setResult)
         .catch(() => {});
     } else {

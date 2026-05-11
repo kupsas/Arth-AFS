@@ -24,7 +24,14 @@ import type {
   ToolCallUi,
 } from "@/lib/chat-types";
 import { normalizeOpenAiMessagesToUi } from "@/lib/chat-types";
-import { fetchChatSession, fetchWsTicket, type ProviderFailurePayload } from "@/lib/api";
+import {
+  ApiError,
+  fetchChatSession,
+  fetchWsTicket,
+  type ProviderFailurePayload,
+} from "@/lib/api";
+import { isDemoMode } from "@/lib/demo";
+import { formatCountdown, getDemoRateLimitState, recordDemoMessage } from "@/lib/demo-rate-limit";
 
 export type ChatConnectionStatus =
   | "idle"
@@ -56,6 +63,11 @@ export type UseChatOptions = {
    * an empty draft session from REST instead of creating another server-side thread).
    */
   enabled?: boolean;
+  /**
+   * Called when ``GET /api/chat/sessions/{id}`` returns 404 — e.g. bookmarked ``?session=`` from an
+   * old DB while demo reset issued a new SQLite file. Parent should drop the stale query param.
+   */
+  onSessionNotFound?: () => void;
 };
 
 export function useChat(
@@ -68,6 +80,10 @@ export function useChat(
   useEffect(() => {
     onReadyRef.current = onSessionReady;
   }, [onSessionReady]);
+  const onSessionNotFoundRef = useRef(options?.onSessionNotFound);
+  useEffect(() => {
+    onSessionNotFoundRef.current = options?.onSessionNotFound;
+  }, [options?.onSessionNotFound]);
   const [messages, setMessages] = useState<ChatMessageUi[]>([]);
   const [connection, setConnection] = useState<ChatConnectionStatus>("connecting");
   const [isGenerating, setIsGenerating] = useState(false);
@@ -117,6 +133,22 @@ export function useChat(
   );
   /** Id of the assistant bubble we append ``token`` deltas into (cleared on ``response`` / errors). */
   const streamDraftIdRef = useRef<string | null>(null);
+  /**
+   * Session ID the current WebSocket received via ``session_ready``.
+   *
+   * When the server creates a new chat session on a WS opened without ``session_id``,
+   * it sends back ``session_ready`` with the new ID.  The parent then updates the URL
+   * (``router.replace``), which changes ``sessionIdProp``, which re-triggers this
+   * effect.  Without this ref, the effect cleanup would tear down the perfectly-good
+   * WS and open a redundant second connection — causing the "multiple session IDs +
+   * 404" cascade the user sees in Docker.
+   *
+   * Flow:
+   *   1. ``session_ready`` handler sets this ref.
+   *   2. Effect cleanup sees ref is set → keeps WS alive (no ``close()``).
+   *   3. Next effect invocation sees ``ref === sessionIdProp`` → skips reconnection.
+   */
+  const serverAssignedSessionRef = useRef<string | null>(null);
 
   const flushPendingToolsToActivity = useCallback(() => {
     const live = liveAssistantRef.current;
@@ -150,25 +182,65 @@ export function useChat(
     setLiveWipTools([]);
   }, []);
 
+  /** Drop in-flight turn UI so ``ChatLayout`` can show the landing (not an empty thread shell). */
+  const resetStreamingUi = useCallback(() => {
+    setIsGenerating(false);
+    setIsResponseStreaming(false);
+    setLiveTools([]);
+    isThinkingLiveRef.current = false;
+    setLiveThinking("");
+    setIsThinking(false);
+    turnThinkingRef.current = "";
+    turnStepThinkingRef.current = "";
+    resetTurnActivity();
+    liveAssistantRef.current = null;
+    streamDraftIdRef.current = null;
+    setAgentPausedFailures(null);
+    setLastError(null);
+  }, [resetTurnActivity]);
+
+  // On unmount, always close the WebSocket regardless of serverAssignedSessionRef.
+  // The main WS effect's cleanup may defer closing when a session_ready is in-flight,
+  // but if the component is unmounting there is no "next invocation" to pick it up.
+  useEffect(() => {
+    return () => {
+      const ws = wsRef.current;
+      if (ws) {
+        ws.close();
+        wsRef.current = null;
+      }
+      serverAssignedSessionRef.current = null;
+    };
+  }, []);
+
   /** Hydrate transcript when switching threads (REST — same rows the agent loads server-side). */
   useEffect(() => {
     if (!sessionIdProp) {
       setMessages([]);
+      resetStreamingUi();
       return;
     }
+    // Avoid showing the previous thread while the new id loads (or after 404 clears rows).
+    setMessages([]);
+    resetStreamingUi();
     let cancelled = false;
     fetchChatSession(sessionIdProp)
       .then((d) => {
         if (!cancelled)
           setMessages(normalizeOpenAiMessagesToUi(d.messages ?? []));
       })
-      .catch(() => {
-        if (!cancelled) setMessages([]);
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setMessages([]);
+        resetStreamingUi();
+        if (e instanceof ApiError && e.status === 404) {
+          onSessionNotFoundRef.current?.();
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [sessionIdProp]);
+  }, [sessionIdProp, resetStreamingUi]);
 
   /** One WebSocket per ``sessionIdProp`` (selected thread or "new").
    *  In same-origin mode, fetch a one-time ticket via REST first (the cookie
@@ -177,6 +249,12 @@ export function useChat(
     let cancelled = false;
 
     if (!enabled) {
+      serverAssignedSessionRef.current = null;
+      const staleWs = wsRef.current;
+      if (staleWs) {
+        staleWs.close();
+        if (wsRef.current === staleWs) wsRef.current = null;
+      }
       setConnection("idle");
       setLastError(null);
       return () => {
@@ -184,12 +262,46 @@ export function useChat(
       };
     }
 
+    // If the current WS already owns this session (assigned via session_ready),
+    // keep it alive instead of tearing down and reconnecting.
+    {
+      const ws = wsRef.current;
+      if (
+        ws &&
+        ws.readyState <= WebSocket.OPEN &&
+        serverAssignedSessionRef.current != null &&
+        serverAssignedSessionRef.current === sessionIdProp
+      ) {
+        serverAssignedSessionRef.current = null;
+        return () => {
+          cancelled = true;
+          if (!serverAssignedSessionRef.current) {
+            const w = wsRef.current;
+            if (w) {
+              w.close();
+              if (wsRef.current === w) wsRef.current = null;
+            }
+          }
+        };
+      }
+    }
+
+    // Close any stale WS before opening a fresh one.
+    serverAssignedSessionRef.current = null;
+    {
+      const staleWs = wsRef.current;
+      if (staleWs) {
+        staleWs.close();
+        if (wsRef.current === staleWs) wsRef.current = null;
+      }
+    }
+
     setConnection("connecting");
     setLastError(null);
 
-    function openSocket(ticket?: string) {
+    function openSocket(ticket?: string, arthDemoSid?: string) {
       if (cancelled) return;
-      const url = buildChatWebSocketUrl(sessionIdProp, ticket);
+      const url = buildChatWebSocketUrl(sessionIdProp, ticket, arthDemoSid);
       const ws = new WebSocket(url);
       wsRef.current = ws;
 
@@ -220,7 +332,10 @@ export function useChat(
 
         if (typ === "session_ready") {
           const sid = String(data.session_id ?? "");
-          if (sid) onReadyRef.current?.(sid);
+          if (sid) {
+            serverAssignedSessionRef.current = sid;
+            onReadyRef.current?.(sid);
+          }
           return;
         }
 
@@ -530,7 +645,7 @@ export function useChat(
 
     if (apiViaSameOrigin) {
       fetchWsTicket()
-        .then((res) => openSocket(res.ticket))
+        .then((res) => openSocket(res.ticket, res.arth_demo_sid))
         .catch(() => {
           if (!cancelled) {
             setConnection("error");
@@ -543,6 +658,9 @@ export function useChat(
 
     return () => {
       cancelled = true;
+      // If session_ready just assigned an ID, keep the WS alive so the next
+      // effect invocation can detect the match and skip reconnection.
+      if (serverAssignedSessionRef.current) return;
       const ws = wsRef.current;
       if (ws) {
         ws.close();
@@ -563,6 +681,28 @@ export function useChat(
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     const content = raw.trim();
     if (!content) return;
+
+    // In demo mode, enforce the 30-minute sliding-window rate limit client-side.
+    // This check runs BEFORE any message reaches the server so blocked attempts
+    // never consume a server turn and cannot be bypassed by resetting the demo DB.
+    if (isDemoMode) {
+      const rl = getDemoRateLimitState();
+      if (rl.isLimited) {
+        const countdown = formatCountdown(rl.msUntilReset);
+        setMessages((prev) => [
+          ...prev,
+          { id: uuid(), role: "user", content },
+          {
+            id: uuid(),
+            role: "assistant",
+            content: `You've used all ${rl.count} demo messages for this 30-minute window. Come back in **${countdown}** to ask more.`,
+          },
+        ]);
+        return;
+      }
+      // Record the message now (starts the window on first send).
+      recordDemoMessage();
+    }
 
     lastUserMessageRef.current = content;
     setAgentPausedFailures(null);

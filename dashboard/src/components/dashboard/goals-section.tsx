@@ -69,6 +69,7 @@ import {
   GoalTargetMoneyCardLine,
   GoalTargetMoneyHint,
 } from "@/components/goal-target-money-hint"
+import { isDemoMode } from "@/lib/demo"
 import { inflationSelectLabelForSubtype, previewInflationResolutionForForm } from "@/lib/goal-inflation-preview"
 import {
   DEFAULT_HEADLINE_INFLATION_PCT,
@@ -395,6 +396,7 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    if (isDemoMode) return
     if (!name.trim()) return
 
     setRecurringAmountError(null)
@@ -716,7 +718,16 @@ function EditGoalSheet({ goal }: { goal: Goal }) {
               />
             </div>
 
-            <Button type="submit" className="mt-1 w-full" disabled={isPending}>
+            <Button
+              type="submit"
+              className="mt-1 w-full"
+              disabled={isPending || isDemoMode}
+              title={
+                isDemoMode
+                  ? "Demo mode — sample goals are view-only; saving edits is turned off."
+                  : undefined
+              }
+            >
               {isPending ? "Saving…" : "Save changes"}
             </Button>
           </form>
@@ -938,6 +949,8 @@ function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) 
   }
 
   function handleOpenChange(next: boolean) {
+    // Demo uses a fixed seeded goal set — do not open the create sheet from the trigger or elsewhere.
+    if (next && isDemoMode) return
     setOpen(next)
     if (next) {
       const base = defaultAddGoalForm()
@@ -964,6 +977,7 @@ function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) 
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    if (isDemoMode) return
 
     const nextErrors: AddGoalFieldErrors = {}
 
@@ -1013,7 +1027,16 @@ function AddGoalSheet({ prefillChartKey }: { prefillChartKey?: string | null }) 
     <Sheet open={open} onOpenChange={handleOpenChange}>
       <SheetTrigger
         render={
-          <Button size="sm" className="h-7 gap-1 text-xs">
+          <Button
+            size="sm"
+            className="h-7 gap-1 text-xs"
+            disabled={isDemoMode}
+            title={
+              isDemoMode
+                ? "Demo mode uses a fixed sample goal list — adding goals is turned off."
+                : undefined
+            }
+          >
             <Plus className="size-3" />
             Add Goal
           </Button>

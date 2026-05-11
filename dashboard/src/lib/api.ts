@@ -1897,9 +1897,12 @@ export async function downloadDiagnosticsLogsArchive(): Promise<void> {
  * WebSocket URL.  The REST call goes through the same-origin proxy (so the
  * httpOnly cookie is sent), but the resulting ticket can be forwarded to
  * the direct FastAPI WebSocket endpoint where the cookie is absent.
+ *
+ * In demo mode the response may include ``arth_demo_sid`` — pass it to
+ * ``buildChatWebSocketUrl`` so the WebSocket uses the same SQLite as REST.
  */
-export function fetchWsTicket(): Promise<{ ticket: string }> {
-  return get<{ ticket: string }>("/api/chat/ws-ticket");
+export function fetchWsTicket(): Promise<{ ticket: string; arth_demo_sid?: string }> {
+  return get<{ ticket: string; arth_demo_sid?: string }>("/api/chat/ws-ticket");
 }
 
 /** GET /api/chat/sessions */
@@ -1926,4 +1929,27 @@ export function renameChatSession(
 /** DELETE /api/chat/sessions/{id} — soft archive */
 export function archiveChatSession(sessionId: string): Promise<void> {
   return del(`/api/chat/sessions/${sessionId}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Public demo  →  /api/demo
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type DemoStatusResponse = {
+  demo_mode: boolean;
+  chat_messages_remaining: number;
+  chat_messages_total: number;
+  session_id: string | null;
+  seed_exists: boolean;
+  session_dir: string;
+};
+
+/** GET /api/demo/status — banner + chat budget (demo deployments only). */
+export function fetchDemoStatus(): Promise<DemoStatusResponse> {
+  return get<DemoStatusResponse>("/api/demo/status");
+}
+
+/** POST /api/demo/reset — wipe this browser's sandbox DB and reclone from seed. */
+export function postDemoReset(): Promise<{ status: string; session_id: string }> {
+  return post<{ status: string; session_id: string }>("/api/demo/reset", {});
 }
