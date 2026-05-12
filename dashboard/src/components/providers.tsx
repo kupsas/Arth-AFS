@@ -56,7 +56,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     // attribute="class" means next-themes adds/removes the "dark" CSS class
     // on <html>, which is how shadcn's CSS variables know which palette to use
-    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+    // defaultTheme "light": first paint for new visitors; toggle still saves light/dark in localStorage.
+    <ThemeProvider attribute="class" defaultTheme="light" enableSystem>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider delay={300}>
           <PostHogIdentity />

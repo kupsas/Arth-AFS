@@ -8,6 +8,8 @@ primary_region = 'bom'
 
 [build]
   dockerfile = 'Dockerfile.demo'
+  [build.args]
+    NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN = "phc_vG5JZXyDBeMkNbBNJqGhKB6uCN9bxot8FCR6RwTNsPm2"
 
 [http_service]
   internal_port = 3000
