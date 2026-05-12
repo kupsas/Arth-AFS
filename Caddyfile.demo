@@ -1,9 +1,17 @@
 # Reverse proxy for the single-container demo on Fly.io.
-# Caddy listens on :3000 (Fly's internal_port) and fans out:
-#   /api/*  → FastAPI (handles REST + WebSocket upgrades)
-#   *       → Next.js (dashboard UI)
+# Caddy listens on 0.0.0.0:3000 (Fly's internal_port). Fly's proxy and health
+# checks use IPv4; binding ":3000" alone can end up IPv6-only (::), which
+# triggers "not listening on 0.0.0.0:3000" in Fly Doctor.
+#   /fly-healthz → static 200 for platform checks (does not depend on Next.js)
+#   /api/*       → FastAPI (REST + WebSocket upgrades)
+#   *            → Next.js (dashboard UI)
 
-:3000 {
+0.0.0.0:3000 {
+	# Served by Caddy only — use in fly.toml [[http_service.checks]] so checks
+	# pass while Next.js is still cold-starting (avoids 502 on / during boot).
+	handle /fly-healthz {
+		respond "ok" 200
+	}
 	handle /api/* {
 		reverse_proxy 127.0.0.1:8000
 	}

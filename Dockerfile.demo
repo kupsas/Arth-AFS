@@ -1,5 +1,5 @@
 # Multi-stage image: Caddy + Next.js + FastAPI + baked SQLite seed (`ARTH_DEMO_MODE`).
-# Caddy on :3000 reverse-proxies /api/* → FastAPI :8000, everything else → Next.js :3001.
+# Caddy on 0.0.0.0:3000 reverse-proxies /api/* → FastAPI :8000, else → Next.js :3001.
 # Build: `docker build -f Dockerfile.demo -t arth-demo .`
 # Run:  `docker run --rm -p 3000:3000 -e OPENAI_API_KEY=... arth-demo`
 

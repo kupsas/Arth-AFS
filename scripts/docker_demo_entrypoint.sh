@@ -9,6 +9,17 @@ export PYTHONUNBUFFERED=1
 caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
 CADDY_PID=$!
 
+# Fly.io snapshots listening sockets as soon as the Machine is "started". If
+# Caddy is not accepting on internal_port yet, deploy warns that nothing
+# listens on 0.0.0.0:3000. Wait until Caddy serves /fly-healthz (Next.js may
+# still be booting).
+for _ in $(seq 1 90); do
+	if curl -sf "http://127.0.0.1:3000/fly-healthz" >/dev/null 2>&1; then
+		break
+	fi
+	sleep 0.2
+done
+
 uvicorn api.main:app --host 127.0.0.1 --port 8000 &
 UV_PID=$!
 
