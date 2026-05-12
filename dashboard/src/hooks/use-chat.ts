@@ -362,8 +362,10 @@ export function useChat(
       };
 
       ws.onclose = (evt) => {
-        setConnection("closed");
-        if (wsRef.current === ws) wsRef.current = null;
+        if (wsRef.current === ws) {
+          setConnection("closed");
+          wsRef.current = null;
+        }
         // FastAPI closes with 1008 when the requested chat session row is missing.
         if (evt.code === 1008 && sessionIdProp) {
           onSessionNotFoundRef.current?.();
