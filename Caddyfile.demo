@@ -1,14 +1,14 @@
 # Reverse proxy for the single-container demo on Fly.io.
-# Caddy listens on 0.0.0.0:3000 (Fly's internal_port). Fly's proxy and health
-# checks use IPv4; binding ":3000" alone can end up IPv6-only (::), which
-# triggers "not listening on 0.0.0.0:3000" in Fly Doctor.
+# Caddy listens on :3000 (Fly's internal_port) with `bind 0.0.0.0` to force
+# IPv4. Using 0.0.0.0 in the site address directly creates a Host header
+# matcher (requests must have Host: 0.0.0.0), so we use `bind` instead.
 #   /fly-healthz → static 200 for platform checks (does not depend on Next.js)
 #   /api/*       → FastAPI (REST + WebSocket upgrades)
 #   *            → Next.js (dashboard UI)
 
-0.0.0.0:3000 {
-	# Served by Caddy only — use in fly.toml [[http_service.checks]] so checks
-	# pass while Next.js is still cold-starting (avoids 502 on / during boot).
+http://:3000 {
+	bind 0.0.0.0
+
 	handle /fly-healthz {
 		respond "ok" 200
 	}
