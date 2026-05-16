@@ -55,21 +55,23 @@ router = APIRouter(prefix="/api/chat", tags=["Agent chat"])
 
 # Demo Fly: cap concurrent agent turns machine-wide so RAM / provider rate limits
 # do not spike when many visitors chat at once. Self-hosted / non-demo: unlimited.
-_demo_llm_turn_semaphore: asyncio.Semaphore | None = None
+# (Keep the Semaphore instance and the getter as *different* names — a function named
+# the same as the global would overwrite the binding and break ``async with``.)
+_demo_llm_slots_sem: asyncio.Semaphore | None = None
 
 
-def _demo_llm_turn_semaphore() -> asyncio.Semaphore | None:
+def _get_demo_llm_slots_semaphore() -> asyncio.Semaphore | None:
     """Return a process-wide semaphore for LLM-heavy chat work, or ``None`` outside demo."""
-    global _demo_llm_turn_semaphore
+    global _demo_llm_slots_sem
     if not is_demo_mode():
         return None
-    if _demo_llm_turn_semaphore is None:
+    if _demo_llm_slots_sem is None:
         try:
             n = max(1, int(os.getenv("ARTH_DEMO_LLM_CONCURRENCY", "8").strip()))
         except ValueError:
             n = 8
-        _demo_llm_turn_semaphore = asyncio.Semaphore(n)
-    return _demo_llm_turn_semaphore
+        _demo_llm_slots_sem = asyncio.Semaphore(n)
+    return _demo_llm_slots_sem
 
 
 # --- REST -----------------------------------------------------------------
@@ -346,7 +348,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                             cost_tracker=cost_tracker,
                         )
 
-        sem = _demo_llm_turn_semaphore()
+        sem = _get_demo_llm_slots_semaphore()
         if sem is not None:
             async with sem:
                 await _run_screening_and_agent()
