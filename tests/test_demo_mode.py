@@ -133,6 +133,34 @@ def test_demo_middleware_no_fly_replay_without_fly_env(
     asyncio.run(_run())
 
 
+def test_demo_engine_lru_evicts_least_recently_used(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    """Cap ``ARTH_DEMO_ENGINE_CACHE_MAX`` → oldest path is disposed when a new engine is added."""
+    monkeypatch.setenv("ARTH_DEMO_ENGINE_CACHE_MAX", "2")
+    from api.demo import DemoSessionManager
+
+    paths: list[str] = []
+    try:
+        with DemoSessionManager._engines_lock:
+            DemoSessionManager._engines.clear()
+
+        for name in ("a.db", "b.db", "c.db"):
+            p = tmp_path / name
+            sqlite3.connect(p).close()
+            paths.append(str(p.resolve()))
+
+        s1, s2, s3 = paths
+        e1 = DemoSessionManager.engine_for_path(s1)
+        DemoSessionManager.engine_for_path(s2)
+        DemoSessionManager.engine_for_path(s3)
+        e1_again = DemoSessionManager.engine_for_path(s1)
+        assert e1_again is not e1
+    finally:
+        for s in paths:
+            DemoSessionManager.dispose_engine(s)
+
+
 def test_require_demo_raises_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ARTH_DEMO_MODE", raising=False)
     with pytest.raises(HTTPException) as exc:

@@ -22,8 +22,10 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 from typing import Callable
 
@@ -113,10 +115,26 @@ def _sqlite_wal_connect(dbapi_conn, _connection_record) -> None:
 
 
 class DemoSessionManager:
-    """Per-cookie SQLite file + engine cache + chat budget."""
+    """Per-cookie SQLite file + engine cache + chat budget.
 
-    _engines: dict[str, Engine] = {}
+    ``_engines`` is an LRU-ordered map (path → Engine) capped so Fly demo
+    machines do not grow RAM forever with one engine per visitor. Access and
+    eviction are serialized with ``_engines_lock`` so cache mutations stay
+    consistent with ``dispose_engine`` / ``cleanup_stale_files``.
+    """
+
+    _engines: "OrderedDict[str, Engine]" = OrderedDict()
+    _engines_lock = threading.RLock()
     _chat_user_turns: dict[str, int] = {}
+
+    @classmethod
+    def _max_cached_engines(cls) -> int:
+        """Upper bound on pooled SQLAlchemy engines per process (demo Fly)."""
+        try:
+            n = int(os.getenv("ARTH_DEMO_ENGINE_CACHE_MAX", "100").strip())
+        except ValueError:
+            n = 100
+        return max(1, min(n, 5000))
 
     @classmethod
     def ensure_session_db(cls, session_id: str) -> Path:
@@ -142,22 +160,35 @@ class DemoSessionManager:
         return dest
 
     @classmethod
+    def _trim_engine_cache_unlocked(cls) -> None:
+        """Drop least-recently-used engines until we are at or below the cap."""
+        cap = cls._max_cached_engines()
+        while len(cls._engines) > cap:
+            _old_path, old_eng = cls._engines.popitem(last=False)
+            old_eng.dispose()
+
+    @classmethod
     def engine_for_path(cls, db_path: str) -> Engine:
-        eng = cls._engines.get(db_path)
-        if eng is not None:
+        with cls._engines_lock:
+            eng = cls._engines.get(db_path)
+            if eng is not None:
+                cls._engines.move_to_end(db_path)
+                return eng
+            eng = create_engine(
+                f"sqlite:///{db_path}",
+                echo=False,
+                connect_args={"check_same_thread": False, "timeout": 30},
+            )
+            event.listens_for(eng, "connect")(_sqlite_wal_connect)
+            cls._engines[db_path] = eng
+            cls._engines.move_to_end(db_path)
+            cls._trim_engine_cache_unlocked()
             return eng
-        eng = create_engine(
-            f"sqlite:///{db_path}",
-            echo=False,
-            connect_args={"check_same_thread": False, "timeout": 30},
-        )
-        event.listens_for(eng, "connect")(_sqlite_wal_connect)
-        cls._engines[db_path] = eng
-        return eng
 
     @classmethod
     def dispose_engine(cls, db_path: str) -> None:
-        eng = cls._engines.pop(db_path, None)
+        with cls._engines_lock:
+            eng = cls._engines.pop(db_path, None)
         if eng is not None:
             eng.dispose()
 
