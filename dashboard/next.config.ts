@@ -26,6 +26,10 @@ const nextConfig: NextConfig = {
     root: dashboardDir,
   },
   ...(allowedDevOrigins.length > 0 ? { allowedDevOrigins } : {}),
+  // Browsers often request /favicon.ico by default; point them at our tab icon.
+  async rewrites() {
+    return [{ source: "/favicon.ico", destination: "/rupees.png" }];
+  },
 };
 
 export default nextConfig;
