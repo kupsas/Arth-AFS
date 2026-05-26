@@ -9,9 +9,16 @@ file and serves all ORM traffic from that copy via :data:`api.database._demo_db_
 
 On Fly.io with multiple Machines, ``FLY_MACHINE_ID`` is set and we also set
 ``arth_demo_fly_instance`` (see :data:`DEMO_FLY_INSTANCE_COOKIE`). If a request
-lands on the wrong Machine, we return ``fly-replay`` (HTTP) or close the
-WebSocket so the proxy can route to the owner; ``fly.toml`` replay_cache pins
-by ``demo_session_id`` after the first replay.
+lands on the wrong Machine, we return ``fly-replay`` (HTTP and WebSocket upgrade)
+so the proxy routes to the owner; ``fly.toml`` replay_cache pins by
+``demo_session_id`` after the first replay.
+
+---------------------------------------------------------------------------
+DO NOT change demo session / per-visitor DB / fly-replay / WebSocket routing
+in this module without explicit permission from the project owner. Small
+edits here have repeatedly broken the public demo for everyone except local
+single-machine dev.
+---------------------------------------------------------------------------
 """
 
 from __future__ import annotations
@@ -116,6 +123,8 @@ def _sqlite_wal_connect(dbapi_conn, _connection_record) -> None:
 
 class DemoSessionManager:
     """Per-cookie SQLite file + engine cache + chat budget.
+
+    Ask the project owner before changing ephemeral DB paths, seed copy, or engine cache.
 
     ``_engines`` is an LRU-ordered map (path → Engine) capped so Fly demo
     machines do not grow RAM forever with one engine per visitor. Access and
@@ -288,7 +297,10 @@ def demo_browser_session_from_websocket_query(scope: dict) -> str | None:
 
 
 class DemoSessionASGIMiddleware:
-    """Bind ``api.database._demo_db_path`` for HTTP + WebSocket from ``demo_session_id``."""
+    """Bind ``api.database._demo_db_path`` for HTTP + WebSocket from ``demo_session_id``.
+
+    Ask the project owner before changing cookie binding, fly-replay, or WS handling.
+    """
 
     def __init__(self, app: Callable):
         self.app = app
@@ -305,9 +317,25 @@ class DemoSessionASGIMiddleware:
         fly_machine = os.environ.get("FLY_MACHINE_ID", "").strip()
         fly_instance_cookie = (cookies.get(DEMO_FLY_INSTANCE_COOKIE) or "").strip()
 
-        # Detect stale machine cookies: Fly sets ``fly-replay-failed`` when a
-        # replay with ``fallback=force_self`` times out (target machine gone).
-        # Also check ``fly-replay-src`` for non-cached replays.  Either header
+        # #region agent log
+        import json as _json
+        import time as _time
+        _dbg_path = scope.get("path", "?")
+        _dbg_raw_cookie = cookies.get(DEMO_SESSION_COOKIE)
+        _dbg_raw_fly = cookies.get(DEMO_FLY_INSTANCE_COOKIE)
+        _dbg_all_cookie_keys = list(cookies.keys())
+        _dbg_entry = {"sessionId": "13c44f", "hypothesisId": "H1,H4", "location": "demo.py:__call__:entry", "message": "middleware_entry", "data": {"type": scope.get("type"), "path": _dbg_path, "fly_machine": fly_machine, "cookie_sid": cookie_sid, "raw_cookie_val": _dbg_raw_cookie, "fly_instance_cookie": fly_instance_cookie, "raw_fly_cookie": _dbg_raw_fly, "all_cookie_keys": _dbg_all_cookie_keys}, "timestamp": int(_time.time() * 1000)}
+        logger.warning("[DEBUG-13c44f] %s", _json.dumps(_dbg_entry))
+        try:
+            with open("/Users/saisashankkuppa/Documents/Arth/.cursor/debug-13c44f.log", "a") as _f:
+                _f.write(_json.dumps(_dbg_entry) + "\n")
+        except Exception:
+            pass
+        # #endregion
+
+        # Detect stale machine cookies: ``fly-replay-src`` is set by Fly
+        # when a replay bounces (target machine gone after a deploy).
+        # ``fly-replay-failed`` is a legacy fallback header.  Either
         # means the old machine is unreachable — start a fresh session here.
         _headers_lower = {
             k.decode("latin-1").lower(): v.decode("latin-1")
@@ -316,10 +344,17 @@ class DemoSessionASGIMiddleware:
         replay_failed = "fly-replay-failed" in _headers_lower
         replay_bounced = "fly-replay-src" in _headers_lower
 
-        # Wrong Machine: replay HTTP to the owner before we touch SQLite
-        # (per-visitor DB is local disk).  Use ``timeout`` + ``fallback`` so
-        # Fly returns the request to us with ``fly-replay-failed`` if the
-        # target machine is gone (e.g. destroyed after a deploy).
+        # DO NOT change without owner permission — demo multi-machine routing.
+        # Wrong Machine: replay to the owner before we touch SQLite
+        # (per-visitor DB is local disk).  For both HTTP and WebSocket
+        # we respond with ``fly-replay`` *before* upgrading so Fly's
+        # proxy can re-route the request to the correct machine.
+        # Do not add ``timeout`` to fly-replay (Fly will not cache replays).
+        #
+        # WebSocket: Uvicorn supports ``websocket.http.response.start``
+        # + ``websocket.http.response.body`` which lets us send a plain
+        # HTTP response (with fly-replay) instead of upgrading.  This
+        # avoids the old 403-rejection approach that Fly couldn't act on.
         if (
             fly_machine
             and fly_instance_cookie
@@ -327,11 +362,8 @@ class DemoSessionASGIMiddleware:
             and not replay_failed
             and not replay_bounced
         ):
+            replay_val = f"instance={fly_instance_cookie}"
             if scope["type"] == "http":
-                replay_val = (
-                    f"instance={fly_instance_cookie};"
-                    "timeout=3s;fallback=force_self"
-                )
                 await send(
                     {
                         "type": "http.response.start",
@@ -344,26 +376,37 @@ class DemoSessionASGIMiddleware:
                 )
                 await send({"type": "http.response.body", "body": b"", "more_body": False})
                 return
-            # WebSocket: cannot emit fly-replay after upgrade; deny so the client retries
-            # (Fly replay_cache often routes the retry straight to the owner).
             if scope["type"] == "websocket":
-
-                async def _deny_wrong_ws() -> None:
-                    while True:
-                        msg = await receive()
-                        if msg["type"] == "websocket.connect":
-                            await send(
-                                {
-                                    "type": "websocket.close",
-                                    # 1012 = service restart (RFC 6455). Avoid 1008 — the dashboard
-                                    # treats 1008 as "chat session missing" and clears the URL.
-                                    "code": 1012,
-                                    "reason": b"fly-sticky-retry",
-                                }
-                            )
-                            return
-
-                await _deny_wrong_ws()
+                # #region agent log
+                _dbg_ws = {"sessionId": "13c44f", "hypothesisId": "H3", "location": "demo.py:ws_fly_replay", "message": "ws_wrong_machine_replay_attempt", "data": {"fly_machine": fly_machine, "fly_instance_cookie": fly_instance_cookie, "replay_val": replay_val}, "timestamp": int(_time.time() * 1000)}
+                logger.warning("[DEBUG-13c44f] %s", _json.dumps(_dbg_ws))
+                # #endregion
+                # Respond to the upgrade request with a plain HTTP 307 + fly-replay
+                # so Fly's proxy re-routes the WebSocket to the owner machine.
+                try:
+                    await receive()  # consume websocket.connect
+                    await send(
+                        {
+                            "type": "websocket.http.response.start",
+                            "status": 307,
+                            "headers": [
+                                (b"fly-replay", replay_val.encode("ascii")),
+                                (b"content-length", b"0"),
+                            ],
+                        }
+                    )
+                    await send(
+                        {"type": "websocket.http.response.body", "body": b"", "more_body": False}
+                    )
+                    # #region agent log
+                    _dbg_ws2 = {"sessionId": "13c44f", "hypothesisId": "H3", "location": "demo.py:ws_fly_replay_ok", "message": "ws_replay_sent_ok", "timestamp": int(_time.time() * 1000)}
+                    logger.warning("[DEBUG-13c44f] %s", _json.dumps(_dbg_ws2))
+                    # #endregion
+                except Exception as _ws_err:
+                    # #region agent log
+                    _dbg_ws3 = {"sessionId": "13c44f", "hypothesisId": "H3", "location": "demo.py:ws_fly_replay_err", "message": "ws_replay_FAILED", "data": {"error": str(_ws_err), "error_type": type(_ws_err).__name__}, "timestamp": int(_time.time() * 1000)}
+                    logger.warning("[DEBUG-13c44f] %s", _json.dumps(_dbg_ws3))
+                    # #endregion
                 return
 
         # Stale machine cookie: the replay target is gone (deploy replaced
@@ -388,6 +431,11 @@ class DemoSessionASGIMiddleware:
         new_cookie = sid is None
         if new_cookie:
             sid = str(uuid.uuid4())
+
+        # #region agent log
+        _dbg_sid = {"sessionId": "13c44f", "hypothesisId": "H4,H5", "location": "demo.py:sid_resolved", "message": "session_id_resolved", "data": {"type": scope.get("type"), "path": _dbg_path, "cookie_sid": cookie_sid, "query_sid": query_sid, "final_sid": sid, "new_cookie": new_cookie, "fly_machine": fly_machine}, "timestamp": int(_time.time() * 1000)}
+        logger.warning("[DEBUG-13c44f] %s", _json.dumps(_dbg_sid))
+        # #endregion
         try:
             path = DemoSessionManager.ensure_session_db(sid)
         except FileNotFoundError as e:
@@ -437,6 +485,11 @@ class DemoSessionASGIMiddleware:
         # invalidate its replay cache so it stops routing to the dead machine.
         invalidate_replay_cache = replay_failed or replay_bounced
         inject_any_cookie = inject_demo_session_cookie or migrate_fly_pin or invalidate_replay_cache
+
+        # #region agent log
+        _dbg_cookie_inject = {"sessionId": "13c44f", "hypothesisId": "H1,H2", "location": "demo.py:cookie_inject_decision", "message": "set_cookie_decision", "data": {"type": scope.get("type"), "path": _dbg_path, "sid": sid, "inject_any_cookie": inject_any_cookie, "inject_demo_session_cookie": inject_demo_session_cookie, "migrate_fly_pin": migrate_fly_pin, "invalidate_replay_cache": invalidate_replay_cache, "new_cookie": new_cookie, "fly_machine": fly_machine}, "timestamp": int(_time.time() * 1000)}
+        logger.warning("[DEBUG-13c44f] %s", _json.dumps(_dbg_cookie_inject))
+        # #endregion
 
         def _inject_set_cookie(message: dict) -> dict:
             if not inject_any_cookie:

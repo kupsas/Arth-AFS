@@ -165,6 +165,7 @@ def delete_chat_session(
         raise HTTPException(status_code=404, detail="Chat session not found")
 
 
+# DO NOT change ws-ticket / demo ``arth_demo_sid`` without owner permission (demo DB binding).
 @router.get("/ws-ticket")
 def get_ws_ticket(user: str = Depends(get_current_user)) -> dict[str, str]:
     """Return a short-lived token the browser passes as ``?ticket=`` on the
@@ -196,6 +197,8 @@ def _user_from_token(token: str | None) -> str | None:
     match what ``get_current_user()`` returns on the REST side.  Otherwise
     sessions created over WS (user="local") are invisible to REST (user="demo")
     and every ``GET /api/chat/sessions/{id}`` returns 404.
+
+    Ask the project owner before changing demo user identity here.
     """
     if not token:
         return None

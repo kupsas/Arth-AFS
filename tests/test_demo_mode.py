@@ -67,9 +67,7 @@ def test_demo_middleware_fly_replay_when_wrong_machine(monkeypatch: pytest.Monke
         assert messages[0]["type"] == "http.response.start"
         assert messages[0]["status"] == 307
         hdrs = {k.decode().lower(): v.decode() for k, v in messages[0]["headers"]}
-        assert hdrs.get("fly-replay") == (
-            "instance=machine-aa;timeout=3s;fallback=force_self"
-        )
+        assert hdrs.get("fly-replay") == "instance=machine-aa"
 
     asyncio.run(_run())
 

@@ -17,6 +17,7 @@ primary_region = 'bom'
   auto_start_machines = true
   min_machines_running = 1
 
+  # DO NOT change replay_cache / demo_session_id without owner permission (demo routing).
   [[http_service.http_options.replay_cache]]
     path_prefix = "/"
     ttl_seconds = 86400

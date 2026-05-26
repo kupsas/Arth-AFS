@@ -79,6 +79,9 @@ const WS_DIRECT =
  *
  * In same-origin mode the HTTP proxy works but WebSocket upgrades do not, so
  * the connection goes directly to FastAPI via ``NEXT_PUBLIC_WS_URL``.
+ *
+ * DO NOT change WS URL construction or ``arth_demo_sid`` query params without
+ * explicit permission from the project owner (demo site session/DB binding).
  */
 export function buildChatWebSocketUrl(
   sessionId?: string | null,

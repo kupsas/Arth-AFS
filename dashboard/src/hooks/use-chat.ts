@@ -310,7 +310,10 @@ export function useChat(
 
   /** One WebSocket per ``sessionIdProp`` (selected thread or "new").
    *  In same-origin mode, fetch a one-time ticket via REST first (the cookie
-   *  travels through the proxy), then pass it as ``?ticket=`` to FastAPI. */
+   *  travels through the proxy), then pass it as ``?ticket=`` to FastAPI.
+   *
+   *  DO NOT change demo WS connect/retry/ticket flow without explicit permission
+   *  from the project owner (ties to demo session DB + Fly multi-machine routing). */
   useEffect(() => {
     let cancelled = false;
 
@@ -367,6 +370,15 @@ export function useChat(
     setConnection("connecting");
     setLastError(null);
 
+    // On Fly.io multi-machine, the first WS attempt may land on the
+    // wrong machine (before replay_cache is populated by HTTP requests).
+    // The server rejects with close code 1012 (surfaced as 1006 in the
+    // browser after a 403 upgrade rejection).  Retry a few times with
+    // backoff so the cache has time to learn the correct routing.
+    const MAX_WS_RETRIES = 3;
+    const WS_RETRY_BASE_MS = 500;
+    let wsRetryCount = 0;
+
     function openSocket(ticket?: string, arthDemoSid?: string) {
       if (cancelled) return;
       const url = buildChatWebSocketUrl(sessionIdProp, ticket, arthDemoSid);
@@ -374,14 +386,32 @@ export function useChat(
       wsRef.current = ws;
 
       ws.onopen = () => {
+        wsRetryCount = 0;
         setConnection("open");
       };
 
       ws.onclose = (evt) => {
         if (wsRef.current === ws) {
-          setConnection("closed");
           wsRef.current = null;
         }
+
+        // 1006 = abnormal closure (browser maps a 403 upgrade rejection here).
+        // 1012 = service restart (our "fly-sticky-retry" signal).
+        // Both mean "wrong Fly machine" — retry if we haven't exhausted attempts.
+        if (
+          !cancelled &&
+          (evt.code === 1006 || evt.code === 1012) &&
+          wsRetryCount < MAX_WS_RETRIES
+        ) {
+          wsRetryCount++;
+          const delay = WS_RETRY_BASE_MS * Math.pow(2, wsRetryCount - 1);
+          setConnection("connecting");
+          setTimeout(() => openSocket(ticket, arthDemoSid), delay);
+          return;
+        }
+
+        setConnection("closed");
+
         // FastAPI closes with 1008 when the requested chat session row is missing.
         if (evt.code === 1008 && sessionIdProp) {
           onSessionNotFoundRef.current?.();
@@ -389,6 +419,10 @@ export function useChat(
       };
 
       ws.onerror = () => {
+        // Don't surface the error to the user if we're going to retry
+        // (onclose fires after onerror and handles the retry logic).
+        if (wsRetryCount < MAX_WS_RETRIES) return;
+
         posthog.capture("chat_stream_error", {
           session_id: sessionIdProp ?? null,
           recoverable: false,

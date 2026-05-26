@@ -18,6 +18,7 @@ primary_region = 'bom'
   auto_start_machines = true
   min_machines_running = 1
 
+  # DO NOT change replay_cache / demo_session_id without owner permission (demo routing).
   # After the first ``fly-replay`` for a given ``demo_session_id`` cookie value, Fly
   # Proxy routes subsequent requests (including WebSocket upgrades) to the same
   # Machine without another app hop. See ``DEMO_FLY_INSTANCE_COOKIE`` in ``api/demo.py``.
