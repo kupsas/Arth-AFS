@@ -15,7 +15,10 @@ import logging
 import pikepdf
 import pipeline.config  # noqa: F401 — load ``.env``
 
-from parsers.holdings.zerodha_demat_statement_pdf import parse_zerodha_demat_statement_pdf
+from parsers.holdings.zerodha_demat_statement_pdf import (
+    derive_zerodha_holdings,
+    parse_zerodha_demat_statement_pdf,
+)
 from pipeline.models import ParsedTransaction
 from parsers.statements.base_broker import BaseBrokerStatementParser
 from scraper.pdf_passwords import (
@@ -69,12 +72,14 @@ class ZerodhaDematStatementEmailParser(BaseBrokerStatementParser):
             ) from e
 
         try:
-            _holdings_unused, rows = parse_zerodha_demat_statement_pdf(decrypted, aggregate=True)
+            _holdings_unused, rows = parse_zerodha_demat_statement_pdf(
+                decrypted,
+                aggregate=True,
+                apply_market_prices=True,
+            )
             self._attachment_inv_txns.extend(rows)
             if rows:
-                from parsers.holdings.derived_equity import derive_equity_holdings
-
-                self._attachment_holdings.extend(derive_equity_holdings(rows, platform="Zerodha"))
+                self._attachment_holdings.extend(derive_zerodha_holdings(rows))
             if not rows:
                 logger.info(
                     "Zerodha demat statement PDF produced 0 rows (subject_len=%d)",

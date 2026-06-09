@@ -189,6 +189,7 @@ def _parse_tradebook_csv(path: Path) -> list[ParsedInvestmentTxn]:
                 account_platform=_ACCOUNT,
                 metadata={
                     "kind": _KIND,
+                    "price_source": "statement",
                     "isin": isin_raw if _ISIN_RE.match(isin_raw) else None,
                     "exchange": _row_get(row, "exchange").strip(),
                     "segment": _row_get(row, "segment").strip(),

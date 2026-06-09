@@ -67,3 +67,79 @@ def test_csv_backup_skipped_when_email_truth_exists(session: Session) -> None:
         metadata={"kind": "zerodha_tradebook_csv"},
     )
     assert investment_txn_exists(session, csv_row)
+
+
+def test_csv_backup_skipped_when_email_has_zero_amount(session: Session) -> None:
+    """Demat email units-only (₹0) still dedupes against tradebook with execution price."""
+    d = datetime.date(2022, 4, 5)
+    session.add(
+        InvestmentTransaction(
+            txn_date=d,
+            symbol="CDSL",
+            txn_type=InvestmentTxnType.BUY.value,
+            quantity=1.0,
+            price_per_unit=0.0,
+            total_amount=0.0,
+            account_platform="Zerodha",
+            price_source="nse_bhav",
+            source_type="email",
+        )
+    )
+    session.commit()
+
+    csv_row = ParsedInvestmentTxn(
+        txn_date=d,
+        symbol="CDSL",
+        name="CDSL",
+        txn_type=InvestmentTxnType.BUY.value,
+        quantity=1.0,
+        price_per_unit=760.67,
+        total_amount=760.67,
+        account_platform="Zerodha",
+        metadata={"kind": "zerodha_tradebook_csv", "price_source": "statement"},
+    )
+    assert investment_txn_exists(session, csv_row)
+
+
+def test_csv_backup_skipped_when_bhav_proxy_differs_from_execution(session: Session) -> None:
+    """NSE bhav close vs intraday execution — within 3% still one row."""
+    d = datetime.date(2022, 4, 5)
+    session.add(
+        InvestmentTransaction(
+            txn_date=d,
+            symbol="CDSL",
+            txn_type=InvestmentTxnType.BUY.value,
+            quantity=10.0,
+            price_per_unit=1521.35,
+            total_amount=15213.5,
+            account_platform="Zerodha",
+            price_source="nse_bhav",
+            source_type="email",
+        )
+    )
+    session.commit()
+
+    csv_row = ParsedInvestmentTxn(
+        txn_date=d,
+        symbol="CDSL",
+        txn_type=InvestmentTxnType.BUY.value,
+        quantity=10.0,
+        price_per_unit=760.67,
+        total_amount=7606.7,
+        account_platform="Zerodha",
+        metadata={"kind": "zerodha_tradebook_csv", "price_source": "statement"},
+    )
+    # ~50% drift — should NOT dedupe (different economics or bad match)
+    assert investment_txn_exists(session, csv_row) is False
+
+    csv_row_close = ParsedInvestmentTxn(
+        txn_date=d,
+        symbol="CDSL",
+        txn_type=InvestmentTxnType.BUY.value,
+        quantity=10.0,
+        price_per_unit=1500.0,
+        total_amount=15000.0,
+        account_platform="Zerodha",
+        metadata={"kind": "zerodha_tradebook_csv", "price_source": "statement"},
+    )
+    assert investment_txn_exists(session, csv_row_close) is True

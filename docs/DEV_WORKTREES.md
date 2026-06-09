@@ -32,6 +32,7 @@ ln -sf ../../Arth/dashboard/.env.local dashboard/.env.local
 mkdir -p data
 ln -sf ../../Arth/data/arth_demo_seed.db data/arth_demo_seed.db
 ln -sf ../../Arth/data/.nse_cache data/.nse_cache
+ln -sf ../../Arth/data/.amfi_cache data/.amfi_cache
 ln -sf ../../Arth/data/gmail_credentials.json data/gmail_credentials.json
 
 rm -rf docs/personal-data docs/private 2>/dev/null || true

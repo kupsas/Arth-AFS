@@ -20,10 +20,15 @@ import pdfplumber
 
 from api.services.price_feed import canonical_nse_symbol
 from pipeline.detection import DetectionResult, PARSER_LABELS
+from pipeline.isin_amfi_resolver import lookup_amfi_scheme_by_isin
 from pipeline.isin_nse_resolver import lookup_isin_symbol
 from parsers.holdings.base import ParsedHolding, ParsedInvestmentTxn
-from parsers.holdings.zerodha_tradebook import _ISIN_RE, aggregate_zerodha_trades
-from pipeline.models import InvestmentTxnType
+from parsers.holdings.derived_equity import derive_equity_holdings
+from parsers.holdings.icici_direct_mf import derive_mf_holdings
+from parsers.holdings.security_kind import is_mf_investment_txn
+from parsers.holdings.zerodha_demat_pricing import apply_market_prices_to_zerodha_demat_txns
+from parsers.holdings.zerodha_tradebook import aggregate_zerodha_trades
+from pipeline.models import AssetClass, InvestmentTxnType
 
 logger = logging.getLogger(__name__)
 
@@ -75,16 +80,48 @@ def _parse_txn_line(line: str) -> tuple[datetime.date, str, float, float, float]
     return txn_date, description, buy_cr, sell_dr, _balance
 
 
-def _resolve_symbol(isin: str, zerodha_symbol: str) -> str | None:
-    nse = lookup_isin_symbol(isin)
+def _classify_security(
+    isin: str,
+    zerodha_symbol: str,
+) -> tuple[str | None, dict[str, str]]:
+    """Resolve NSE ticker or AMFI scheme code; tag ``asset_class`` for downstream routing."""
+    iso = (isin or "").strip().upper()
+    label = (zerodha_symbol or "").strip()
+    extras: dict[str, str] = {}
+
+    nse = lookup_isin_symbol(iso)
     if nse:
-        return canonical_nse_symbol(nse) or nse
-    # Zerodha "Symbol:" on MF rows is a display label, not an NSE ticker.
-    zs = (zerodha_symbol or "").strip()
-    if zs and _ISIN_RE.match(isin) and isin.startswith("INE"):
-        # Rare: equity ISIN but bhav map miss — do not treat MF-style label as symbol.
-        return None
-    return None
+        sym = canonical_nse_symbol(nse) or nse
+        extras["asset_class"] = AssetClass.EQUITY.value
+        return sym, extras
+
+    amfi = lookup_amfi_scheme_by_isin(iso, name_hint=label or None)
+    if amfi:
+        code = str(amfi.get("scheme_code") or "").strip()
+        extras["asset_class"] = AssetClass.MUTUAL_FUND.value
+        if code:
+            extras["amfi_scheme_code"] = code
+        scheme_name = amfi.get("scheme_name")
+        if scheme_name:
+            extras["amfi_scheme_name"] = str(scheme_name)
+        return code or None, extras
+
+    if iso.startswith("INF"):
+        extras["asset_class"] = AssetClass.MUTUAL_FUND.value
+        return None, extras
+    if iso.startswith("INE"):
+        extras["asset_class"] = AssetClass.EQUITY.value
+        return None, extras
+    return None, extras
+
+
+def derive_zerodha_holdings(txns: list[ParsedInvestmentTxn]) -> list[ParsedHolding]:
+    """Derive equity + MF holdings from Zerodha demat ledger rows."""
+    equity_txns = [t for t in txns if not is_mf_investment_txn(t)]
+    mf_txns = [t for t in txns if is_mf_investment_txn(t)]
+    return derive_equity_holdings(equity_txns, platform=_ACCOUNT) + derive_mf_holdings(
+        mf_txns, platform=_ACCOUNT
+    )
 
 
 def parse_statement_of_account_text(text: str) -> list[ParsedInvestmentTxn]:
@@ -130,8 +167,20 @@ def parse_statement_of_account_text(text: str) -> list[ParsedInvestmentTxn]:
         else:
             continue
 
-        sym = _resolve_symbol(current_isin, current_symbol_label)
-        name = current_symbol_label or current_isin
+        sym, class_meta = _classify_security(current_isin, current_symbol_label)
+        name = (
+            class_meta.get("amfi_scheme_name")
+            or current_symbol_label
+            or current_isin
+        )
+        meta = {
+            "kind": _KIND,
+            "isin": current_isin,
+            "zerodha_symbol": current_symbol_label,
+            "demat_description": description,
+            "source_layout": "zerodha_statement_of_account_text",
+            **class_meta,
+        }
         out.append(
             ParsedInvestmentTxn(
                 txn_date=txn_date,
@@ -143,13 +192,7 @@ def parse_statement_of_account_text(text: str) -> list[ParsedInvestmentTxn]:
                 total_amount=0.0,
                 account_platform=_ACCOUNT,
                 notes=description,
-                metadata={
-                    "kind": _KIND,
-                    "isin": current_isin,
-                    "zerodha_symbol": current_symbol_label,
-                    "demat_description": description,
-                    "source_layout": "zerodha_statement_of_account_text",
-                },
+                metadata=meta,
             )
         )
     return out
@@ -171,9 +214,14 @@ def parse_zerodha_demat_statement_pdf(
     pdf_path: str | Path,
     *,
     aggregate: bool = True,
+    apply_market_prices: bool = False,
 ) -> tuple[list[ParsedHolding], list[ParsedInvestmentTxn]]:
     """
     Parse a decrypted Zerodha monthly demat statement PDF.
+
+    ``apply_market_prices`` — when ``True`` (Gmail demat email path only), backfill
+    zero-amount SOA legs from NSE bhav / AMFI NAV. Manual PDF uploads should leave this
+    ``False``; use tradebook CSV or another priced source instead.
 
     Returns:
         ``([], investment_txns)`` — holdings are derived downstream from the ledger, not from
@@ -182,6 +230,8 @@ def parse_zerodha_demat_statement_pdf(
     path = Path(pdf_path)
     text = _extract_statement_text(path)
     txns = parse_statement_of_account_text(text)
+    if txns and apply_market_prices:
+        txns = apply_market_prices_to_zerodha_demat_txns(txns)
     if aggregate and txns:
         txns = aggregate_zerodha_trades(txns)
     if not txns:
@@ -213,6 +263,7 @@ def detect_zerodha_demat_statement_pdf(path: str | Path) -> DetectionResult | No
 
 
 __all__ = [
+    "derive_zerodha_holdings",
     "detect_zerodha_demat_statement_pdf",
     "parse_statement_of_account_text",
     "parse_zerodha_demat_statement_pdf",

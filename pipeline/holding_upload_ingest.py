@@ -20,7 +20,10 @@ from parsers.holdings.icici_direct_equity_statement_pdf import (
 from parsers.holdings.icici_direct_mf import derive_mf_holdings
 from parsers.holdings.icici_direct_mf_statement_pdf import parse_icici_direct_mf_statement_pdf
 from parsers.holdings.icici_ppf_pdf import parse_icici_ppf_from_combined_pdf
-from parsers.holdings.zerodha_demat_statement_pdf import parse_zerodha_demat_statement_pdf
+from parsers.holdings.zerodha_demat_statement_pdf import (
+    derive_zerodha_holdings,
+    parse_zerodha_demat_statement_pdf,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +90,8 @@ def ingest_portfolio_file(
         return {"holdings": h_stats, "investment_txns": inv_stats}
 
     if sk == "zerodha_demat_statement_pdf":
-        holdings, txns = parse_zerodha_demat_statement_pdf(path)
+        _holdings_unused, txns = parse_zerodha_demat_statement_pdf(path)
+        holdings = derive_zerodha_holdings(txns)
         h_stats = ingest_holdings(session, holdings, user_id=user_id, dry_run=False)
         inv_stats = ingest_investment_transactions(session, txns, user_id=user_id, dry_run=False)
         return {"holdings": h_stats, "investment_txns": inv_stats}

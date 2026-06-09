@@ -566,6 +566,23 @@ def _apply_sqlite_patches() -> None:
                     "ON investment_transactions (is_reviewed)"
                 )
             )
+        if not _column_exists(conn, "investment_transactions", "price_source"):
+            conn.execute(
+                text("ALTER TABLE investment_transactions ADD COLUMN price_source TEXT")
+            )
+        conn.execute(
+            text(
+                "UPDATE investment_transactions SET price_source = 'statement' "
+                "WHERE price_source IS NULL OR TRIM(price_source) = ''"
+            )
+        )
+        if not _index_exists(conn, "ix_investment_transactions_price_source"):
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_investment_transactions_price_source "
+                    "ON investment_transactions (price_source)"
+                )
+            )
 
         # Sub-Plan B — recurring patterns scoped per user (surplus / goals).
         if not _column_exists(conn, "recurring_patterns", "user_id"):
