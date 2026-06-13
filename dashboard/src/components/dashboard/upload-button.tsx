@@ -33,6 +33,7 @@ import { holdingsCoverageKey } from "@/hooks/use-onboarding-gaps"
 import { metricsKeys } from "@/hooks/use-metrics"
 import { portfolioKeys } from "@/hooks/use-portfolio"
 import { humanizeSourceKey } from "@/lib/source-label"
+import { SBI_MANUAL_UPLOAD_NOTE } from "@/lib/statement-upload-type-labels"
 import { cn } from "@/lib/utils"
 import type { StatementUploadOption } from "@/lib/types"
 
@@ -1052,7 +1053,14 @@ function UploadDialog({
     <>
       <div className="space-y-4">
       {state.phase === "idle" && (
-        <DropZone onFile={handleFile} disabled={disabled} helpText={helpText} />
+        <>
+          <DropZone onFile={handleFile} disabled={disabled} helpText={helpText} />
+          {variant === "transactions" && (
+            <p className="text-center text-[11px] leading-relaxed text-muted-foreground">
+              {SBI_MANUAL_UPLOAD_NOTE}
+            </p>
+          )}
+        </>
       )}
 
       {state.phase === "uploading" && (

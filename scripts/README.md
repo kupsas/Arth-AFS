@@ -149,6 +149,8 @@ The `scripts/` folder has many **one-off** maintenance tools. Read the top of ea
 | `scrape_historical.py`, `POST /api/scraper/backfill`                                           | **Preferred** Gmail historical import (date range + optional `--preset` / `gmail_query`) |
 | `backfill_`* (deprecated wrappers + `investment_txn_holding_ids`, `ppf_nps_cost_and_links`, …) | Legacy aliases; use `scrape_historical.py` for statement/trade email sweeps              |
 | `validate_email_statement.py`                                                                  | Validate a single email or PDF against parsers                                           |
+| `zerodha_demat_probe.py`                                                                       | Decrypt and inspect Zerodha monthly demat PDFs (local maintainer debugging)              |
+| `sbi_forwarded_statements_probe.py`                                                            | Decrypt and list rows from SBI e-account (CAS) statement PDFs                            |
 | `diagnose_portfolio_prices.py`, `validate_price_sources.py`                                    | Debug missing marks or bad symbols                                                       |
 | `enrich_holdings.py`, `sync_all_holdings.py`                                                   | Holdings enrichment / sync                                                               |
 | `weekly_market_data_refresh.py`                                                                | Same weekly chain as the API scheduler (manual / cron if no server)                      |

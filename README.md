@@ -21,12 +21,14 @@ Privacy detail: [PRIVACY.md](PRIVACY.md).
 Most people’s first question is “does it know my bank?” Here’s what ships **today** — we’re adding more over time.
 
 
-| Kind              | Supported today      |
-| ----------------- | -------------------- |
-| **Savings**       | HDFC Bank ICICI Bank |
-| **Credit cards**  | HDFC Credit Cards    |
-| **Demat brokers** | ICICI Direct, Zerodha |
+| Kind              | Supported today                          |
+| ----------------- | ---------------------------------------- |
+| **Savings**       | HDFC Bank, ICICI Bank, SBI Bank          |
+| **Credit cards**  | HDFC Credit Cards                        |
+| **Demat brokers** | ICICI Direct, Zerodha                    |
 
+
+**How data gets in:** HDFC, ICICI, and Zerodha support **Gmail and manual file upload** (where it makes sense for that product). **SBI savings is Gmail-only today** — e-account statement PDFs from mail work; dropping an SBI file in Settings is not supported yet.
 
 **Yours isn’t listed?** We’ll publish a proper contributing guide soon — till then, open an issue and we’ll figure it out together.
 

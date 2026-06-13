@@ -13,6 +13,7 @@ For terminology (transaction alerts vs statement emails vs uploads), see **`[PAR
 | HDFC savings | Transaction alerts + statement PDFs | Yearly `.txt` export or PDF statement |
 | HDFC cards | Transaction alerts + CC statement PDFs | Monthly CSV or PDF (depends on card) |
 | ICICI savings | Transaction alerts + statement PDFs | PDF / exports you add in Settings |
+| SBI savings | E-account statement (CAS) PDF | **Not yet** — Gmail only (mobile last-5 + DOB password). Manual upload planned. |
 
 **Historical Gmail catch-up:** use `POST /api/scraper/backfill` or `scripts/scrape_historical.py` when you want older mail folders imported — contributor-facing name; in UI say **importing older email**.
 
@@ -21,6 +22,13 @@ For terminology (transaction alerts vs statement emails vs uploads), see **`[PAR
 ## Holdings and broker-style flows
 
 Some investments show up only as **broker exports** or **statement PDFs**; Gmail may complement those files. When both paths cover the same period, follow dedupe behaviour documented next to the relevant reader.
+
+| Source | Gmail lane | Upload lane |
+| ------ | ----------- | ----------- |
+| ICICI Direct (equity + MF) | Trade confirmations, equity / MF statement PDFs | CSV portfolio exports |
+| Zerodha demat (equity + MF) | Monthly demat transaction statement PDF (PAN password) | Console tradebook CSV; demat statement PDF |
+| ICICI PPF | PPF band in ICICI bank e-statement | CSV passbook |
+| NPS | — | Statement of holding PDF |
 
 ---
 

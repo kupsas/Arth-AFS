@@ -35,7 +35,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { TRANSACTION_UPLOAD_TYPE_LABELS } from "@/lib/statement-upload-type-labels"
+import { SBI_MANUAL_UPLOAD_NOTE, TRANSACTION_UPLOAD_TYPE_LABELS } from "@/lib/statement-upload-type-labels"
 import { humanizeSourceKey } from "@/lib/source-label"
 import { cn } from "@/lib/utils"
 
@@ -166,6 +166,7 @@ export function StepUploadFallback({
                 </li>
               ))}
             </ul>
+            <p className="mt-2 text-xs leading-snug text-muted-foreground">{SBI_MANUAL_UPLOAD_NOTE}</p>
           </div>
         </CardHeader>
         <CardContent className="pt-0 space-y-3">

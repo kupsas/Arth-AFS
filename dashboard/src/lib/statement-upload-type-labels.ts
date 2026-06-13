@@ -15,3 +15,9 @@ export const TRANSACTION_UPLOAD_TYPE_LABELS: readonly string[] = [
   "Zerodha Tradebook (CSV export)",
   "Zerodha Monthly Demat Statement (PDF)",
 ]
+
+/**
+ * Shown near manual statement upload — SBI is email-only until upload routing is wired.
+ */
+export const SBI_MANUAL_UPLOAD_NOTE =
+  "SBI statements aren’t covered here yet — connect Gmail for e-account statements. File upload is on the way."

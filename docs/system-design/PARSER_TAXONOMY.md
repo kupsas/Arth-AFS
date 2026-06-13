@@ -11,7 +11,7 @@ Every piece of financial data sits at the intersection of four dimensions:
 | Level | Question | Examples |
 | ----- | -------- | -------- |
 | **1. Instrument type** | What kind of account is it? | Bank account, credit card, broker (Demat), PPF, NPS |
-| **2. Provider** | Who runs it? | HDFC Bank, ICICI Bank, ICICI Direct |
+| **2. Provider** | Who runs it? | HDFC Bank, ICICI Bank, SBI Bank, ICICI Direct, Zerodha |
 | **3. Account / product** | Which specific card or account? | Diners Black ending 1905, savings ending 3703 — encoded in `source_key` |
 | **4. Import source** | How did the row get into Arth? | Transaction alert email, statement email (PDF), uploaded file |
 
@@ -38,6 +38,7 @@ Every piece of financial data sits at the intersection of four dimensions:
 | -------- | ------------------- | ------------------ | ------------------- |
 | HDFC Bank (savings) | UPI / NEFT / IMPS alerts | Smart / combined statement PDF | `.txt` export, PDF statement |
 | ICICI Bank (savings) | Net banking alerts | Monthly / annual e-statement PDF | PDF statement |
+| SBI Bank (savings) | — | E-account statement (CAS) PDF | — **not yet** (email only; manual upload planned) |
 | HDFC Credit Card (per card) | Card swipe alerts | Monthly CC statement PDF | CSV / PDF (varies by card) |
 | ICICI Direct (equity) | — | Trade confirmations, equity statement PDF | CSV portfolio export |
 | ICICI Direct (MF) | — | MF account statement PDF | CSV holdings export |
@@ -45,7 +46,7 @@ Every piece of financial data sits at the intersection of four dimensions:
 | ICICI PPF | — | PPF band in ICICI bank e-statement | CSV passbook |
 | NPS | — | — | Statement of holding PDF |
 
-Email and upload are **both** first-class; users may rely on either or both. Overlapping data is **deduplicated** in the pipeline, not treated as “mail wins, file loses” by default.
+Email and upload are **both** first-class where both exist; users may rely on either or both. **Exception:** SBI savings ships **email import only** for now — the reader exists under `parsers/uploads/sbi_savings.py` but is not wired to the upload registry yet. Overlapping data is **deduplicated** in the pipeline, not treated as “mail wins, file loses” by default.
 
 ---
 
