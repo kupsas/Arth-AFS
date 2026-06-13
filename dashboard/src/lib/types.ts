@@ -130,6 +130,8 @@ export interface Transaction {
 
   /** Only set on PATCH /api/transactions/:id — number of other rows approved together */
   auto_approved_count?: number;
+  /** Only set on PATCH when apply_to_past reclassified historical look-alikes */
+  past_updated_count?: number;
 }
 
 /**
@@ -147,6 +149,8 @@ export interface TransactionUpdate {
   exclusion_reason?: string | null;
   /** When true, save this merchant + category as your auto-label for similar alerts */
   apply_to_future?: boolean;
+  /** When true, reclassify similar past transactions using the merchant rule */
+  apply_to_past?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

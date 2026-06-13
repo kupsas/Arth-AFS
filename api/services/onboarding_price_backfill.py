@@ -24,6 +24,7 @@ from api.database import SQLiteSerializingSession, get_engine
 from api.services.historical_portfolio import (
     earliest_user_history_date,
     historical_price_symbol_universe,
+    repair_isin_symbol_holdings,
 )
 from api.services.mf_nav_history import (
     fetch_mf_nav_histories_amfi_portal,
@@ -159,6 +160,12 @@ def run_onboarding_price_backfill_sync(
 
     try:
         with SQLiteSerializingSession(engine) as session:
+            repair_isin_symbol_holdings(session, user_id=uid)
+            _flush = getattr(session, "flush_and_commit", None)
+            if _flush is not None:
+                _flush()
+            else:
+                session.commit()
             start, target = _compute_date_range(session, uid)
             universe = historical_price_symbol_universe(session, user_id=uid)
             nse_syms = list(universe["nse_symbols"])

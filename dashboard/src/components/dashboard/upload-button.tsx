@@ -1107,9 +1107,6 @@ function UploadDialog({
               ? "Usually about half a minute while we finish saving."
               : "Usually about half a minute while we finish sorting and saving your transactions."}
           </p>
-          {!compactProgressCopy && (
-            <p className="text-xs text-muted-foreground">Run #{state.runId}</p>
-          )}
         </div>
       )}
 

@@ -108,25 +108,30 @@ def propagate_merchant_keyword_hits(
     *,
     keywords: Iterable[str],
     exclude_txn_ids: set[int],
+    source_types: tuple[str, ...] | None = None,
 ) -> int:
-    """Re-run :func:`pipeline.rules_classifier.classify_rules` on email rows whose narration contains a keyword.
+    """Re-run :func:`pipeline.rules_classifier.classify_rules` on rows whose narration contains a keyword.
 
     Skips rows the user already reviewed (``classification_source == USER_REVIEWED``) and any
     ``exclude_txn_ids`` from the current classify batch. Intended to run right after
     ``POST /api/onboarding/classify`` commits new ``USER_CORRECTION`` merchant rules so
     sibling UPI / bank narrations pick up the same counterparty without a full re-import.
+
+    When ``source_types`` is ``None``, only ``email`` rows are matched (onboarding default).
+    Pass ``("email", "statement")`` from the transactions edit path to include statement imports.
     """
     kws = sorted({(k or "").strip().upper() for k in keywords if len((k or "").strip()) >= 2})
     if not kws:
         return 0
 
     ucfg = load_user_classification_config(session, user_id)
+    allowed_sources = source_types if source_types is not None else ("email",)
 
     by_id: dict[int, Transaction] = {}
     for kw in kws:
         conds = [
             Transaction.user_id == user_id,
-            Transaction.source_type == "email",
+            col(Transaction.source_type).in_(allowed_sources),
             or_(
                 col(Transaction.classification_source).is_(None),
                 col(Transaction.classification_source) != "USER_REVIEWED",

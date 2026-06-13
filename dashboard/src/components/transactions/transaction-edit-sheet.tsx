@@ -187,6 +187,9 @@ export function TransactionEditSheet({
   const [exclusionOther, setExclusionOther] = React.useState("")
   /** Opt-in: persist merchant + category as an auto-label for similar alerts */
   const [rememberForSimilar, setRememberForSimilar] = React.useState(false)
+  /** Opt-in: reclassify similar past transactions (implies creating the merchant rule) */
+  const [applyToPast, setApplyToPast] = React.useState(false)
+  const [pastUpdatedNote, setPastUpdatedNote] = React.useState<string | null>(null)
 
   // ── Sync form state when transaction loads ────────────────────────────────
   // Whenever a new transaction is loaded (txn changes), reset all form fields
@@ -215,6 +218,8 @@ export function TransactionEditSheet({
       setExclusionOther("")
     }
     setRememberForSimilar(false)
+    setApplyToPast(false)
+    setPastUpdatedNote(null)
   }, [txn, forceReviewed])
 
   // ── Save handler ──────────────────────────────────────────────────────────
@@ -263,8 +268,19 @@ export function TransactionEditSheet({
       update.apply_to_future = true
     }
 
+    // Optional: reclassify similar past rows (also creates the merchant rule on the backend)
+    if (applyToPast && counterparty.trim() && category) {
+      update.apply_to_past = true
+    }
+
     try {
-      await updateTransaction({ id: txnId, update })
+      const updated = await updateTransaction({ id: txnId, update })
+      const pastCount = updated.past_updated_count ?? 0
+      if (pastCount > 0) {
+        setPastUpdatedNote(
+          `Updated ${pastCount} past transaction${pastCount === 1 ? "" : "s"} with the same merchant.`,
+        )
+      }
       onOpenChange(false)
     } catch {
       // React Query surfaces this error — could add a toast here later
@@ -506,6 +522,31 @@ export function TransactionEditSheet({
                     </p>
                   </div>
                 </div>
+                <div className="flex items-start gap-2 border-t border-border/60 pt-2">
+                  <Checkbox
+                    id="apply-to-past"
+                    checked={applyToPast}
+                    onCheckedChange={(checked) => setApplyToPast(Boolean(checked))}
+                    className="mt-0.5"
+                  />
+                  <div className="space-y-1">
+                    <label
+                      htmlFor="apply-to-past"
+                      className="text-sm cursor-pointer select-none font-medium"
+                    >
+                      Also update similar past transactions
+                    </label>
+                    <p className="text-xs text-muted-foreground pl-0">
+                      Re-label past rows whose narration matches this merchant (email and
+                      statement imports). Creates the same remember rule as above when needed.
+                    </p>
+                  </div>
+                </div>
+                {pastUpdatedNote && (
+                  <p className="text-xs text-emerald-600" role="status">
+                    {pastUpdatedNote}
+                  </p>
+                )}
               </div>
 
               {/* Exclude from dashboard metrics */}

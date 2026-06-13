@@ -14,6 +14,7 @@ Rules:
 from __future__ import annotations
 
 import datetime
+import logging
 from dataclasses import dataclass
 
 from sqlmodel import Session, col, select
@@ -21,6 +22,8 @@ from sqlmodel import Session, col, select
 from api.models import Holding, HoldingValueSnapshot, InvestmentTransaction, Price
 from api.services.price_feed import canonical_nse_symbol
 from pipeline.models import AssetClass, InvestmentTxnType, ValuationMethod
+
+logger = logging.getLogger(__name__)
 
 EXCLUDED_HISTORICAL_SYMBOLS = {"STOONE", "INDWHO"}
 
@@ -337,6 +340,79 @@ def historical_nps_holding_value(
     if row is None:
         return 0.0
     return round(float(row.value), 2)
+
+
+def _looks_like_equity_isin(symbol: str | None) -> bool:
+    raw = (symbol or "").strip().upper()
+    return len(raw) == 12 and raw.startswith("IN")
+
+
+def repair_isin_symbol_holdings(session: Session, *, user_id: str) -> int:
+    """Rewrite holdings / investment txns stored with a raw ISIN to the NSE ticker.
+
+    Fresh Docker installs may parse broker PDFs before the consolidated ISIN map
+    exists, leaving ``symbol='INE…'`` rows that never match bhavcopy tickers.
+    """
+    from pipeline.isin_nse_resolver import (
+        is_curated_ignored_security,
+        lookup_isin_symbol,
+    )
+
+    # Ensure the consolidated map is loaded (bootstraps from NSE when empty).
+    from pipeline import isin_nse_resolver
+
+    isin_nse_resolver._load_map()
+
+    touched = 0
+    holdings = session.exec(
+        select(Holding).where(
+            Holding.user_id == user_id,
+            Holding.is_active == True,  # noqa: E712
+            col(Holding.asset_class).in_(tuple(_MARKET_REPLAY_ASSET_CLASSES)),
+        )
+    ).all()
+    for h in holdings:
+        sym = (h.symbol or "").strip()
+        if not _looks_like_equity_isin(sym):
+            continue
+        if is_curated_ignored_security(symbol=sym):
+            continue
+        ticker = lookup_isin_symbol(sym)
+        if not ticker or ticker.upper() == sym.upper():
+            continue
+        h.symbol = ticker
+        session.add(h)
+        touched += 1
+
+    inv_rows = session.exec(
+        select(InvestmentTransaction)
+        .join(Holding, InvestmentTransaction.holding_id == Holding.id)
+        .where(
+            Holding.user_id == user_id,
+            col(InvestmentTransaction.symbol).is_not(None),
+            col(Holding.asset_class).in_(tuple(_MARKET_REPLAY_ASSET_CLASSES)),
+        )
+    ).all()
+    for txn in inv_rows:
+        sym = (txn.symbol or "").strip()
+        if not _looks_like_equity_isin(sym):
+            continue
+        if is_curated_ignored_security(symbol=sym):
+            continue
+        ticker = lookup_isin_symbol(sym)
+        if not ticker or ticker.upper() == sym.upper():
+            continue
+        txn.symbol = ticker
+        session.add(txn)
+        touched += 1
+
+    if touched:
+        logger.info(
+            "Repaired %d ISIN-keyed holding/investment rows for user=%s",
+            touched,
+            user_id,
+        )
+    return touched
 
 
 def historical_price_symbol_universe(session: Session, *, user_id: str) -> dict[str, list[str]]:

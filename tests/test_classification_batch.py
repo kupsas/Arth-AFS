@@ -460,3 +460,126 @@ def test_onboarding_classify_propagates_multiword_keyword_when_tokens_not_contig
         assert u_split is not None
         assert u_split.counterparty == "Nimish Gupta"
         assert u_split.counterparty_category == "Friends and Family"
+
+
+def test_transaction_patch_apply_to_past_reclassifies_statement_sibling(
+    engine: object,
+    onboarding_test_client: TestClient,
+) -> None:
+    """PATCH /api/transactions/:id with apply_to_past propagates to statement-source rows."""
+    narr_a = "NSE BROKERAGE ZERODHA EQUITY BUY RELIANCE"
+    narr_b = "NSE BROKERAGE ZERODHA EQUITY BUY RELIANCE REF 999"
+    with Session(engine) as session:
+        t1 = Transaction(
+            content_hash="stmt_patch_anchor",
+            txn_date=datetime.date(2024, 8, 1),
+            account_id="ZERODHA",
+            user_id="batch_user",
+            source_statement="zerodha_demat_statement",
+            source_type="statement",
+            direction="OUTFLOW",
+            amount=1000.0,
+            raw_description=narr_a,
+            channel="OTHER",
+            is_reviewed=False,
+            counterparty="Zerodha",
+            counterparty_category="Asset Markets",
+        )
+        t2 = Transaction(
+            content_hash="stmt_patch_sibling",
+            txn_date=datetime.date(2024, 8, 2),
+            account_id="ZERODHA",
+            user_id="batch_user",
+            source_statement="zerodha_demat_statement",
+            source_type="statement",
+            direction="OUTFLOW",
+            amount=500.0,
+            raw_description=narr_b,
+            channel="OTHER",
+            is_reviewed=False,
+            counterparty=None,
+            counterparty_category=None,
+        )
+        session.add(t1)
+        session.add(t2)
+        session.commit()
+        session.refresh(t1)
+        session.refresh(t2)
+        id1 = int(t1.id or 0)
+        id2 = int(t2.id or 0)
+
+    r = onboarding_test_client.patch(
+        f"/api/transactions/{id1}",
+        json={
+            "counterparty": "Zerodha Brokerage",
+            "counterparty_category": "Asset Markets",
+            "apply_to_past": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data.get("past_updated_count", 0) >= 1
+
+    with Session(engine) as session:
+        sibling = session.get(Transaction, id2)
+        assert sibling is not None
+        assert sibling.counterparty == "Zerodha Brokerage"
+        assert sibling.counterparty_category == "Asset Markets"
+        assert sibling.is_reviewed is True
+
+
+def test_transaction_patch_without_apply_to_past_leaves_statement_sibling(
+    engine: object,
+    onboarding_test_client: TestClient,
+) -> None:
+    """Without apply_to_past, sibling statement rows stay unchanged."""
+    with Session(engine) as session:
+        t1 = Transaction(
+            content_hash="stmt_patch_no_prop_anchor",
+            txn_date=datetime.date(2024, 9, 1),
+            account_id="ZERODHA",
+            user_id="batch_user",
+            source_statement="zerodha_demat_statement",
+            source_type="statement",
+            direction="OUTFLOW",
+            amount=100.0,
+            raw_description="ZERODHA BROKERAGE FEE",
+            channel="OTHER",
+            is_reviewed=False,
+        )
+        t2 = Transaction(
+            content_hash="stmt_patch_no_prop_sib",
+            txn_date=datetime.date(2024, 9, 2),
+            account_id="ZERODHA",
+            user_id="batch_user",
+            source_statement="zerodha_demat_statement",
+            source_type="statement",
+            direction="OUTFLOW",
+            amount=50.0,
+            raw_description="ZERODHA BROKERAGE FEE OTHER",
+            channel="OTHER",
+            is_reviewed=False,
+            counterparty=None,
+        )
+        session.add(t1)
+        session.add(t2)
+        session.commit()
+        session.refresh(t1)
+        session.refresh(t2)
+        id1 = int(t1.id or 0)
+        id2 = int(t2.id or 0)
+
+    r = onboarding_test_client.patch(
+        f"/api/transactions/{id1}",
+        json={
+            "counterparty": "Zerodha Fees",
+            "counterparty_category": "Asset Markets",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json().get("past_updated_count", 0) == 0
+
+    with Session(engine) as session:
+        sibling = session.get(Transaction, id2)
+        assert sibling is not None
+        assert sibling.counterparty is None

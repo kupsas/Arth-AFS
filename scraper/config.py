@@ -228,7 +228,7 @@ BANK_SENDERS: dict[str, dict] = {
         "display_name": "ICICI Direct broker statements (equity + MF)",
         "instrument_type": "broker",
         "discovery_subject_patterns": _PAT_ICICI_DIRECT_STMT,
-        "expected_cadence": "quarterly",
+        "expected_cadence": "monthly",
         # Narrow Gmail searches — this sender also pushes portfolio/KYC/scheme noise.
         # See onboarding ``_collect_pending_queue`` / ``gmail_subject_filter_keywords``.
         "gmail_subject_filter_keywords": [

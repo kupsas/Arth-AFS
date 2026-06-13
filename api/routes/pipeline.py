@@ -929,8 +929,8 @@ async def upload_statement(
             return UploadStatementResponse(
                 outcome="success",
                 message=(
-                    f"Import started for your new account. "
-                    f"You can watch progress under Runs in the app (run #{run_id})."
+                    "Import started for your new account. "
+                    "You can watch progress under Runs in the app."
                 ),
                 run_id=run_id,
                 source_key=sk_new,
@@ -962,8 +962,8 @@ async def upload_statement(
             return UploadStatementResponse(
                 outcome="success",
                 message=(
-                    f"Import started for your linked account. "
-                    f"You can watch progress under Runs in the app (run #{run_id})."
+                    "Import started for your linked account. "
+                    "You can watch progress under Runs in the app."
                 ),
                 run_id=run_id,
                 source_key=sk,

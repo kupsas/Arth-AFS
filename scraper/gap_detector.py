@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import calendar
 import datetime as dt
+import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from sqlalchemy import func
 from sqlmodel import Session, col, select
 
-from api.models import Transaction
+from api.models import ProcessedEmail, Transaction
 from scraper.config_loader import BankSendersConfig
 
 # Transaction-alert Gmail searches use these slice sizes when building targeted windows
@@ -244,6 +245,160 @@ def _collect_per_source(
     return per
 
 
+def _normalize_sender(addr: str) -> str:
+    return (addr or "").strip().lower()
+
+
+def _subject_matches_patterns(subject: str, patterns: Iterable[Any]) -> bool:
+    subj = subject or ""
+    for p in patterns:
+        if isinstance(p, str) and p.strip() and re.search(p, subj):
+            return True
+    return False
+
+
+def _broker_source_keys_by_sender(cfg: BankSendersConfig) -> dict[str, dict[str, Any]]:
+    """Map normalised broker sender address → source_key + statement subject patterns."""
+    out: dict[str, dict[str, Any]] = {}
+    for sender, blob in cfg.items():
+        if (blob.get("instrument_type") or "").lower() != "broker":
+            continue
+        source_key: str | None = None
+        for acc in (blob.get("accounts") or {}).values():
+            if isinstance(acc, dict) and acc.get("source_key"):
+                source_key = str(acc["source_key"])
+                break
+        if not source_key:
+            continue
+        out[_normalize_sender(sender)] = {
+            "source_key": source_key,
+            "patterns": list(blob.get("discovery_subject_patterns") or []),
+            "display_name": str(blob.get("display_name") or sender),
+            "expected_cadence": (blob.get("expected_cadence") or "monthly").lower(),
+            "instrument_type": "broker",
+        }
+    return out
+
+
+def _collect_broker_statement_receipts(
+    session: Session,
+    cfg: BankSendersConfig,
+) -> dict[str, _PerSource]:
+    """Count broker statement **emails received** per month (not trade activity)."""
+    broker_by_sender = _broker_source_keys_by_sender(cfg)
+    if not broker_by_sender:
+        return {}
+
+    per: dict[str, _PerSource] = {}
+    for row in session.exec(select(ProcessedEmail)).all():
+        meta = broker_by_sender.get(_normalize_sender(row.sender))
+        if meta is None:
+            continue
+        if not _subject_matches_patterns(row.subject, meta["patterns"]):
+            continue
+        sk = str(meta["source_key"])
+        received = row.received_at
+        ym = received.strftime("%Y-%m")
+        if sk not in per:
+            per[sk] = _PerSource(
+                min_ym=ym,
+                max_ym=ym,
+                source_label=str(meta["display_name"]),
+                instrument_type="broker",
+                expected_cadence=str(meta["expected_cadence"]),
+            )
+        p = per[sk]
+        p.counts[ym] = p.counts.get(ym, 0) + 1
+        p.total_count += 1
+        if _parse_ym(ym) < _parse_ym(p.min_ym):
+            p.min_ym = ym
+        if _parse_ym(ym) > _parse_ym(p.max_ym):
+            p.max_ym = ym
+    return per
+
+
+def _build_gap_report_for_source(
+    source_key: str,
+    ps: _PerSource,
+    meta: dict[str, str],
+) -> dict[str, Any]:
+    """Shared gap-report builder for bank txns and broker statement receipts."""
+    label = meta.get("display_name") or ps.source_label or source_key
+    st = (meta.get("instrument_type") or ps.instrument_type or "savings").lower()
+    ec = (meta.get("expected_cadence") or ps.expected_cadence or "per_transaction").lower()
+    ps.source_label = label
+    ps.instrument_type = st
+    ps.expected_cadence = ec
+
+    y0, m0 = _parse_ym(ps.min_ym)
+    y1, m1 = _parse_ym(ps.max_ym)
+    d0 = dt.date(y0, m0, 1)
+    d1 = dt.date(y1, m1, 1)
+
+    if ec == "per_transaction":
+        return {
+            "source": source_key,
+            "source_label": label,
+            "instrument_type": st,
+            "expected_cadence": ec,
+            "date_range_start": d0.isoformat(),
+            "date_range_end": d1.isoformat(),
+            "transaction_count": ps.total_count,
+            "gaps": [],
+            "note": "Sporadic or alert-only source — not checked month-by-month.",
+        }
+
+    rmonths = _iter_months_inclusive(ps.min_ym, ps.max_ym)
+    active = {k for k, n in ps.counts.items() if n > 0}
+    is_cc = st == "credit_card"
+
+    if len(rmonths) < 2:
+        return {
+            "source": source_key,
+            "source_label": label,
+            "instrument_type": st,
+            "expected_cadence": ec,
+            "date_range_start": d0.isoformat(),
+            "date_range_end": d1.isoformat(),
+            "transaction_count": ps.total_count,
+            "gaps": [],
+            "note": "Not enough month coverage to infer gaps yet.",
+        }
+
+    if ec == "quarterly":
+        zq = _quarterly_zero_months(rmonths, active)
+        raw_zero = set(zq)
+        if is_cc:
+            raw_zero = set(_long_streaks_only(list(raw_zero), min_len=3))
+    else:
+        raw = _candidates_zero_months(active, rmonths, instrument_type=st, is_credit=is_cc)
+        raw_zero = set(raw)
+
+    pieces = _merge_consecutive_months(list(raw_zero))
+    gaps: list[dict[str, str]] = []
+    for p in pieces:
+        gaps.append(
+            {
+                "kind": "missing_coverage",
+                "period_label": p["label"],
+                "period_start": p["period_start"],
+                "period_end": p["period_end"],
+                "reason": _gap_reason(st, ec, is_cc, p["label"]),
+            }
+        )
+
+    return {
+        "source": source_key,
+        "source_label": label,
+        "instrument_type": st,
+        "expected_cadence": ec,
+        "date_range_start": d0.isoformat(),
+        "date_range_end": d1.isoformat(),
+        "transaction_count": ps.total_count,
+        "gaps": gaps,
+    }
+
+
 def detect_gaps(
     session: Session,
     user_id: str,
@@ -258,95 +413,14 @@ def detect_gaps(
     """
     meta = _build_source_key_meta(source_configs)
     by_src = _collect_per_source(session, user_id)
+    by_src.update(_collect_broker_statement_receipts(session, source_configs))
     if not by_src:
         return []
 
     reports: list[dict[str, Any]] = []
     for source_key, ps in sorted(by_src.items(), key=lambda kv: kv[0]):
         m = meta.get(source_key) or {}
-        label = m.get("display_name") or source_key
-        st = (m.get("instrument_type") or "savings").lower()
-        ec = (m.get("expected_cadence") or "per_transaction").lower()
-        ps.source_label = label
-        ps.instrument_type = st
-        ps.expected_cadence = ec
-
-        y0, m0 = _parse_ym(ps.min_ym)
-        y1, m1 = _parse_ym(ps.max_ym)
-        d0 = dt.date(y0, m0, 1)
-        d1 = dt.date(y1, m1, 1)
-
-        if ec == "per_transaction":
-            reports.append(
-                {
-                    "source": source_key,
-                    "source_label": label,
-                    "instrument_type": st,
-                    "expected_cadence": ec,
-                    "date_range_start": d0.isoformat(),
-                    "date_range_end": d1.isoformat(),
-                    "transaction_count": ps.total_count,
-                    "gaps": [],
-                    "note": "Sporadic or alert-only source — not checked month-by-month.",
-                }
-            )
-            continue
-
-        rmonths = _iter_months_inclusive(ps.min_ym, ps.max_ym)
-        active = {k for k, n in ps.counts.items() if n > 0}
-        is_cc = st == "credit_card"
-
-        if len(rmonths) < 2:
-            reports.append(
-                {
-                    "source": source_key,
-                    "source_label": label,
-                    "instrument_type": st,
-                    "expected_cadence": ec,
-                    "date_range_start": d0.isoformat(),
-                    "date_range_end": d1.isoformat(),
-                    "transaction_count": ps.total_count,
-                    "gaps": [],
-                    "note": "Not enough month coverage to infer gaps yet.",
-                }
-            )
-            continue
-
-        if ec == "quarterly":
-            zq = _quarterly_zero_months(rmonths, active)
-            raw_zero = set(zq)
-            if is_cc:
-                raw_zero = set(_long_streaks_only(list(raw_zero), min_len=3))
-        else:
-            raw = _candidates_zero_months(active, rmonths, instrument_type=st, is_credit=is_cc)
-            raw_zero = set(raw)
-
-        # Merge consecutive for cleaner UI
-        pieces = _merge_consecutive_months(list(raw_zero))
-        gaps: list[dict[str, str]] = []
-        for p in pieces:
-            gaps.append(
-                {
-                    "kind": "missing_coverage",
-                    "period_label": p["label"],
-                    "period_start": p["period_start"],
-                    "period_end": p["period_end"],
-                    "reason": _gap_reason(st, ec, is_cc, p["label"]),
-                }
-            )
-
-        reports.append(
-            {
-                "source": source_key,
-                "source_label": label,
-                "instrument_type": st,
-                "expected_cadence": ec,
-                "date_range_start": d0.isoformat(),
-                "date_range_end": d1.isoformat(),
-                "transaction_count": ps.total_count,
-                "gaps": gaps,
-            }
-        )
+        reports.append(_build_gap_report_for_source(source_key, ps, m))
 
     return reports
 
@@ -354,6 +428,11 @@ def detect_gaps(
 def _gap_reason(
     instrument_type: str, cadence: str, is_cc: bool, label: str
 ) -> str:
+    if instrument_type == "broker":
+        return (
+            f"Monthly demat/broker statement missing for {label} — "
+            "re-pull from Gmail or upload the statement."
+        )
     if is_cc:
         return (
             f"No card activity for 3+ consecutive months ({label}). "
