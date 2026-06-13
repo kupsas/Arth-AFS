@@ -32,16 +32,15 @@ import { Loader2, Sparkles, Trash2 } from "lucide-react"
 import Link from "next/link"
 
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import {
   ONBOARDING_GOAL_TEMPLATE_SECTIONS_FALLBACK,
   ONBOARDING_GOAL_TEMPLATES_API_MAX_YEARS,
@@ -338,6 +337,12 @@ export function GoalTemplateWizard() {
     !yearsParseErr &&
     (!isRecurringActive || recurringStartOk)
 
+  const closeGoalSheet = React.useCallback(() => {
+    setDraft((d) => ({ ...d, selected: null }))
+    setAmountParseErr(null)
+    setYearsParseErr(null)
+  }, [setDraft])
+
   return (
     <div className="max-w-4xl space-y-6">
       <div>
@@ -386,6 +391,7 @@ export function GoalTemplateWizard() {
                     key={t.id}
                     type="button"
                     onClick={() => {
+                      setDone(false)
                       const mid = (t.default_target_amount_min + t.default_target_amount_max) / 2
                       const startToday = todayIsoLocal()
                       setDraft((d) => ({
@@ -415,6 +421,7 @@ export function GoalTemplateWizard() {
                   <button
                     type="button"
                     onClick={() => {
+                      setDone(false)
                       setDraft((d) => ({ ...d, selected: "custom", amount: 5_00_000, years: 3 }))
                     }}
                     className={cn(
@@ -435,19 +442,27 @@ export function GoalTemplateWizard() {
         })}
       </div>
 
-      {active && (
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              {active.icon} {active.name}
-            </CardTitle>
-            <CardDescription>
-              {isRecurringActive
-                ? "This template is a recurring cash flow: the amount is each period (month or year), not a single lump-sum target. Copy below is planning-only."
-                : "One-time goal: amounts are in rupees as of today; rough future figures use the same inflation hints as the rest of the app (for planning only)."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4 sm:max-w-md">
+      <Sheet
+        open={Boolean(active)}
+        onOpenChange={(open) => {
+          if (!open) closeGoalSheet()
+        }}
+      >
+        <SheetContent className="flex h-full w-[360px] flex-col sm:w-[420px]">
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6 pb-10 pt-5">
+            {active && (
+              <>
+                <SheetHeader className="shrink-0 space-y-2 p-0 pr-12 pb-4">
+                  <SheetTitle>
+                    {active.icon} {active.name}
+                  </SheetTitle>
+                  <SheetDescription>
+                    {isRecurringActive
+                      ? "This template is a recurring cash flow: the amount is each period (month or year), not a single lump-sum target. Copy below is planning-only."
+                      : "One-time goal: amounts are in rupees as of today; rough future figures use the same inflation hints as the rest of the app (for planning only)."}
+                  </SheetDescription>
+                </SheetHeader>
+                <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="amt">
                 {isRecurringActive
@@ -600,42 +615,46 @@ export function GoalTemplateWizard() {
                 </p>
               )}
             </div>
-          </CardContent>
-          {preview && (
-            <div className="px-6 pb-2 text-sm text-muted-foreground border-t border-border/50 pt-4">
-              {preview.copy}
-            </div>
-          )}
-          <CardFooter>
-            <Button
-              type="button"
-              disabled={isPending || !canCreateGoal}
-              onClick={() => {
-                if (!active || !canCreateGoal) return
-                const body = buildCreatePayload(active, draft, pitTargetDateIso)
-                create(body, {
-                  onSuccess: () => {
-                    setDone(true)
-                    clearDraft()
-                  },
-                })
-              }}
-            >
-              {isPending ? "Saving…" : "Create goal"}
-            </Button>
-            {done && (
-              <p className="ml-3 text-sm text-emerald-600" role="status">
-                Added — you can continue in Goals for fine-tuning.
-              </p>
+                {preview && (
+                  <div className="text-sm text-muted-foreground border-t border-border/50 pt-4">
+                    {preview.copy}
+                  </div>
+                )}
+                <div className="flex flex-wrap items-center gap-3 pt-2">
+                  <Button
+                    type="button"
+                    disabled={isPending || !canCreateGoal}
+                    onClick={() => {
+                      if (!active || !canCreateGoal) return
+                      const body = buildCreatePayload(active, draft, pitTargetDateIso)
+                      create(body, {
+                        onSuccess: () => {
+                          setDone(true)
+                          clearDraft()
+                          closeGoalSheet()
+                        },
+                      })
+                    }}
+                  >
+                    {isPending ? "Saving…" : "Create goal"}
+                  </Button>
+                  {done && (
+                    <p className="text-sm text-emerald-600" role="status">
+                      Added — you can continue in Goals for fine-tuning.
+                    </p>
+                  )}
+                  {isError && (
+                    <p className="text-sm text-destructive" role="alert">
+                      {getUserFacingErrorMessage(error) || "Couldn't create that goal. Try again."}
+                    </p>
+                  )}
+                </div>
+                </div>
+              </>
             )}
-            {isError && (
-              <p className="ml-3 text-sm text-destructive" role="alert">
-                {getUserFacingErrorMessage(error) || "Couldn't create that goal. Try again."}
-              </p>
-            )}
-          </CardFooter>
-        </Card>
-      )}
+          </div>
+        </SheetContent>
+      </Sheet>
 
       {draft.selected == null && (extraHeadline || extraHeadlineRecurring) && (
         <div className="text-xs text-muted-foreground border-t pt-3 space-y-2">

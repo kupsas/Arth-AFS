@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 
 # In-process cache of the consolidated JSON (invalidated after map updates).
 _map_cache: dict[str, dict[str, Any]] | None = None
+# Avoid hammering NSE when the on-disk map is empty (one bootstrap attempt per process).
+_bootstrap_attempted: bool = False
 
 # Curated blocklist — fraud / forced delistings / SEBI suspensions we never want to ingest.
 # Review ``data/.nse_cache/delisted_isin_candidates.json`` periodically for additions.
@@ -71,6 +73,63 @@ def invalidate_bhav_isin_cache() -> None:
     _map_cache = None
 
 
+def _try_bootstrap_consolidated_map() -> bool:
+    """Download the latest NSE equity bhav and merge into the consolidated ISIN map.
+
+    Called when ``data/.nse_cache/consolidated_isin_map.json`` is missing on first
+    run (e.g. fresh Docker volume) so broker parsers can resolve ISIN→ticker.
+    """
+    global _bootstrap_attempted
+    if _bootstrap_attempted:
+        return False
+    _bootstrap_attempted = True
+    try:
+        from api.services.price_feed import (
+            bhav_cached_csv_candidates,
+            latest_bhav_target_date,
+            load_nse_equity_bhav_isin_map,
+            resolve_nse_bhav_session_date,
+        )
+
+        target = latest_bhav_target_date()
+        session_date = resolve_nse_bhav_session_date(target)
+        if session_date is None:
+            isin_map = load_nse_equity_bhav_isin_map(target)
+            if not isin_map:
+                logger.warning("ISIN map bootstrap: no NSE bhav available for %s", target)
+                return False
+            session_date = target
+
+        for path in bhav_cached_csv_candidates(session_date):
+            if path.is_file():
+                n = update_consolidated_map_from_bhav(path)
+                if n > 0:
+                    logger.info(
+                        "Bootstrapped consolidated ISIN map from %s (%d rows)",
+                        path.name,
+                        n,
+                    )
+                    return True
+
+        isin_map = load_nse_equity_bhav_isin_map(session_date)
+        if not isin_map:
+            return False
+        for path in bhav_cached_csv_candidates(session_date):
+            if path.is_file():
+                n = update_consolidated_map_from_bhav(path)
+                if n > 0:
+                    logger.info(
+                        "Bootstrapped consolidated ISIN map from %s (%d rows)",
+                        path.name,
+                        n,
+                    )
+                    return True
+        return False
+    except Exception as exc:
+        logger.warning("Could not bootstrap consolidated ISIN map: %s", exc)
+        return False
+
+
 def _load_map() -> dict[str, dict[str, Any]]:
     global _map_cache
     if _map_cache is not None:
@@ -78,6 +137,10 @@ def _load_map() -> dict[str, dict[str, Any]]:
     from pipeline.bhav_isin_map import load_consolidated_map
 
     _map_cache = load_consolidated_map()
+    if not _map_cache:
+        if _try_bootstrap_consolidated_map():
+            invalidate_bhav_isin_cache()
+            _map_cache = load_consolidated_map()
     if _map_cache:
         logger.debug("Loaded %d ISIN rows from consolidated bhav map", len(_map_cache))
     else:
@@ -86,7 +149,7 @@ def _load_map() -> dict[str, dict[str, Any]]:
             "`python -m pipeline.consolidate_bhav_cache` after populating data/.nse_cache "
             "or wait for the next price refresh to merge a bhav file.",
         )
-    return _map_cache
+    return _map_cache or {}
 
 
 def lookup_isin(isin: str) -> dict[str, Any] | None:

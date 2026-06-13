@@ -20,6 +20,7 @@ from sqlmodel import Session, col, func, select
 from api.auth import get_current_user
 from api.database import get_session
 from api.models import Transaction, UserMerchantRule
+from api.services.onboarding_merchant_propagation import propagate_merchant_keyword_hits
 from api.services.query_helpers import _for_user
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,8 @@ class TransactionUpdate(BaseModel):
     exclusion_reason: str | None = None
     # When True with counterparty/category changes, persist a user_merchant_rules row.
     apply_to_future: bool | None = None
+    # When True, reclassify similar past rows via merchant keyword propagation.
+    apply_to_past: bool | None = None
 
 
 class BulkUpdateRequest(BaseModel):
@@ -229,17 +232,19 @@ def update_transaction(
 
     was_reviewed = bool(txn.is_reviewed)
     apply_future = body.apply_to_future is True
+    apply_past = body.apply_to_past is True
     _apply_update(txn, body)
     txn.classification_source = "USER_REVIEWED"
     session.add(txn)
 
     # Persist a keyword rule when the user marks reviewed (review queue / approve) or
-    # explicitly opts in from the edit sheet (apply_to_future).
+    # explicitly opts in from the edit sheet (apply_to_future / apply_to_past).
     learn_merchant = bool(
         txn.counterparty
         and txn.counterparty_category
         and (
             apply_future
+            or apply_past
             or (bool(txn.is_reviewed) and not was_reviewed)
         )
     )
@@ -255,16 +260,30 @@ def update_transaction(
             exclude_id=txn_id,
         )
 
+    past_updated_count = 0
+    if apply_past and txn.counterparty and txn.counterparty_category:
+        past_updated_count = propagate_merchant_keyword_hits(
+            session,
+            current_user,
+            keywords=[txn.counterparty],
+            exclude_txn_ids={txn_id},
+            source_types=("email", "statement"),
+        )
+
     session.commit()
     session.refresh(txn)
     logger.debug(
-        "Transaction patched id=%s apply_future_rules=%s auto_propagated=%s",
+        "Transaction patched id=%s apply_future_rules=%s apply_past=%s "
+        "auto_propagated=%s past_updated=%s",
         txn_id,
         apply_future,
+        apply_past,
         auto_approved_count,
+        past_updated_count,
     )
     out = _txn_to_dict(txn)
     out["auto_approved_count"] = auto_approved_count
+    out["past_updated_count"] = past_updated_count
     return out
 
 
@@ -278,6 +297,7 @@ def _apply_update(txn: Transaction, update: TransactionUpdate) -> None:
 
     update_data = update.model_dump(exclude_unset=True)
     update_data.pop("apply_to_future", None)
+    update_data.pop("apply_to_past", None)
     # Turning off analytics exclusion clears the reason (keeps DB tidy).
     if update_data.get("exclude_from_analytics") is False:
         update_data["exclusion_reason"] = None

@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
-from api.models import Transaction
+from api.models import ProcessedEmail, Transaction
 from scraper.gap_detector import detect_gaps, _iter_months_inclusive
 
 
@@ -272,3 +272,77 @@ def test_compute_alert_backfill_windows_uncertain_is_capped(session: Session):
     )
     uncertain = [w for w in wins if w["kind"] == "coverage_uncertain"]
     assert len(uncertain) <= ALERT_BACKFILL_MAX_UNCERTAIN_WINDOWS
+
+
+def test_broker_receipt_gap_between_statement_months(session: Session):
+    """Broker coverage uses statement receipt months, not trade activity."""
+    session.add(
+        ProcessedEmail(
+            gmail_message_id="z1",
+            sender="no-reply-transaction-with-holding-statement@reportsmailer.zerodha.net",
+            subject="Your Monthly Demat Transaction statement",
+            received_at=dt.datetime(2024, 1, 15, 10, 0, 0),
+            status="processed",
+        )
+    )
+    session.add(
+        ProcessedEmail(
+            gmail_message_id="z2",
+            sender="no-reply-transaction-with-holding-statement@reportsmailer.zerodha.net",
+            subject="Your Monthly Demat Transaction statement",
+            received_at=dt.datetime(2024, 4, 10, 10, 0, 0),
+            status="processed",
+        )
+    )
+    session.commit()
+
+    cfg = {
+        "no-reply-transaction-with-holding-statement@reportsmailer.zerodha.net": {
+            "display_name": "Zerodha monthly demat transaction statement",
+            "instrument_type": "broker",
+            "expected_cadence": "monthly",
+            "discovery_subject_patterns": [r"(?i)Monthly\s+Demat\s+Transaction"],
+            "accounts": {"1": {"source_key": "zerodha_demat_statement", "account_id": "ZERODHA"}},
+        }
+    }
+    out = detect_gaps(session, "u_broker", cfg)
+    assert len(out) == 1
+    assert out[0]["instrument_type"] == "broker"
+    assert out[0]["gaps"]
+    assert out[0]["gaps"][0]["period_start"] == "2024-02"
+
+
+def test_broker_receipt_quiet_trade_month_not_required(session: Session):
+    """A month with a received statement is not flagged even with zero bank txns."""
+    session.add(
+        ProcessedEmail(
+            gmail_message_id="z3",
+            sender="no-reply-transaction-with-holding-statement@reportsmailer.zerodha.net",
+            subject="Monthly Demat Transaction — March",
+            received_at=dt.datetime(2024, 3, 5, 10, 0, 0),
+            status="skipped",
+        )
+    )
+    session.add(
+        ProcessedEmail(
+            gmail_message_id="z4",
+            sender="no-reply-transaction-with-holding-statement@reportsmailer.zerodha.net",
+            subject="Monthly Demat Transaction — April",
+            received_at=dt.datetime(2024, 4, 5, 10, 0, 0),
+            status="processed",
+        )
+    )
+    session.commit()
+
+    cfg = {
+        "no-reply-transaction-with-holding-statement@reportsmailer.zerodha.net": {
+            "display_name": "Zerodha",
+            "instrument_type": "broker",
+            "expected_cadence": "monthly",
+            "discovery_subject_patterns": [r"(?i)Monthly\s+Demat\s+Transaction"],
+            "accounts": {"1": {"source_key": "zerodha_demat_statement", "account_id": "ZERODHA"}},
+        }
+    }
+    out = detect_gaps(session, "u_broker2", cfg)
+    assert len(out) == 1
+    assert out[0]["gaps"] == []
