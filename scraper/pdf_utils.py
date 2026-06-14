@@ -13,12 +13,15 @@ passing passwords through pdfplumber alone.
 from __future__ import annotations
 
 import io
+import logging
 import os
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
 import pikepdf
+
+logger = logging.getLogger(__name__)
 
 # Password resolution for statement PDFs is centralized in ``scraper/pdf_passwords.py``
 # (env-key chains + UserSecrets). This module only decrypts bytes given a password string.
@@ -91,5 +94,10 @@ def decrypt_pdf_with_password_candidates(
             last_err = e
             continue
     if last_err is not None:
+        logger.warning(
+            "PDF decrypt failed after %d candidate(s) — wrong password or missing ingredient",
+            len(tried),
+        )
         raise last_err
+    logger.warning("PDF decrypt failed: no password candidates were provided")
     raise pikepdf.PasswordError("No password candidates were provided.")

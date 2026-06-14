@@ -18,6 +18,14 @@ Wraps the same parse → classify → DB path as :mod:`scraper.orchestrator`, bu
   * **HDFC Credit Card** (``hdfc_cc_XXXX``): Gmail discovery often maps transaction-alert mail to the
     card ``source_key`` without also persisting ``emailstatements.cards@…`` mappings.  We
     merge those statement senders in-memory so statement-first queueing still runs.
+
+  * **SBI Savings** (``sbi_savings``): CAS e-statement senders may persist with empty accounts
+    until the PDF self-maps last-4.  We merge ``cbssbi.cas@…`` statement senders in-memory so
+    ``_collect_pending_queue`` can list Gmail for ``sbi_savings``.
+
+  * **Encrypted PDFs:** when no derived/env password opens a statement, we **skip** that Gmail
+    message (``ProcessedEmail`` status ``failed``), keep importing, and let coverage gaps surface
+    missing months on Review.  Legacy ``needs_password`` progress is still honoured for in-flight runs.
 """
 
 from __future__ import annotations
@@ -50,7 +58,12 @@ from scraper.gap_detector import (
 )
 from scraper.gmail_client import GmailClient
 from scraper.orchestrator import _get_processed_ids, _process_email, _record_email
-from scraper.pdf_passwords import StatementPasswordRequired, is_statement_password_failure
+from scraper.pdf_passwords import (
+    StatementPasswordRequired,
+    is_statement_password_failure,
+    log_statement_password_unlock_failure,
+)
+from scraper.secrets_context import statement_secrets_context
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +82,12 @@ UNKNOWN_THRESHOLD = int(os.environ.get("ONBOARDING_UNKNOWN_THRESHOLD", "20"))
 # (no per-transaction Gmail listing). Empty by default — transaction alerts use
 # :func:`compute_alert_backfill_windows` for small targeted Gmail searches.
 ONBOARDING_SKIP_ALERT_SOURCES: frozenset[str] = frozenset()
+
+# User-facing note stored on ProcessedEmail when a statement PDF cannot be decrypted.
+_PASSWORD_SKIP_USER_MESSAGE = (
+    "Couldn't open this statement — the PDF password didn't work. "
+    "Import continued; upload that month from Review if you need it."
+)
 
 # After a **pre_statement** window yields at least this many alert emails, add another
 # 90-day slice further back (stop when a slice is sparse — user likely had no alerts then).
@@ -223,6 +242,54 @@ def merge_hdfc_cc_statement_sender_accounts(
             acc = base["accounts"]
         if last4 not in acc:
             acc[last4] = copy.deepcopy(acct_entry)
+        for meta_key in (
+            "parser_key",
+            "expected_cadence",
+            "display_name",
+            "instrument_type",
+            "first_run_lookback_days",
+        ):
+            if meta_key in tmpl and not base.get(meta_key):
+                base[meta_key] = copy.deepcopy(tmpl[meta_key])
+    return out
+
+
+def merge_sbi_statement_sender_accounts(
+    bank: BankSendersConfig, source_key: str
+) -> BankSendersConfig:
+    """Attach SBI CAS e-statement senders to ``sbi_savings`` for queue + parser routing.
+
+    ``sender_emails_for_source_key`` only lists senders that already have a
+    ``ScraperAccountMapping`` row for the ``source_key``.  SBI statement senders often
+    persist with **empty** accounts until the PDF self-maps last-4 — then backfill raises
+    ``No configured bank sender maps to source_key='sbi_savings'``.
+
+    This returns a **deep copy** of ``bank`` with template entries from
+    :data:`~scraper.config.BANK_SENDERS` for ``parser_key == "sbi_statement"``,
+    merging a placeholder ``sbi`` account (real last-4 comes from PDF parse later).
+    """
+    if (source_key or "").strip() != "sbi_savings":
+        return bank
+    acct_entry = {"account_id": "SBI_SAVINGS", "source_key": "sbi_savings"}
+    out: BankSendersConfig = copy.deepcopy(bank)
+    for sender_email, tmpl in BANK_SENDERS.items():
+        if str(tmpl.get("parser_key") or "") != "sbi_statement":
+            continue
+        norm = _normalise_sender(sender_email)
+        if norm not in out:
+            entry: dict[str, Any] = {
+                k: copy.deepcopy(v) for k, v in tmpl.items() if k != "accounts"
+            }
+            entry["accounts"] = {"sbi": copy.deepcopy(acct_entry)}
+            out[norm] = entry
+            continue
+        base = out[norm]
+        acc = base.get("accounts")
+        if not isinstance(acc, dict):
+            base["accounts"] = {}
+            acc = base["accounts"]
+        if "sbi" not in acc:
+            acc["sbi"] = copy.deepcopy(acct_entry)
         for meta_key in (
             "parser_key",
             "expected_cadence",
@@ -1164,6 +1231,7 @@ def run_onboarding_backfill(
         thresh = effective_onboarding_unknown_threshold(session, user_id)
     bank = get_bank_senders_config(session, user_id)
     bank = merge_hdfc_cc_statement_sender_accounts(bank, source_key)
+    bank = merge_sbi_statement_sender_accounts(bank, source_key)
     parser_registry = build_email_parser_registry(bank)
 
     after_date = after
@@ -1621,44 +1689,64 @@ def run_onboarding_backfill(
         except Exception as exc:
             if is_statement_password_failure(exc):
                 session.rollback()
-                remainder_chunk = chunk[i + 1 :]
-                rebuilt = [msg_id] + remainder_chunk + list(rest)
-                if pub_status == "processing_statements":
-                    src_state["_pending_statement_ids"] = rebuilt
-                else:
-                    src_state["_pending_alert_ids"] = rebuilt
                 p_key = getattr(exc, "parser_key", None)
                 if not p_key and isinstance(exc, StatementPasswordRequired):
                     p_key = exc.parser_key
                 err_txt = str(exc).strip() or "PDF password missing or incorrect."
-                # TODO: Product gap — when every derived/env candidate fails, we only surface
-                # ``StepPasswordIngredients`` (PAN/DOB/customer ID). Normal users cannot set a
-                # literal PDF password without editing .env or DB. Add UI + API to store
-                # per-bank override strings in ``UserSecrets`` (mirroring ICICI_STATEMENT_* /
-                # HDFC_* env keys) and show that form here, keyed by ``password_parser_key``.
-                src_state.update(
-                    {
-                        "source": source_key,
-                        "status": "needs_password",
-                        "emails_found": initial_total,
-                        "emails_processed": emails_done,
-                        "transactions_parsed": tx_total,
-                        "unknowns_pending": count_classification_unknowns(
-                            session, user_id=user_id, source_key=source_key
-                        ),
-                        "password_failure_message_id": msg_id,
-                        "password_parser_key": p_key,
-                        "error_message": err_txt,
-                        "current_phase": src_state.get("current_phase"),
-                        "message": "Save credentials and POST with resume_after_password=true.",
-                    }
+                with statement_secrets_context(session, user_id):
+                    log_statement_password_unlock_failure(
+                        session=session,
+                        user_id=user_id,
+                        source_key=source_key,
+                        message_id=msg_id,
+                        parser_key=str(p_key) if p_key else None,
+                        detail=err_txt,
+                    )
+                try:
+                    msg = gmail_client.fetch_message_by_id(msg_id)
+                    sender_norm = _normalise_sender(msg.sender)
+                    _record_email(
+                        session,
+                        msg,
+                        sender=sender_norm,
+                        status="failed",
+                        error_message=_PASSWORD_SKIP_USER_MESSAGE,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Could not record skipped password-failed ProcessedEmail for %s",
+                        msg_id,
+                    )
+                logger.warning(
+                    "Skipping onboarding message %s — PDF password unlock failed (parser_key=%r)",
+                    msg_id,
+                    p_key,
                 )
                 if import_flow_log:
                     import_flow_log.write(
-                        "needs_password",
+                        "password_skip",
                         f"message_id={msg_id} parser_key={p_key!r} detail={err_txt!r}",
                     )
-                return OnboardingBackfillResult(progress=src_state)
+                emails_done += 1
+                slice_pub = _public_slice(
+                    {
+                        **src_state,
+                        "source": source_key,
+                        "status": pub_status,
+                        "emails_found": initial_total,
+                        "emails_processed": emails_done,
+                        "transactions_parsed": tx_total,
+                        "current_phase": src_state.get("current_phase"),
+                    }
+                )
+                if progress_callback:
+                    progress_callback(slice_pub)
+                if emit_event:
+                    emit_event(slice_pub)
+                gate_after = _pause_if_classification_budget_exceeded(i + 1)
+                if gate_after is not None:
+                    return gate_after
+                continue
 
             logger.exception("Onboarding backfill failed on message %s", msg_id)
             # The failed operation may have left the SQLAlchemy session in a

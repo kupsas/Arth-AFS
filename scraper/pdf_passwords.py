@@ -487,3 +487,126 @@ def is_statement_password_failure(exc: BaseException) -> bool:
     if cause is not None and isinstance(cause, BaseException):
         return is_statement_password_failure(cause)
     return False
+
+
+def _template_keys_for_password_failure(parser_key: str | None) -> tuple[str, ...]:
+    """PasswordTemplate.parser_key values relevant to a parser failure."""
+    pk = (parser_key or "").strip()
+    if not pk:
+        return ()
+    if pk in EMAIL_PARSER_KEY_TO_PASSWORD_TEMPLATE_KEYS:
+        return EMAIL_PARSER_KEY_TO_PASSWORD_TEMPLATE_KEYS[pk]
+    return (pk,)
+
+
+def _candidate_resolver_for_parser(parser_key: str | None):
+    """Return the same candidate-list function the statement parser uses."""
+    pk = (parser_key or "").strip()
+    return {
+        "sbi_statement": resolve_sbi_statement_pdf_password_candidates,
+        "hdfc_combined_statement": resolve_hdfc_combined_pdf_password_candidates,
+        "hdfc_cc_statement": resolve_hdfc_cc_pdf_password_candidates,
+        "icici_statement": resolve_icici_statement_pdf_password_candidates,
+        "icici_direct_statement": resolve_icici_statement_pdf_password_candidates,
+        "zerodha_demat_statement": resolve_zerodha_demat_pdf_password_candidates,
+    }.get(pk)
+
+
+def _missing_template_ingredients(
+    session: Session,
+    user_id: str,
+    template_keys: tuple[str, ...],
+) -> list[str]:
+    """Ingredient field names still empty for any of the given templates (no secret values)."""
+    from api.models import PasswordTemplate, UserSecrets
+
+    row = session.exec(select(UserSecrets).where(UserSecrets.user_id == user_id)).first()
+    raw_secrets: dict[str, Any] = {}
+    if row is not None and row.secrets_json:
+        try:
+            j = json.loads(row.secrets_json)
+            if isinstance(j, dict):
+                raw_secrets = j
+        except json.JSONDecodeError:
+            pass
+    kwargs = build_pdf_template_kwargs(session, user_id, raw_secrets)
+    missing: list[str] = []
+    for tpl_key in template_keys:
+        tmpl = session.exec(
+            select(PasswordTemplate).where(PasswordTemplate.parser_key == tpl_key)
+        ).first()
+        if tmpl is None:
+            continue
+        try:
+            required = json.loads(tmpl.required_fields_json)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(required, list):
+            continue
+        for name in required:
+            key = str(name).strip()
+            if not key:
+                continue
+            if key not in kwargs or not str(kwargs.get(key) or "").strip():
+                if key not in missing:
+                    missing.append(key)
+    return missing
+
+
+def format_statement_password_unlock_diagnostics(
+    session: Session,
+    user_id: str,
+    parser_key: str | None,
+) -> str:
+    """Non-secret summary for logs when a statement PDF cannot be opened."""
+    pk = (parser_key or "").strip() or "unknown"
+    parts: list[str] = [f"parser_key={pk!r}"]
+    template_keys = _template_keys_for_password_failure(parser_key)
+    if template_keys:
+        parts.append(f"templates={list(template_keys)!r}")
+    missing = _missing_template_ingredients(session, user_id, template_keys)
+    if missing:
+        parts.append(f"missing_ingredients={missing!r}")
+    else:
+        parts.append("ingredients_present_for_template=yes")
+    resolver = _candidate_resolver_for_parser(parser_key)
+    if resolver is not None:
+        try:
+            count = len(resolver())
+        except Exception:
+            logger.debug("candidate resolver failed for %s", pk, exc_info=True)
+            count = -1
+        parts.append(f"candidate_count={count}")
+        if count == 0:
+            parts.append("hint=no passwords to try — save onboarding ingredients or set env override")
+        elif count > 0 and missing:
+            parts.append("hint=ingredients incomplete — derived password not built")
+        elif count > 0:
+            parts.append("hint=candidates tried but none matched PDF — check bank-registered values")
+    names = list_pdf_password_holder_names(session, user_id)
+    if pk in ("icici_statement", "icici_direct_statement", "hdfc_cc_statement"):
+        parts.append(f"identity_name_variants={len(names)}")
+        if not names:
+            parts.append("hint=no holder names — check pre-classification identity step")
+    return "; ".join(parts)
+
+
+def log_statement_password_unlock_failure(
+    *,
+    session: Session,
+    user_id: str,
+    source_key: str,
+    message_id: str,
+    parser_key: str | None,
+    detail: str,
+) -> None:
+    """Emit WARNING lines to stdout (docker logs) and keep email-import.log in sync."""
+    diag = format_statement_password_unlock_diagnostics(session, user_id, parser_key)
+    logger.warning(
+        "Statement PDF unlock paused user=%r source=%r gmail_message_id=%s detail=%r diagnostics=%s",
+        user_id,
+        source_key,
+        message_id,
+        detail,
+        diag,
+    )

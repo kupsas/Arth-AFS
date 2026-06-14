@@ -5,6 +5,7 @@ from __future__ import annotations
 from scraper.pdf_passwords import (
     ARTH_PDF_INGREDIENT_DOB_ISO,
     ARTH_PDF_INGREDIENT_ICICI_REGISTERED_NAME,
+    ARTH_PDF_INGREDIENT_SBI_MOBILE_LAST5,
     _derive_name_dob_password_variants_for_holder_names,
 )
 
@@ -32,3 +33,11 @@ def test_secrets_override_still_first_in_chain() -> None:
     """Explicit UserSecrets name is still supported (tested at integration level)."""
     assert ARTH_PDF_INGREDIENT_ICICI_REGISTERED_NAME.startswith("ARTH_")
     assert ARTH_PDF_INGREDIENT_DOB_ISO.startswith("ARTH_")
+    assert ARTH_PDF_INGREDIENT_SBI_MOBILE_LAST5.startswith("ARTH_")
+
+
+def test_template_keys_for_password_failure() -> None:
+    from scraper.pdf_passwords import _template_keys_for_password_failure
+
+    assert _template_keys_for_password_failure("sbi_statement") == ("sbi_statement",)
+    assert "icici_statement_monthly" in _template_keys_for_password_failure("icici_statement")

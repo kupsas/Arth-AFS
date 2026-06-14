@@ -43,3 +43,28 @@ def test_get_fernet_returns_singleton_within_key(isolated_fernet) -> None:
     a = encryption.get_fernet()
     b = encryption.get_fernet()
     assert a is b
+
+
+def test_fernet_key_persists_to_data_dir_and_survives_process_reset(
+    monkeypatch, tmp_path,
+) -> None:
+    """Docker path: key file under ARTH_DB_PATH parent survives a fresh Fernet singleton."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    db_file = data_dir / "arth_main.db"
+    monkeypatch.setattr(encryption, "_ENV_PATH", tmp_path / "missing.env")
+    monkeypatch.delenv("FERNET_KEY", raising=False)
+    monkeypatch.setenv("ARTH_DB_PATH", str(db_file))
+
+    encryption._fernet = None  # noqa: SLF001
+    token = encryption.encrypt_field("hold-me")
+
+    key_path = data_dir / "fernet.key"
+    assert key_path.is_file()
+    stored = key_path.read_text(encoding="utf-8").strip()
+    assert stored
+
+    encryption._fernet = None  # noqa: SLF001 — simulate new process
+    monkeypatch.delenv("FERNET_KEY", raising=False)
+    assert encryption.decrypt_field(token) == "hold-me"
+    assert key_path.read_text(encoding="utf-8").strip() == stored

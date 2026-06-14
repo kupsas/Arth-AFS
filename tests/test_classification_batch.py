@@ -583,3 +583,55 @@ def test_transaction_patch_without_apply_to_past_leaves_statement_sibling(
         sibling = session.get(Transaction, id2)
         assert sibling is not None
         assert sibling.counterparty is None
+
+
+def test_transaction_patch_apply_to_past_updates_same_counterparty_reviewed_siblings(
+    engine: object,
+    onboarding_test_client: TestClient,
+) -> None:
+    """apply_to_past matches by merchant label even when narration lacks the display name."""
+    narr = "CONSOLIDATED FCY MARKUP FEE FOR CARD TXN"
+    new_cat = "Financial Services, Insurance & Investments"
+    old_cat = "Fees, Charges & Interest"
+    ids: list[int] = []
+    with Session(engine) as session:
+        for i, month in enumerate((5, 4, 3), start=1):
+            t = Transaction(
+                content_hash=f"forex_markup_{i}",
+                txn_date=datetime.date(2026, month, 15),
+                account_id="HDFC_CC_1905",
+                user_id="batch_user",
+                source_statement="hdfc_cc_1905",
+                source_type="email",
+                direction="OUTFLOW",
+                amount=float(100 * i),
+                raw_description=narr,
+                channel="CARD",
+                txn_type="EXPENSE_OTHER",
+                is_reviewed=True,
+                classification_source="USER_REVIEWED",
+                counterparty="Forex Markup",
+                counterparty_category=old_cat,
+            )
+            session.add(t)
+            session.commit()
+            session.refresh(t)
+            ids.append(int(t.id or 0))
+
+    anchor_id, sib_a, sib_b = ids
+    r = onboarding_test_client.patch(
+        f"/api/transactions/{anchor_id}",
+        json={
+            "counterparty_category": new_cat,
+            "apply_to_past": True,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert r.json().get("past_updated_count", 0) >= 2
+
+    with Session(engine) as session:
+        for tid in (anchor_id, sib_a, sib_b):
+            row = session.get(Transaction, tid)
+            assert row is not None
+            assert row.counterparty == "Forex Markup"
+            assert row.counterparty_category == new_cat

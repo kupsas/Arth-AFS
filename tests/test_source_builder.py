@@ -373,3 +373,53 @@ def test_ordered_backfill_sources_emits_sbi_savings_for_empty_accounts() -> None
     }
     sources = _ordered_backfill_sources(bank)
     assert sources == [{"source_key": "sbi_savings", "instrument_type": "savings"}]
+
+
+def test_ordered_backfill_sources_filters_zero_mail_discovery() -> None:
+    from api.routes.onboarding import _ordered_backfill_sources
+
+    bank = {
+        "alerts@hdfcbank.net": {
+            "parser_key": "hdfc_bank",
+            "instrument_type": "savings",
+            "accounts": {
+                "1234": {"account_id": "HDFC_SAV_1234", "source_key": "hdfc_savings_1234"},
+            },
+        },
+        "alerts@icicibank.com": {
+            "parser_key": "icici_bank",
+            "instrument_type": "savings",
+            "accounts": {
+                "5678": {"account_id": "ICICI_SAV_5678", "source_key": "icici_savings_5678"},
+            },
+        },
+    }
+    discovered = {"alerts@hdfcbank.net"}
+    sources = _ordered_backfill_sources(bank, discovered_senders=discovered)
+    keys = [s["source_key"] for s in sources]
+    assert keys == ["hdfc_savings_1234"]
+    assert "icici_savings_5678" not in keys
+
+
+def test_ordered_backfill_sources_keeps_sbi_when_discovered() -> None:
+    from api.routes.onboarding import _ordered_backfill_sources
+
+    bank = {
+        "cbssbi.cas@alerts.sbi.bank.in": {
+            "parser_key": "sbi_statement",
+            "instrument_type": "savings",
+            "accounts": {},
+        },
+        "alerts@hdfcbank.net": {
+            "parser_key": "hdfc_bank",
+            "instrument_type": "savings",
+            "accounts": {
+                "1234": {"account_id": "HDFC_SAV_1234", "source_key": "hdfc_savings_1234"},
+            },
+        },
+    }
+    discovered = {"cbssbi.cas@alerts.sbi.bank.in"}
+    sources = _ordered_backfill_sources(bank, discovered_senders=discovered)
+    keys = [s["source_key"] for s in sources]
+    assert keys == ["sbi_savings"]
+    assert "hdfc_savings_1234" not in keys

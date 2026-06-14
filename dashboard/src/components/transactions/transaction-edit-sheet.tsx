@@ -537,8 +537,9 @@ export function TransactionEditSheet({
                       Also update similar past transactions
                     </label>
                     <p className="text-xs text-muted-foreground pl-0">
-                      Re-label past rows whose narration matches this merchant (email and
-                      statement imports). Creates the same remember rule as above when needed.
+                      Re-label past rows with the same merchant name or a matching bank
+                      description (email and statement imports). Creates the remember rule
+                      when needed.
                     </p>
                   </div>
                 </div>

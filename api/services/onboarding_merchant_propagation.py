@@ -160,3 +160,119 @@ def propagate_merchant_keyword_hits(
         session.add(row)
         touched += 1
     return touched
+
+
+def _normalized_counterparty_labels(*labels: str | None) -> list[str]:
+    """Uppercase, trim, dedupe counterparty strings suitable for SQL / keyword matching."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in labels:
+        n = (raw or "").strip().upper()
+        if len(n) >= 2 and n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+def _apply_anchor_classification_to_row(row: Transaction, anchor: Transaction) -> None:
+    """Copy user-edited classification from the anchor row onto a sibling."""
+    row.counterparty = anchor.counterparty
+    row.counterparty_category = anchor.counterparty_category
+    row.txn_type = anchor.txn_type
+    row.spend_category = anchor.spend_category
+    row.classification_source = "USER_REVIEWED"
+    row.is_reviewed = True
+    row.updated_at = datetime.datetime.now(datetime.UTC)
+
+
+def _collect_transaction_edit_siblings(
+    session: Session,
+    user_id: str,
+    *,
+    counterparty_labels: list[str],
+    narration_keywords: list[str],
+    exclude_txn_ids: set[int],
+    source_types: tuple[str, ...],
+) -> dict[int, Transaction]:
+    """Rows to update for ``apply_to_past`` — by merchant label and/or narration keyword."""
+    by_id: dict[int, Transaction] = {}
+    allowed_sources = source_types
+
+    if counterparty_labels:
+        cp_conds = [
+            func.upper(func.trim(Transaction.counterparty)) == label
+            for label in counterparty_labels
+        ]
+        where_clause = and_(
+            col(Transaction.user_id) == user_id,
+            col(Transaction.source_type).in_(allowed_sources),
+            or_(*cp_conds),
+        )
+        if exclude_txn_ids:
+            where_clause = and_(where_clause, col(Transaction.id).not_in(exclude_txn_ids))
+        for r in session.exec(select(Transaction).where(where_clause)).all():
+            rid = int(r.id or 0)
+            if rid:
+                by_id[rid] = r
+
+    for kw in narration_keywords:
+        where_clause = and_(
+            col(Transaction.user_id) == user_id,
+            col(Transaction.source_type).in_(allowed_sources),
+            _narration_matches_keyword_sql(kw),
+        )
+        if exclude_txn_ids:
+            where_clause = and_(where_clause, col(Transaction.id).not_in(exclude_txn_ids))
+        for r in session.exec(select(Transaction).where(where_clause)).all():
+            rid = int(r.id or 0)
+            if rid:
+                by_id[rid] = r
+
+    return by_id
+
+
+def propagate_transaction_edit_to_past(
+    session: Session,
+    user_id: str,
+    anchor: Transaction,
+    *,
+    prior_counterparty: str | None,
+    exclude_txn_ids: set[int],
+    source_types: tuple[str, ...] = ("email", "statement"),
+) -> int:
+    """Apply the user's saved classification to similar historical rows.
+
+    Unlike :func:`propagate_merchant_keyword_hits` (onboarding / rules re-run), this path:
+
+    * Matches siblings by **merchant label** (same counterparty before or after the edit) **or**
+      bank narration containing the keyword — so HDFC forex fees labelled ``Forex Markup`` update
+      even when the narration is ``CONSOLIDATED FCY MARKUP FEE``.
+    * Copies the anchor's labels directly (does not re-run ``classify_rules``, which would reset
+      CC forex rows back to ``Fees, Charges & Interest``).
+    * Includes rows already marked ``USER_REVIEWED`` — the user explicitly opted in.
+    """
+    if not anchor.counterparty or not anchor.counterparty_category:
+        return 0
+
+    cp_labels = _normalized_counterparty_labels(prior_counterparty, anchor.counterparty)
+    narration_keywords = cp_labels
+    if not cp_labels and not narration_keywords:
+        return 0
+
+    siblings = _collect_transaction_edit_siblings(
+        session,
+        user_id,
+        counterparty_labels=cp_labels,
+        narration_keywords=narration_keywords,
+        exclude_txn_ids=exclude_txn_ids,
+        source_types=source_types,
+    )
+    if not siblings:
+        return 0
+
+    touched = 0
+    for row in siblings.values():
+        _apply_anchor_classification_to_row(row, anchor)
+        session.add(row)
+        touched += 1
+    return touched
