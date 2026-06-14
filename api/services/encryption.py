@@ -3,9 +3,11 @@ Fernet symmetric encryption for PII stored in the asset tables (holdings, etc.).
 
 Environment:
   FERNET_KEY — url-safe base64 key from ``Fernet.generate_key()``. If missing on
-  first use, a key is generated, appended to ``.env`` in the repo root (when that
-  file exists), and a loud warning is logged. **Back up the key**; without it,
-  encrypted columns cannot be recovered.
+  first use, we read ``<data_dir>/fernet.key`` (same folder as the SQLite DB,
+  persisted in Docker via the ``arth_data`` volume). When that file is absent we
+  generate a key, write it there (``chmod 0600``), and append to ``.env`` in the
+  repo root when that file exists. **Back up the key**; without it, encrypted
+  columns cannot be recovered.
 
 Design:
   * ``account_platform`` stays a plain display label (e.g. "ICICI Direct") so you
@@ -32,8 +34,43 @@ logger = logging.getLogger(__name__)
 # Repo root: api/services/encryption.py -> parents[2] == Arth/
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _ENV_PATH = _REPO_ROOT / ".env"
+_FERNET_KEY_FILENAME = "fernet.key"
 
 _fernet: Fernet | None = None
+
+
+def _resolve_data_dir() -> Path:
+    """Directory for durable runtime secrets (SQLite DB parent, or ``<repo>/data``)."""
+    raw = (os.environ.get("ARTH_DB_PATH") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve().parent
+    return _REPO_ROOT / "data"
+
+
+def _fernet_key_file_path() -> Path:
+    return _resolve_data_dir() / _FERNET_KEY_FILENAME
+
+
+def _read_fernet_key_from_data_file() -> str | None:
+    path = _fernet_key_file_path()
+    if not path.is_file():
+        return None
+    key = path.read_text(encoding="utf-8").strip()
+    return key or None
+
+
+def _write_fernet_key_to_data_file(key_b64: str) -> None:
+    path = _fernet_key_file_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(key_b64 + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        logger.debug("Could not chmod 0600 on %s", path, exc_info=True)
+    logger.warning(
+        "FERNET_KEY was missing; generated and persisted to %s. Back up this key.",
+        path,
+    )
 
 
 def _append_fernet_key_to_dotenv(key_b64: str) -> None:
@@ -62,19 +99,25 @@ def _append_fernet_key_to_dotenv(key_b64: str) -> None:
 
 
 def _resolve_fernet_key_bytes() -> bytes:
-    """Load ``FERNET_KEY`` from the environment, generating and persisting if absent."""
+    """Load ``FERNET_KEY`` from env, data-dir file, or generate and persist."""
     load_dotenv(_ENV_PATH)
     raw = (os.environ.get("FERNET_KEY") or "").strip()
     if raw:
         return raw.encode("ascii")
+    from_file = _read_fernet_key_from_data_file()
+    if from_file:
+        os.environ["FERNET_KEY"] = from_file
+        return from_file.encode("ascii")
     key = Fernet.generate_key()
     key_str = key.decode("ascii")
     warnings.warn(
-        "FERNET_KEY was not set. A new key was generated and will be appended to .env "
-        "if possible. Back up FERNET_KEY — losing it makes encrypted fields unreadable.",
+        "FERNET_KEY was not set. A new key was generated and will be persisted under "
+        "the data directory (and appended to .env when that file exists). Back up "
+        "FERNET_KEY — losing it makes encrypted fields unreadable.",
         UserWarning,
         stacklevel=2,
     )
+    _write_fernet_key_to_data_file(key_str)
     _append_fernet_key_to_dotenv(key_str)
     os.environ["FERNET_KEY"] = key_str
     return key

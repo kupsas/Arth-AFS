@@ -87,6 +87,7 @@ from scraper.discovery import (
     discover_sources_iter,
     discovered_sources_to_json,
 )
+from scraper.email_router import _normalise_sender
 from scraper.gap_detector import detect_gaps
 from scraper.gmail_client import GmailClient, GmailReauthRequiredError
 from scraper.onboarding_orchestrator import (
@@ -181,10 +182,42 @@ def _log_onboarding_step_transition(*, user_id: str, from_step: str, to_step: st
 _INSTRUMENT_TYPE_RANK: dict[str, int] = {"savings": 0, "credit_card": 1, "broker": 2}
 
 
-def _ordered_backfill_sources(bank: BankSendersConfig) -> list[dict[str, str]]:
+def _discovered_senders_with_mail(discovery_results: dict[str, Any]) -> set[str] | None:
+    """Senders with ``email_count_estimate > 0`` from a finished discovery run.
+
+    Returns ``None`` when discovery has not run or has no positive-count rows — callers
+    keep the legacy unfiltered backfill list in that case.
+    """
+    sources = discovery_results.get("sources")
+    if not isinstance(sources, list):
+        return None
+    found: set[str] = set()
+    for raw in sources:
+        if not isinstance(raw, dict):
+            continue
+        sender_raw = raw.get("sender_email")
+        if not isinstance(sender_raw, str) or not sender_raw.strip():
+            continue
+        est = raw.get("email_count_estimate")
+        try:
+            n_est = int(est) if est is not None else 0
+        except (TypeError, ValueError):
+            n_est = 0
+        if n_est > 0:
+            found.add(_normalise_sender(sender_raw))
+    return found if found else None
+
+
+def _ordered_backfill_sources(
+    bank: BankSendersConfig,
+    *,
+    discovered_senders: set[str] | None = None,
+) -> list[dict[str, str]]:
     """Unique ``source_key`` values from bank config, ordered for the onboarding wizard."""
     best: dict[str, tuple[int, str]] = {}
-    for _sender, cfg in bank.items():
+    for sender, cfg in bank.items():
+        if discovered_senders is not None and _normalise_sender(sender) not in discovered_senders:
+            continue
         st_raw = str(cfg.get("instrument_type") or "unknown").lower().strip()
         rank = _INSTRUMENT_TYPE_RANK.get(st_raw, 5)
         parser_key = str(cfg.get("parser_key") or "").strip().lower()
@@ -390,7 +423,12 @@ def onboarding_backfill_sources(
 ) -> list[dict[str, str]]:
     """Pipeline ``source_key`` list derived from the user's bank-sender config (wizard order)."""
     bank = get_bank_senders_config(session, current_user)
-    return _ordered_backfill_sources(bank)
+    row = session.exec(
+        select(OnboardingState).where(OnboardingState.user_id == current_user)
+    ).first()
+    discovery = _parse_json_object(row.discovery_results_json, {}) if row else {}
+    discovered_senders = _discovered_senders_with_mail(discovery)
+    return _ordered_backfill_sources(bank, discovered_senders=discovered_senders)
 
 
 class PasswordRequirementRow(BaseModel):

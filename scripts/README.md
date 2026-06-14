@@ -151,6 +151,7 @@ The `scripts/` folder has many **one-off** maintenance tools. Read the top of ea
 | `validate_email_statement.py`                                                                  | Validate a single email or PDF against parsers                                           |
 | `zerodha_demat_probe.py`                                                                       | Decrypt and inspect Zerodha monthly demat PDFs (local maintainer debugging)              |
 | `sbi_forwarded_statements_probe.py`                                                            | Decrypt and list rows from SBI e-account (CAS) statement PDFs                            |
+| `sbi_onboarding_pdf_probe.py`                                                                  | Debug one SBI Gmail message id: ingredients, candidates, which PDF decrypts (onboarding)   |
 | `diagnose_portfolio_prices.py`, `validate_price_sources.py`                                    | Debug missing marks or bad symbols                                                       |
 | `enrich_holdings.py`, `sync_all_holdings.py`                                                   | Holdings enrichment / sync                                                               |
 | `weekly_market_data_refresh.py`                                                                | Same weekly chain as the API scheduler (manual / cron if no server)                      |

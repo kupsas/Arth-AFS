@@ -24,7 +24,9 @@ from scraper.onboarding_orchestrator import (
     pause_backfill_state,
     resume_backfill_state,
     _collect_pending_queue,
+    _PASSWORD_SKIP_USER_MESSAGE,
 )
+from scraper.pdf_passwords import StatementPasswordRequired
 
 # Minimal static config shaped like ``BANK_SENDERS`` (one savings source).
 _MINI_BANK: BankSendersConfig = {
@@ -299,6 +301,78 @@ def test_run_onboarding_backfill_pauses_on_unknown_threshold(
     assert int(r.progress.get("unknowns_pending") or 0) >= 3
 
 
+@patch("scraper.onboarding_orchestrator.get_bank_senders_config", return_value=_MINI_BANK)
+def test_run_onboarding_backfill_skips_statement_password_failure(
+    _bank,
+    session: Session,
+) -> None:
+    """PDF password failures are recorded as failed and import continues (no needs_password pause)."""
+    t0 = datetime.date(2010, 1, 1)
+    t1 = datetime.date.today() + datetime.timedelta(days=1)
+    m_fail = GmailMessage(
+        id="mid_fail",
+        thread_id="th_fail",
+        sender="alerts@hdfcbank.net",
+        subject="statement",
+        received_at=datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+    )
+    m_ok = GmailMessage(
+        id="mid_ok",
+        thread_id="th_ok",
+        sender="alerts@hdfcbank.net",
+        subject="statement",
+        received_at=datetime.datetime(2024, 1, 2, tzinfo=datetime.timezone.utc),
+    )
+
+    class _FakeGmail:
+        def search_messages(self, query: str, **kwargs):
+            if "alerts@hdfcbank.net" in query and "bank.in" not in query:
+                return [m_fail, m_ok]
+            return []
+
+        def fetch_message_by_id(self, message_id: str) -> GmailMessage:
+            return m_fail if message_id == "mid_fail" else m_ok
+
+    def _process_side_effect(msg, **kwargs):
+        if msg.id == "mid_fail":
+            raise StatementPasswordRequired("hdfc_statement", "PDF password missing or incorrect.")
+        return ("processed", 2)
+
+    recorded: list[tuple[str, str, str | None]] = []
+
+    def _record_side_effect(sess, msg, *, sender, status, txn_count=0, error_message=None):
+        recorded.append((msg.id, status, error_message))
+
+    with patch(
+        "scraper.onboarding_orchestrator._process_email",
+        side_effect=_process_side_effect,
+    ), patch(
+        "scraper.onboarding_orchestrator._record_email",
+        side_effect=_record_side_effect,
+    ), patch(
+        "scraper.onboarding_orchestrator._get_processed_ids", return_value=set()
+    ), patch(
+        "scraper.onboarding_orchestrator.log_statement_password_unlock_failure",
+    ):
+        g = _FakeGmail()
+        r = run_onboarding_backfill(
+            session=session,
+            user_id="u1",
+            source_key="hdfc_savings_test",
+            gmail_client=g,  # type: ignore[arg-type]
+            existing_progress={},
+            chunk_size=10,
+            after=t0,
+            before=t1,
+            unknown_threshold=10_000,
+        )
+
+    assert r.progress.get("status") == "complete"
+    assert r.progress.get("emails_processed") == 2
+    assert ("mid_fail", "failed", _PASSWORD_SKIP_USER_MESSAGE) in recorded
+    assert ("mid_ok", "processed", None) in recorded
+
+
 def test_merge_hdfc_cc_statement_senders_enables_statement_first_partition() -> None:
     """Transaction-alert–only DB mapping for hdfc_cc_XXXX still yields CC statement senders."""
     from scraper.onboarding_orchestrator import (
@@ -327,6 +401,31 @@ def test_merge_hdfc_cc_statement_senders_enables_statement_first_partition() -> 
     assert "emailstatements.cards@hdfcbank.net" in stmt
     assert "emailstatements.cards@hdfcbank.bank.in" in stmt
     assert "alerts@hdfcbank.bank.in" in alert
+
+
+def test_merge_sbi_statement_senders_enables_sbi_savings_queue() -> None:
+    """Empty-account SBI CAS sender still maps to sbi_savings for Gmail queue listing."""
+    from scraper.onboarding_orchestrator import (
+        _partition_senders_for_source,
+        merge_sbi_statement_sender_accounts,
+        sender_emails_for_source_key,
+    )
+
+    bank: BankSendersConfig = {
+        "cbssbi.cas@alerts.sbi.bank.in": {
+            "parser_key": "sbi_statement",
+            "instrument_type": "savings",
+            "accounts": {},
+            "expected_cadence": "monthly",
+        },
+    }
+    merged = merge_sbi_statement_sender_accounts(bank, "sbi_savings")
+    senders = sender_emails_for_source_key(merged, "sbi_savings")
+    assert "cbssbi.cas@alerts.sbi.bank.in" in senders
+    assert "cbssbi.cas@alerts.sbi.co.in" in senders
+    stmt, alert = _partition_senders_for_source(merged, "sbi_savings")
+    assert "cbssbi.cas@alerts.sbi.bank.in" in stmt
+    assert alert == []
 
 
 def test_collect_pending_queue_uses_gmail_subject_keywords_for_icici_direct() -> None:

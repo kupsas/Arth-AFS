@@ -20,7 +20,7 @@ from sqlmodel import Session, col, func, select
 from api.auth import get_current_user
 from api.database import get_session
 from api.models import Transaction, UserMerchantRule
-from api.services.onboarding_merchant_propagation import propagate_merchant_keyword_hits
+from api.services.onboarding_merchant_propagation import propagate_transaction_edit_to_past
 from api.services.query_helpers import _for_user
 
 logger = logging.getLogger(__name__)
@@ -233,6 +233,7 @@ def update_transaction(
     was_reviewed = bool(txn.is_reviewed)
     apply_future = body.apply_to_future is True
     apply_past = body.apply_to_past is True
+    prior_counterparty = (txn.counterparty or "").strip() or None
     _apply_update(txn, body)
     txn.classification_source = "USER_REVIEWED"
     session.add(txn)
@@ -262,10 +263,11 @@ def update_transaction(
 
     past_updated_count = 0
     if apply_past and txn.counterparty and txn.counterparty_category:
-        past_updated_count = propagate_merchant_keyword_hits(
+        past_updated_count = propagate_transaction_edit_to_past(
             session,
             current_user,
-            keywords=[txn.counterparty],
+            txn,
+            prior_counterparty=prior_counterparty,
             exclude_txn_ids={txn_id},
             source_types=("email", "statement"),
         )
